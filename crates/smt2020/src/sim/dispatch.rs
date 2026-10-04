@@ -85,7 +85,7 @@ impl Fab<'_> {
         for &id in &self.groups[group].queue {
             if self.stopping_holds(id) {
                 stopped = true;
-            } else if self.fits(id, tool) && !(run_holds && self.needed_setup(id, tool).is_some()) {
+            } else if self.fits(id, tool) && !(run_holds && self.changes_setup(id, tool)) {
                 candidates.push((self.key(id, tool, now), id));
             }
         }
@@ -134,6 +134,14 @@ impl Fab<'_> {
         !lot.dedicated
             .iter()
             .any(|&(step, dedicated)| step == lot.step && dedicated != tool)
+    }
+
+    /// The lot needs a setup other than the tool's current one.
+    fn changes_setup(&self, id: LotId, tool: ToolId) -> bool {
+        let lot = &self.lots[id];
+        self.data.routes[lot.route].steps[lot.step]
+            .setup
+            .is_some_and(|setup| self.tools[tool].setup != Some(setup.setup))
     }
 
     /// Setup a lot needs on a tool, if any.

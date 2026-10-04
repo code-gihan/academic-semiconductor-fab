@@ -110,6 +110,7 @@ pub(super) struct Group {
 struct Period {
     name: String,
     end: Time,
+    report: bool,
     reset: bool,
 }
 
@@ -172,6 +173,7 @@ impl<'a> Fab<'a> {
             periods.push(Period {
                 name: period.name.clone(),
                 end,
+                report: period.report,
                 reset: period.reset || end == config.horizon,
             });
         }
@@ -828,29 +830,34 @@ impl<'a> Fab<'a> {
 
     fn period_end(&mut self, index: usize, sched: &mut Scheduler<Event>) {
         let now = sched.now();
-        let (name, reset) = (self.periods[index].name.clone(), self.periods[index].reset);
+        let period = &self.periods[index];
+        let (name, report, reset) = (period.name.clone(), period.report, period.reset);
         if now == self.horizon {
             self.step_flow_factors = self.stats.step_flow_factors();
             self.releasing = false;
         }
-        self.snapshot(name, now, reset);
+        self.snapshot(name, now, report, reset);
         if !self.releasing && self.wip == 0 {
             self.finish(now);
         }
     }
 
     fn finish(&mut self, now: Time) {
-        self.snapshot("Drain".into(), now, false);
+        self.snapshot("Drain".into(), now, true, false);
         self.finished = Some(now);
     }
 
-    fn snapshot(&mut self, name: String, now: Time, reset: bool) {
+    /// Closes the statistics window at `now`: reports it (REPORT = yes) and restarts it
+    /// (RESET = yes).
+    fn snapshot(&mut self, name: String, now: Time, report: bool, reset: bool) {
         for tool in &mut self.tools {
             tool.account(now);
         }
         self.stats.wip(now, self.wip);
-        self.reports
-            .push(self.stats.report(name, now, self.data, &self.tools));
+        if report {
+            self.reports
+                .push(self.stats.report(name, now, self.data, &self.tools));
+        }
         if reset {
             self.stats.reset(now);
             for tool in &mut self.tools {

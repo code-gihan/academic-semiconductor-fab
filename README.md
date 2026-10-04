@@ -4,7 +4,7 @@ SMT2020 반도체 FAB 테스트베드(데이터셋 4종)를 정적 웹 페이지
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: DES 코어(`des-core`), SMT2020 데이터 모델·`.asd` 로더·시뮬레이션 모델·통계·운영 전략(`smt2020`), wasm 배포 골격 구현(진행 단계는 [구현 단계](#구현-단계)). 이하 구현 명세.
+현재: DES 코어(`des-core`), SMT2020 데이터 모델·`.asd` 로더·시뮬레이션 모델·통계·운영 전략(`smt2020`), wasm 배포 골격 구현(진행 단계는 [구현 단계](#구현-단계)). 이하 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
 
 ## 참고 문헌·데이터
 
@@ -85,7 +85,7 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 - 순위 = `tool.txt` FWLRANK 순: rank_HP(우선순위 높은 순, hot lot이 setup 유발 가능) → rank_RSETUP(필요 setup 시간 짧은 순) → rank_FIFO(대기열 도착 순, DS1·3) 또는 rank_CR(작은 순, DS2·4). DS3·4는 LithoTrack_FE_95·115, Planar 6 TG에 rank_RSETUP 없음. 동률은 lot 번호.
 - CR = (납기 − t) / 잔여 공정시간. 잔여 공정시간 = 현재 스텝부터 기대 스텝시간 합(load + 공정 + unload, 샘플링 확률 가중, 반송·리워크 제외). 스텝별 a + b·n 형태 접미합을 사전 계산.
 - 자격 필터: LTL 전용 툴, setup run, super hot 예약, Stopping 보류. CAtE·CoT는 순위 맨 앞 유형 키.
-- rule_LSSU(Implant_128·132·91, setup 그룹 Implant_Gas, MINRUN 7): setup 변경 후 해당 setup으로 7 lot 처리 전 재변경 금지(run 길이는 변경 시 MINRUN, lot 시작마다 1 감소). 미완 run 중엔 hot lot도 setup 불필요 lot만 자격(AutoSched 문서: run 최소 lot 보장), 없으면 대기(가정). 현 setup lot이 더 올 수 없으면 대기 해제(가정).
+- rule_LSSU(Implant_128·132·91, setup 그룹 Implant_Gas, MINRUN 7): setup 변경 후 해당 setup으로 7 lot 처리 전 재변경 금지(run 길이는 변경 시 MINRUN, lot 시작마다 1 감소). 미완 run 중엔 hot lot도 setup을 바꾸지 않는 lot만 자격(AutoSched 문서: run 최소 lot 보장), 없으면 대기(가정). 현 setup lot이 더 올 수 없으면 대기 해제(가정).
 - 툴 선택(유휴 툴 복수): wake_LeastSetupTime TG(DS1·2 9개, DS3·4 15개)는 도착 lot의 setup 시간 최소. 그 외·동률은 유휴 최장(가정).
 - super hot(우선순위 30, rule_HotLotFIRST): HOTLOT=yes면 현 스텝 공정 시작 시(HOTLOTDELAY%=0) 다음 스텝 TG 툴 1대 예약, 예약 툴은 도착까지 대기, setup은 도착 후. rule_LSSU TG 제외, TG당 예약 1건, 예약 툴 고장·PM 시 다음 가용 툴로 이전(가정). `.asd`는 전부 HOTLOT=no라 기본 비활성, 옵션으로 활성(xlsx 시맨틱).
 
@@ -97,7 +97,7 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 
 ### 통계
 
-- 기간: WarmUp(2018, 종료 시 초기화) + 연도별 누적 Period_1–7(`period.txt`). 종료 시각에서 기간을 잘라 보고 후 초기화, 이후 완료분은 Drain 보고.
+- 기간: WarmUp(2018, 종료 시 초기화) + 연도별 누적 Period_1–7(`period.txt`, REPORT = yes만 보고, RESET = yes면 종료 시 초기화). 종료 시각에서 기간을 잘라 보고 후 초기화, 이후 완료분은 Drain 보고.
 - lot: TH, CT 평균·표준편차·분위수, ONTIME%(완료 ≤ 납기), FF = CT/RPT. 제품 × 유형(PRL·PHL·super hot·ERL·EHL)별.
 - RPT = 빈 fab 기대 CT = Σ 샘플링 가중(스텝시간 + 반송) + 리워크 기대분(루프별 q/(1−q)회 재수행, q = 샘플링 × 리워크 확률). [P1] Table II 대비 −0.1 ~ +1.1%(10제품 확인).
 - WIP 시간가중 평균.

@@ -51,8 +51,8 @@ impl LotKind {
 
 #[derive(Clone, Debug)]
 pub struct Results {
-    /// Reporting periods up to the horizon, then `Drain` covering the completion of the lots
-    /// still in the fab at the horizon.
+    /// Reporting periods (REPORT = yes) up to the horizon, then `Drain` covering the completion
+    /// of the lots still in the fab at the horizon.
     pub periods: Vec<PeriodReport>,
     /// Lots released (plan and initial WIP) and completed; equal for a finished run.
     pub released: u64,
@@ -92,7 +92,7 @@ pub struct LotReport {
     pub on_time: u64,
     /// Mean and standard deviation of the cycle time in ms.
     pub cycle_time: (f64, f64),
-    /// Mean cycle time over raw processing time.
+    /// Mean of the lots' flow factors (cycle time over raw processing time).
     pub flow_factor: f64,
 }
 
