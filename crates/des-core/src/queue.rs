@@ -4,24 +4,24 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::collections::binary_heap::PeekMut;
 
-use super::Time;
+use crate::Time;
 
 /// Pending events. Events with equal times leave in the order they were pushed (FIFO), so a run
 /// is fully determined by its inputs. The payload never takes part in the ordering.
-pub(super) struct EventQueue<E> {
+pub(crate) struct EventQueue<E> {
     heap: BinaryHeap<Entry<E>>,
     next_seq: u64,
 }
 
 impl<E> EventQueue<E> {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             heap: BinaryHeap::new(),
             next_seq: 0,
         }
     }
 
-    pub(super) fn push(&mut self, time: Time, event: E) {
+    pub(crate) fn push(&mut self, time: Time, event: E) {
         self.heap.push(Entry {
             time,
             seq: self.next_seq,
@@ -31,7 +31,7 @@ impl<E> EventQueue<E> {
     }
 
     /// Removes and returns the earliest event if it is due at or before `limit`.
-    pub(super) fn pop_due(&mut self, limit: Time) -> Option<(Time, E)> {
+    pub(crate) fn pop_due(&mut self, limit: Time) -> Option<(Time, E)> {
         let top = self.heap.peek_mut()?;
         if top.time > limit {
             return None;

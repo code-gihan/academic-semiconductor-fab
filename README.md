@@ -4,7 +4,7 @@ SMT2020 반도체 FAB 테스트베드(데이터셋 4종)를 정적 웹 페이지
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: DES 코어(`fab-sim::des`)와 wasm 배포 골격 구현. 이하 구현 명세.
+현재: DES 코어(`des-core`), SMT2020 데이터 모델·`.asd` 로더(`smt2020`), wasm 배포 골격 구현(진행 단계는 [구현 단계](#구현-단계)). 이하 구현 명세.
 
 ## 참고 문헌·데이터
 
@@ -139,19 +139,23 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 ## 구현 구조
 
 ```text
-crates/sim/   코어 lib(패키지 fab-sim, std): des(DES 코어), 모델 타입(serde), 전략, 통계. wasm 의존 없음
-crates/cli/   네이티브: convert(.asd → .bin), run(검증·벤치마크)
-crates/wasm/  wasm-bindgen cdylib(패키지 fab-wasm): load(bytes), run(config) → 결과
-www/          index.html, main.js, worker.js, data/ds1–4.bin(변환 결과, 커밋), pkg/(빌드 산출)
-data/raw/     SMT2020 원본(커밋 제외)
+crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프
+crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더, 시뮬레이션 모델, 전략, 통계. wasm 의존 없음
+crates/cli/       네이티브: convert(.asd → .bin), run(검증·벤치마크)
+crates/wasm/      wasm-bindgen cdylib(패키지 fab-wasm): load(bytes), run(config) → 결과
+www/              index.html, main.js, worker.js, data/ds1–4.bin(변환 결과, 커밋), pkg/(빌드 산출)
+data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
-- DES 코어(`des`, 구현됨): 사건 스케줄링 관점, 다음 사건 시각으로 시계 진행.
+- DES 코어(`des-core`, 구현됨): 사건 스케줄링 관점, 다음 사건 시각으로 시계 진행.
   - `Model`: 상태 + 초기화 루틴 `init`(t=0, 1회) + 사건 루틴 `handle`.
   - `Scheduler`: 시계 `now`, `schedule_at`·`schedule_in`. 과거 시각 예약은 panic(인과성 위반).
   - `Simulation`: `run_until(end)` = end 이하 사건 전부(처리 중 예약분 포함) 처리 후 시계 = end, 연속 호출로 이어서 실행. `events_processed` 집계.
   - 미래 사건 목록: (시각, 예약 순번) 최소 힙(`BinaryHeap`, 동시각 FIFO, 페이로드 비교 없음).
-- 도메인 엔진: 엔티티 `Vec` + `u32` id(lot·툴·TG·스텝, route는 평탄 배열), `Event`는 작은 enum. 고장 중단 시 툴 epoch를 올려 기존 사건을 무효화(lazy deletion)하고 재스케줄.
+- 데이터(`smt2020::data`·`asd`, 구현됨): `options.def`의 활성 파일만 읽어 `Dataset` 생성(이름 → 인덱스, 시간 ms, 날짜는 SIM_START 기준).
+  - 지원 범위 밖 값·조합(예: STNCAP 1·2 외, MINRUN 외 setup 기준, SEQ_ADDS_SETUP_DELAYS Y)은 무시하지 않고 `파일:행` 오류.
+  - 검증: 이름 참조(툴그룹·스텝·setup·캘린더·부품·위치), per_batch ⇔ 배치 TG(0 < BATCHMN ≤ BATCHMX), cascading 간격 ⇔ STNCAP 2(0 < c ≤ 최소 공정시간), LTL·CQT 대상은 뒤 스텝, 리워크 대상은 앞 스텝, 투입 ≥ SIM_START, 기간 오름차순.
+- 도메인 엔진: 엔티티 `Vec` + 인덱스 id(lot·툴·TG·스텝, route는 평탄 배열), `Event`는 작은 enum. 고장 중단 시 툴 epoch를 올려 기존 사건을 무효화(lazy deletion)하고 재스케줄.
 - 대기열: TG별 `Vec`. 디스패칭은 순위 키 선형 스캔(대기열 수십~수백). 유휴 툴은 TG별 FIFO.
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터 파일: postcard 직렬화 + 포맷 버전 필드. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
@@ -159,10 +163,22 @@ data/raw/     SMT2020 원본(커밋 제외)
 - 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬). SharedArrayBuffer 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 경계 입출력은 serde-wasm-bindgen, `i64`는 경계에서 f64(2^53 ms까지 정확).
 - 의존성: serde, postcard, rand_xoshiro, libm, wasm-bindgen, serde-wasm-bindgen.
 
+## 구현 단계
+
+1. DES 코어(`des-core`) — 완료
+2. 데이터 모델·`.asd` 로더(`smt2020`) — 완료
+3. lot 흐름·툴 처리: 난수 스트림, 투입·반송·대기, 디스패칭(HP·RSETUP·FIFO·CR), 공정(lot·wafer·batch), cascading, 배치, setup·rule_LSSU·wake, LTL, 리워크, 샘플링, super hot 예약
+4. 가용성: UDT·PM
+5. 통계: lot·툴·CQT 지표, 기간
+6. 운영 전략: QTCR·QTS·Stopping·EF·CAtE·CoT
+7. `cli`: convert(.bin)·run, 기준 결과 검증
+8. `wasm` API·웹 UI·성능 측정
+
 ## 로컬 빌드·테스트
 
 ```bash
 cargo test
+cargo test -p smt2020 -- --ignored   # 실제 데이터 로드 검증, data/raw 필요
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129   # crates/wasm/Cargo.toml의 wasm-bindgen 버전과 같아야 함
 cargo build --release --target wasm32-unknown-unknown -p fab-wasm

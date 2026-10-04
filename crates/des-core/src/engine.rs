@@ -1,7 +1,7 @@
 //! Simulation executive: clock, scheduling and the next-event loop.
 
-use super::Time;
-use super::queue::EventQueue;
+use crate::Time;
+use crate::queue::EventQueue;
 
 /// System state plus the event routines that change it.
 pub trait Model {
@@ -106,7 +106,7 @@ impl<M: Model> Simulation<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::des::{DAY, HOUR};
+    use crate::{DAY, HOUR};
 
     /// Logs every event; "spawn" schedules follow-ups, "rewind" breaks causality.
     struct Recorder {

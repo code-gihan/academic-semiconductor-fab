@@ -1,4 +1,5 @@
-//! Discrete-event simulation core: event-scheduling world view with next-event time advance.
+//! Model-independent discrete-event simulation core: event-scheduling world view with
+//! next-event time advance.
 //!
 //! A [`Model`] owns the system state and its event routines. [`Simulation`] owns the clock and
 //! the future event list and hands every event, in (time, scheduling order) order, to

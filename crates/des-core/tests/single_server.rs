@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use fab_sim::des::{DAY, MINUTE, Model, Scheduler, Simulation, Time};
+use des_core::{DAY, MINUTE, Model, Scheduler, Simulation, Time};
 
 enum Event {
     Arrival(usize),
