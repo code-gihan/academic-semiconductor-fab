@@ -1,15 +1,16 @@
-//! Loads the four SMT2020 AutoSched datasets from `data/raw` (the extracted `SMT_2020 - Final`
-//! folder, not committed): `cargo test -p smt2020 -- --ignored`. Expected values were read off
-//! the raw files.
+//! Loads and runs the four SMT2020 AutoSched datasets from `data/raw` (the extracted
+//! `SMT_2020 - Final` folder, not committed): `cargo test -p smt2020 --release -- --ignored`.
+//! Expected values were read off the raw files.
 
 use std::path::PathBuf;
 
-use des_core::{DAY, HOUR, MINUTE, SECOND};
+use des_core::{DAY, HOUR, MINUTE, SECOND, Time};
 use smt2020::asd;
 use smt2020::data::{
     BatchCriterion, BatchSize, Breakdown, Cqt, Dataset, Dist, LotRelease, Pm, PmTrigger, Rank,
     ReleaseStream, Rule, ToolGroup, Unit,
 };
+use smt2020::sim::{self, Config, EngineeringRule, QueueTimeRule, Results, Stopping};
 
 fn load(dataset: &str, model: &str) -> Dataset {
     let dir: PathBuf = [
@@ -330,4 +331,105 @@ fn dataset_4_lvhm_e() {
             step: None,
         }
     );
+}
+
+/// Dataset rules over `horizon`.
+fn base(horizon: Time) -> Config {
+    Config {
+        horizon,
+        seed: 1,
+        replication: 0,
+        load: 1.0,
+        reserve_super_hot: false,
+        queue_time: QueueTimeRule::None,
+        stopping: None,
+        engineering: EngineeringRule::Base,
+    }
+}
+
+/// Runs `config`; every lot of the plan must complete.
+fn complete(dataset: &Dataset, config: &Config) -> Results {
+    let results = sim::run(dataset, config).unwrap_or_else(|error| panic!("{error}"));
+    assert!(results.released > 0);
+    assert_eq!(results.completed, results.released);
+    assert_eq!(
+        results.periods.last().map(|period| period.name.as_str()),
+        Some("Drain")
+    );
+    results
+}
+
+/// The papers' two-year runs ([P1] §V, [P2] §4.2).
+fn plan_completes(dataset: &str, model: &str) {
+    complete(&load(dataset, model), &base(730 * DAY));
+}
+
+#[test]
+#[ignore = "needs the SMT2020 data in data/raw"]
+fn dataset_1_plan_completes() {
+    plan_completes("dataset 1", "HVLM_Model");
+}
+
+#[test]
+#[ignore = "needs the SMT2020 data in data/raw"]
+fn dataset_2_plan_completes() {
+    plan_completes("dataset 2", "LVHM_Model");
+}
+
+#[test]
+#[ignore = "needs the SMT2020 data in data/raw"]
+fn dataset_3_plan_completes() {
+    plan_completes("dataset 3", "HVLM_E_Model");
+}
+
+#[test]
+#[ignore = "needs the SMT2020 data in data/raw"]
+fn dataset_4_plan_completes() {
+    plan_completes("dataset 4", "LVHM_E_Model");
+}
+
+/// Every strategy on the dataset with CQT segments and engineering lots.
+#[test]
+#[ignore = "needs the SMT2020 data in data/raw"]
+fn strategies_complete() {
+    let ds = load("dataset 4", "LVHM_E_Model");
+    let horizon = 180 * DAY;
+    let flow_factors = complete(&ds, &base(horizon)).step_flow_factors;
+    // Stepper limits low enough to hold lots in the default CQT segments ([P2] Table 3 shape).
+    let stopping = Stopping {
+        limits: vec![
+            ("LithoTrack_FE_95".into(), 5, 10),
+            ("LithoTrack_FE_115".into(), 5, 10),
+        ],
+        default: (1_000, 1_000),
+    };
+    let strategies = [
+        (
+            QueueTimeRule::Qtcr,
+            Some(stopping),
+            EngineeringRule::EngineeringFirst,
+        ),
+        (
+            QueueTimeRule::Qts { flow_factors },
+            None,
+            EngineeringRule::Cate {
+                production: 19 * HOUR + 12 * MINUTE,
+                engineering: 4 * HOUR + 48 * MINUTE,
+            },
+        ),
+        (
+            QueueTimeRule::None,
+            None,
+            EngineeringRule::Cot { trigger: 10 },
+        ),
+    ];
+    for (queue_time, stopping, engineering) in strategies {
+        let config = Config {
+            queue_time,
+            stopping,
+            engineering,
+            ..base(horizon)
+        };
+        complete(&ds, &config);
+    }
 }

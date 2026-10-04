@@ -362,6 +362,21 @@ fn read_tool_groups(
             pms: Vec::new(),
         });
     }
+    for group in &groups {
+        let distinct = group
+            .ranks
+            .iter()
+            .enumerate()
+            .all(|(index, rank)| !group.ranks[..index].contains(rank));
+        let both = group.ranks.contains(&Rank::Fifo) && group.ranks.contains(&Rank::CriticalRatio);
+        if !distinct || both {
+            return Err(Error::new(format!(
+                "{}: tool group {} repeats a rank or combines rank_FIFO with rank_CR",
+                table.file(),
+                group.name
+            )));
+        }
+    }
     Ok((groups, names))
 }
 
@@ -588,6 +603,9 @@ fn read_route(
             }),
             _ => return Err(row.error("rework needs RWKSTEP, REWORK and RWKTYPE lot")),
         };
+        if step_rework.is_some_and(|rework| rework.probability >= 1.0) {
+            return Err(row.error("REWORK must be below 100 %, or lots loop forever"));
+        }
         let dedicate_to = match (row.flag(dedicated)?, row.opt(dedicated_step)) {
             (false, None) => None,
             (true, Some(_)) => Some(step_ref(row, dedicated_step, &step_names, index, true)?),
@@ -614,6 +632,32 @@ fn read_route(
             dedicate_to,
             cqt: step_cqt,
         });
+    }
+    // CQT waits run from the end of the entrance step to the start of the exit step.
+    for (index, step) in steps.iter().enumerate() {
+        if let Some(cqt) = step.cqt
+            && (step.sampling < 1.0 || steps[cqt.until].sampling < 1.0)
+        {
+            return Err(Error::new(format!(
+                "{file}: CQT segment from step {} has a sampled entrance or exit",
+                steps[index].name
+            )));
+        }
+    }
+    // Batches and setup runs wait for lots that can still come: every lot before such a step
+    // must reach it, and no lot after it may return.
+    for (index, step) in steps.iter().enumerate() {
+        let run = matches!(tool_groups[step.tool_group].rule, Rule::SetupRun(_));
+        let waits = step.batch.is_some() || (run && step.setup.is_some());
+        let returns = steps[index..]
+            .iter()
+            .any(|later| later.rework.is_some_and(|rework| rework.to <= index));
+        if waits && (step.sampling < 1.0 || returns) {
+            return Err(Error::new(format!(
+                "{file}: batch or setup-run step {} is sampled or inside a rework loop",
+                step.name
+            )));
+        }
     }
     Ok(Route {
         name: route_name.to_owned(),
@@ -796,16 +840,22 @@ fn read_calendars(
 fn read_transports(table: &Table, locations: &Names) -> Result<Vec<Transport>, Error> {
     let [from, to, kind, time, time2, unit] =
         table.cols(["FROMLOC", "TOLOC", "DDIST", "DTIME", "DTIME2", "DUNITS"])?;
-    table
-        .rows()
-        .map(|row| {
-            Ok(Transport {
-                from: lookup(row, from, locations, "location")?,
-                to: lookup(row, to, locations, "location")?,
-                time: row.dist(Some(kind), time, Some(time2), unit)?,
-            })
-        })
-        .collect()
+    let mut transports: Vec<Transport> = Vec::new();
+    for row in table.rows() {
+        let transport = Transport {
+            from: lookup(row, from, locations, "location")?,
+            to: lookup(row, to, locations, "location")?,
+            time: row.dist(Some(kind), time, Some(time2), unit)?,
+        };
+        if transports
+            .iter()
+            .any(|other| (other.from, other.to) == (transport.from, transport.to))
+        {
+            return Err(row.error("duplicate FROMLOC/TOLOC pair"));
+        }
+        transports.push(transport);
+    }
+    Ok(transports)
 }
 
 fn read_orders(

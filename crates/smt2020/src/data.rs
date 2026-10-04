@@ -56,6 +56,12 @@ impl Dist {
             Dist::Exponential { .. } => 0,
         }
     }
+
+    pub fn mean(self) -> Time {
+        match self {
+            Dist::Constant(mean) | Dist::Uniform { mean, .. } | Dist::Exponential { mean } => mean,
+        }
+    }
 }
 
 #[derive(Debug)]

@@ -6,3 +6,5 @@ publish.workspace = true
 
 [dependencies]
 des-core = { path = "../des-core" }
+libm = "0.2"
+rand_xoshiro = "0.8"

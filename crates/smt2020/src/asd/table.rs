@@ -73,6 +73,10 @@ impl Table {
         })
     }
 
+    pub(super) fn file(&self) -> &str {
+        &self.file
+    }
+
     pub(super) fn opt_col(&self, name: &str) -> Option<usize> {
         self.header.iter().position(|column| column == name)
     }

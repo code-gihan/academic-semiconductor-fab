@@ -4,7 +4,7 @@ SMT2020 반도체 FAB 테스트베드(데이터셋 4종)를 정적 웹 페이지
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: DES 코어(`des-core`), SMT2020 데이터 모델·`.asd` 로더(`smt2020`), wasm 배포 골격 구현(진행 단계는 [구현 단계](#구현-단계)). 이하 구현 명세.
+현재: DES 코어(`des-core`), SMT2020 데이터 모델·`.asd` 로더·시뮬레이션 모델·통계·운영 전략(`smt2020`), wasm 배포 골격 구현(진행 단계는 [구현 단계](#구현-단계)). 이하 구현 명세.
 
 ## 참고 문헌·데이터
 
@@ -61,7 +61,8 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 - 주기형(`order.txt`): START, REPEAT 간격, RPT#, LOTSPERRPT, 오프셋 DUE−START, PRIOR, PIECES.
 - 목록형: lot별 START·DUE·PRIOR·PIECES.
 - 초기 WIP: `WIP.txt` lot을 t=0에 CURSTEP 대기열에 투입. START = t0이므로 웜업 이후 통계만 유효.
-- 부하 계수 ℓ(운영 곡선): 투입 시각 t → t/ℓ, 납기 오프셋 유지. 목록형은 목록 끝/ℓ ≥ 종료 시각 검증.
+- 부하 계수 ℓ(운영 곡선): 투입 시각 t → t/ℓ, 납기 오프셋 유지. 목록형은 목록이 종료 시각까지 이어지는지 검증(마지막 투입 + 평균 간격 ≥ 종료 시각).
+- 종료 시각 전에 시작하는 lot만 투입하고, 이후 WIP가 0이 될 때까지 진행(Drain). 종료 + 365 d에도 남으면 오류.
 
 ### 스텝 처리
 
@@ -71,9 +72,9 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 - 반송: `fromto.txt` 정의 쌍(이전 수행 스텝 위치 → 현 위치)만 적용, Fab→Fab U[5,10] min. 미정의(Delay 관련)·투입 직후 첫 스텝 0.
 - load/unload: LTIME/ULTIME 1 min(`Delay_32` 0).
 - 공정 시간 p ~ U[PTIME±PTIME2](±5%), lot(배치)·스텝당 1회 추출(가정). per_lot p, per_piece n·p(n = wafer 수), per_batch 배치당 p.
-- cascading(STNCAP=2, 45 TG): wafer 단위 PartInterval(Implant 9, Wet_Etch 14), lot 단위 BatchInterval(Planar 6, TF 11, Dielectric 5). 툴당 동시 2 lot, 직렬 2슬롯. 단위는 슬롯1에서 c, 슬롯2에서 p−c(슬롯2 점유 시 대기). lot 첫 단위의 슬롯1 진입 = max(자기 load 종료, 선행 단위의 슬롯1 이탈). lot 완료 = 마지막 단위의 슬롯2 이탈 + unload. 단독 lot의 per_piece 시간 p + (n−1)c. load/unload는 다른 lot 공정과 병렬. c는 setup 미포함(SEQ_ADDS_SETUP_DELAYS=N).
-- 배치(Diffusion 10 TG, per_batch): BATCHMN–BATCHMX wafer(75–100, 100–125, 125–150, 최소 = 최대 − 1 lot). 호환: DS1·2 동일 route·step(crit_sameroutestep), DS3·4 동일 PARTFAM·step 이름(생산·E 혼합, crit_samepartfam + crit_samestepname). 순위 순 후보마다 호환 lot을 순위 순으로 최대까지 채워 최소 이상이면 시작, 없으면 대기.
-- setup: SETUP·WHEN(need = 툴 현재 setup과 다를 때, always = 매번). 시간 = route STIME(상수), 없으면 `setup.txt`(CURSETUP→NEWSETUP 우선, 빈 CURSETUP = 임의→NEWSETUP), SDIST constant/uniform(STIME±STIME2). 미정의 0, 툴 초기 setup 없음(가정). 수행 후 툴 setup = NEWSETUP. cascading 툴은 빈 상태에서만 setup(가정). rank_RSETUP용 시간은 평균값.
+- cascading(STNCAP=2, 45 TG): wafer 단위 PartInterval(Implant 9, Wet_Etch 14), lot 단위 BatchInterval(Planar 6, TF 11, Dielectric 5). 툴당 동시 2 lot, 직렬 2슬롯. 단위는 슬롯1에서 c, 슬롯2에서 p−c(슬롯2 점유 시 대기). lot 첫 단위의 슬롯1 진입 = max(자기 load 종료, 선행 단위의 슬롯1 이탈). lot 완료 = 마지막 단위의 슬롯2 이탈 + unload. 단독 lot의 per_piece 시간 p + (n−1)c. setup·load·unload는 다른 lot 공정과 병렬(SEQ_ADDS_SETUP_DELAYS=N, 가정). c는 setup 미포함.
+- 배치(Diffusion 10 TG, per_batch): BATCHMN–BATCHMX wafer(75–100, 100–125, 125–150, 최소 = 최대 − 1 lot). 호환: DS1·2 동일 route·step(crit_sameroutestep), DS3·4 동일 PARTFAM·step 이름(생산·E 혼합, crit_samepartfam + crit_samestepname). 순위 순 후보마다 호환 lot을 순위 순으로 최대까지 채워 최소 이상이면 시작, 없으면 대기. 호환 lot이 더 올 수 없으면(잔여 투입 없음, 앞 스텝·이동 중 lot 없음) 최소 미만도 시작(가정).
+- setup: SETUP·WHEN(need = 툴 현재 setup과 다를 때, always = 매번). 시간 = route STIME(상수), 없으면 `setup.txt`(CURSETUP→NEWSETUP 우선, 빈 CURSETUP = 임의→NEWSETUP), SDIST constant/uniform(STIME±STIME2). 미정의 0, 툴 초기 setup 없음(가정). 수행 후 툴 setup = NEWSETUP. rank_RSETUP 순위 시간 = `setup.txt` 평균(route STIME만 있는 setup은 0), wake_LeastSetupTime은 STIME 포함 평균(가정, 기준 결과의 litho·Implant_119·90 setup 비중 근거).
   - 데이터: DE_BE_13(1→2 7, 2→1 12 min)·DE_BE_66(15, 10 min) 순서의존. Implant gas SU128 72, SU132 60, SU91 80 min. Implant_119·90 route STIME. reticle LithoTrack_FE_115 8, FE_95 15 min. E lot 보정(always): FE_115 U[16,32], FE_95 U[30,60], 마지막 3개 litho U[52.5,127.5], Planar U[15,60] min.
 - 리워크: REWORK r% 확률로 RWKSTEP로 돌아가 구간 재수행(lot 단위, 데이터상 litho → … → Litho_REG 3스텝).
 - LTL 전용: SVESTN=yes·FORSTEP=j 스텝에서 쓴 툴만 스텝 j 수행 가능. 연쇄 적용(예: 13→113→351→362→390).
@@ -83,25 +84,25 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 
 - 순위 = `tool.txt` FWLRANK 순: rank_HP(우선순위 높은 순, hot lot이 setup 유발 가능) → rank_RSETUP(필요 setup 시간 짧은 순) → rank_FIFO(대기열 도착 순, DS1·3) 또는 rank_CR(작은 순, DS2·4). DS3·4는 LithoTrack_FE_95·115, Planar 6 TG에 rank_RSETUP 없음. 동률은 lot 번호.
 - CR = (납기 − t) / 잔여 공정시간. 잔여 공정시간 = 현재 스텝부터 기대 스텝시간 합(load + 공정 + unload, 샘플링 확률 가중, 반송·리워크 제외). 스텝별 a + b·n 형태 접미합을 사전 계산.
-- 자격 필터: LTL 전용 툴, setup run, super hot 예약, 전략 보류(Stopping·CAtE·CoT).
-- rule_LSSU(Implant_128·132·91, setup 그룹 Implant_Gas, MINRUN 7): setup 변경 후 해당 setup으로 7 lot 처리 전 재변경 금지. 미완 run 중엔 setup 불필요 lot만 자격, 없으면 대기(가정).
-- 툴 선택(유휴 툴 복수): wake_LeastSetupTime TG(DS1·2 9개, DS3·4 15개)는 setup 시간 최소. 그 외·동률은 유휴 최장(가정).
-- super hot(우선순위 30, rule_HotLotFIRST): HOTLOT=yes면 현 스텝 공정 시작 시(HOTLOTDELAY%=0) 다음 스텝 TG 툴 1대 예약, 예약 툴은 도착까지 대기, setup은 도착 후. rule_LSSU TG 제외. `.asd`는 전부 HOTLOT=no라 기본 비활성, 옵션으로 활성(xlsx 시맨틱).
+- 자격 필터: LTL 전용 툴, setup run, super hot 예약, Stopping 보류. CAtE·CoT는 순위 맨 앞 유형 키.
+- rule_LSSU(Implant_128·132·91, setup 그룹 Implant_Gas, MINRUN 7): setup 변경 후 해당 setup으로 7 lot 처리 전 재변경 금지(run 길이는 변경 시 MINRUN, lot 시작마다 1 감소). 미완 run 중엔 hot lot도 setup 불필요 lot만 자격(AutoSched 문서: run 최소 lot 보장), 없으면 대기(가정). 현 setup lot이 더 올 수 없으면 대기 해제(가정).
+- 툴 선택(유휴 툴 복수): wake_LeastSetupTime TG(DS1·2 9개, DS3·4 15개)는 도착 lot의 setup 시간 최소. 그 외·동률은 유휴 최장(가정).
+- super hot(우선순위 30, rule_HotLotFIRST): HOTLOT=yes면 현 스텝 공정 시작 시(HOTLOTDELAY%=0) 다음 스텝 TG 툴 1대 예약, 예약 툴은 도착까지 대기, setup은 도착 후. rule_LSSU TG 제외, TG당 예약 1건, 예약 툴 고장·PM 시 다음 가용 툴로 이전(가정). `.asd`는 전부 HOTLOT=no라 기본 비활성, 옵션으로 활성(xlsx 시맨틱).
 
 ### 가용성
 
-- UDT(`downcal`·`attach`, 영역 11개): TTF·첫 TTF Exp(10,080 min), TTR Exp(MTTR min: Def_Met·Litho_Met·TF_Met 35.28, Diffusion 151.2, Planar 201.6, Wet_Etch 221.76, Dry_Etch 231.84, TF 453.6, Dielectric·Implant 604.8, Litho 705.59). 달력 기준. 공정 중 고장 시 중단 후 수리 뒤 재개(가정).
-- SDT(`pmcal`·`attach`, TG별 292개 = MN 105, QT 105, WK 82). 시간형 79(Def_Met·Diffusion·Litho_Met·Litho·TF_Met: MN 30 d, QT 91 d, Litho WK 7 d)은 시작 간격 = MTBPM(소요 포함). 카운터형 213(그 외)은 툴별 처리 wafer 수가 MTBPM에 도달하면 시작. 소요 U[MTTR±MTTR2] h. 첫 PM은 TG 내 k번째 툴(k = 1..N)에 FOA·k/N(일 또는 wafer). 진행 중 공정 완료 후 시작하고 대기 중 신규 착수 금지(가정). 동시 도래 PM은 순차 수행.
-- 정지 구간이 겹치면 모두 끝나야 가용. `Delay_32`는 정지 없음.
+- UDT(`downcal`·`attach`, 영역 11개): TTF·첫 TTF Exp(10,080 min), TTR Exp(MTTR min: Def_Met·Litho_Met·TF_Met 35.28, Diffusion 151.2, Planar 201.6, Wet_Etch 221.76, Dry_Etch 231.84, TF 453.6, Dielectric·Implant 604.8, Litho 705.59). 달력 기준, 다음 TTF는 수리 종료부터. 공정 중 고장 시 중단 후 수리 뒤 재개(가정).
+- SDT(`pmcal`·`attach`, TG별 292개 = MN 105, QT 105, WK 82). 시간형 79(Def_Met·Diffusion·Litho_Met·Litho·TF_Met: MN 30 d, QT 91 d, Litho WK 7 d)은 시작 간격 = MTBPM(소요 포함). 카운터형 213(그 외)은 툴별 처리 wafer 수가 MTBPM에 도달하면 시작, 카운터는 PM 시작 시 0(가정). 소요 U[MTTR±MTTR2] h. 첫 PM은 TG 내 k번째 툴(k = 1..N)에 FOA·k/N(일 또는 wafer). 진행 중 공정 완료 후 시작하고 대기 중 신규 착수 금지(가정). 동시 도래 PM은 순차 수행.
+- 고장과 PM은 겹치지 않음: PM 중 도래한 고장은 PM 종료 후 수리 시작, 고장 중 도래한 PM은 수리 후 시작(가정, 기준 결과 PM%·[P1] 가용도 근거). 고장끼리 겹치면 모두 끝나야 가용. `Delay_32`는 정지 없음.
 
 ### 통계
 
-- 기간: WarmUp(2018, 종료 시 초기화) + 연도별 누적 Period_1–7(`period.txt`).
+- 기간: WarmUp(2018, 종료 시 초기화) + 연도별 누적 Period_1–7(`period.txt`). 종료 시각에서 기간을 잘라 보고 후 초기화, 이후 완료분은 Drain 보고.
 - lot: TH, CT 평균·표준편차·분위수, ONTIME%(완료 ≤ 납기), FF = CT/RPT. 제품 × 유형(PRL·PHL·super hot·ERL·EHL)별.
-- RPT = 빈 fab 기대 CT = Σ 샘플링 가중(스텝시간 + 반송) + 리워크 기대분. [P1] Table II 대비 −0.1 ~ +1.1%(10제품 확인).
+- RPT = 빈 fab 기대 CT = Σ 샘플링 가중(스텝시간 + 반송) + 리워크 기대분(루프별 q/(1−q)회 재수행, q = 샘플링 × 리워크 확률). [P1] Table II 대비 −0.1 ~ +1.1%(10제품 확인).
 - WIP 시간가중 평균.
-- 툴·TG·영역: DOWN·PM·SETUP·LOAD·UNLOAD·PROC·IDLE %, UTIL = SETUP + LOAD + UNLOAD + PROC, 가용도 = 100 − DOWN − PM, SDT 비중 = PM/(DOWN + PM)(`stnfam.rep` 정의와 동일).
-- CQT([P2]): %VL(위반 / 구간 완료), %VL1h·2h·4h, AVL·AONT(h, 구간 완료 전체 평균 위반·여유 시간). Litho(LithoTrack_FE_95·115 포함 구간)·Rest·Total.
+- 툴·TG·영역: DOWN·PM·SETUP·LOAD·UNLOAD·PROC·IDLE %, UTIL = SETUP + LOAD + UNLOAD + PROC, 가용도 = 100 − DOWN − PM, SDT 비중 = PM/(DOWN + PM)(`stnfam.rep` 정의와 동일). cascading 툴의 두 job이 겹치면 DOWN > PM > SETUP > PROC > LOAD > UNLOAD > IDLE 순 하나로 집계(가정, 기준 결과 근거).
+- CQT([P2]): 대기 = 시작 스텝 종료 ~ 종료 스텝 공정 시작. %VL(위반 / 구간 완료), %VL1h·2h·4h, AVL·AONT(h, 구간 완료 전체 평균 위반·여유 시간). Litho(LithoTrack_FE_95·115 포함 구간)·Rest·Total.
 - 스텝 추적은 저장하지 않고 실행 중 집계(4년 lot-step 3,000만 건 이상 → 저장 시 GB 규모). 분위수용으로 lot별 CT만 보관.
 
 ## 운영 전략
@@ -109,9 +110,9 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 | 전략 | 출처 | 내용 |
 |---|---|---|
 | BASE | P1·P2 | 데이터 순위(HP → RSETUP → FIFO/CR) |
-| QTCR | P2 식 (1) | 순위 HP → RSETUP → QTCR → CR. d^Q = C_s + CQT. t ≤ d^Q면 (d^Q − t)/Σ_{k=i..n} p_k, 아니면 (d^Q − t)·Σ_{k=i..n} p_k. 작을수록 우선, 구간 밖 lot = +∞ |
-| QTS | P2 식 (2)–(6) | QTCR 자리에 d_i. TW_k = (FF_k − 1)p_k, TT = Σ_{k=s+1..n−1} FF_k·p_k + TW_n, Ratio_k = FF_k·p_k/TT(k < n), TW_n/TT(k = n), FCQT_k = CQT·Ratio_k, d_i = C_s + Σ_{k=s+1..i} FCQT_k − p_i(i < n), d_n = C_s + CQT. 스텝별 FF_k = 평균 스텝 CT/p_k(사전 BASE 장기 실행으로 산출) |
-| Stopping | P2 §3.2·Table 3 | TG별 임계 ①TG 앞 CQT lot(공정 중 포함) ②① + 그 스텝 이전 구간 내 CQT lot. 구간의 TG 중 하나라도 도달하면 구간 시작 스텝에서 보류. 직전 구간 종료 = 현 구간 시작이면 무시. BASE·QTCR·QTS와 결합. 임계(①/②) LithoTrack_FE_95: none 1000/1000, high 90/130, medium 60/95, small 50/85. FE_115: 1000/1000, 90/220, 70/150, 55/125. 그 외 1000/1000 |
+| QTCR | P2 식 (1) | 순위 HP → RSETUP → QTCR → FIFO/CR. d^Q = C_s + CQT. t ≤ d^Q면 (d^Q − t)/Σ_{k=i..n} p_k, 아니면 (d^Q − t)·Σ_{k=i..n} p_k. 작을수록 우선, 구간 밖 lot = +∞ |
+| QTS | P2 식 (2)–(6) | QTCR 자리에 d_i. TW_k = (FF_k − 1)p_k, TT = Σ_{k=s+1..n−1} FF_k·p_k + TW_n, Ratio_k = FF_k·p_k/TT(k < n), TW_n/TT(k = n), FCQT_k = CQT·Ratio_k, d_i = C_s + Σ_{k=s+1..i} FCQT_k − p_i(i < n), d_n = C_s + CQT. FF_k = 평균 스텝 CT/p_k(스텝 CT = 이전 수행 스텝 종료 ~ 본 스텝 종료, 사전 BASE 실행의 종료 시각까지 기간, 미측정 1) |
+| Stopping | P2 §3.2·Table 3 | TG별 임계 ①TG 앞 CQT lot(대기·공정 중) ②① + 구간 안에서 그 TG에 아직 도달하지 않은 CQT lot(이동 중 포함, TG당 lot 1회). 구간의 TG(시작 다음 ~ 종료 스텝) 중 하나라도 도달하면 구간 시작 스텝에서 보류, CQT lot이 스텝을 마칠 때 재평가. 직전 구간 종료 = 현 구간 시작이면 무시. BASE·QTCR·QTS와 결합. 임계(①/②) LithoTrack_FE_95: none 1000/1000, high 90/130, medium 60/95, small 50/85. FE_115: 1000/1000, 90/220, 70/150, 55/125. 그 외 1000/1000. 임계 > 0. 배치·LSSU TG 임계가 최소 배치·run을 채울 lot까지 보류하면 교착 → 미완료 오류 |
 | EF | P1 §V | 우선순위 EHL 25, PHL 20, ERL 15, PRL 10(전 TG) |
 | CAtE | P1 §V | LithoTrack_FE_95·115만. 생산·엔지니어링 구간 (lp, le) h 교대, t=0 생산 구간부터(가정). DS3 (151.2, 16.8)·(75.6, 8.4)·(21.6, 2.4), DS4 (134.6, 33.4)·(67.2, 16.8)·(19.2, 4.8). 구간 유형 lot만, 없으면 다른 유형 |
 | CoT | P1 §V | LithoTrack_FE_95·115만. 대기 EL ≥ 한계(100·50·25·10)면 그 수만큼 EL 우선. 그 외 PL 우선, PL 없으면 EL(가정) |
@@ -131,10 +132,52 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 - AutoSched XTHEOR는 내부 이론 CT 기준이라 FF와 직접 비교하지 않음(CT·TH·ONTIME·가동률로 비교).
 - 난수 생성기가 달라(AutoSched CMRG) 경로 일치는 불가. 복제 평균과 95% 신뢰구간으로 비교한다.
 
+### 검증 결과
+
+기준 실행 대비(1,460 d, Period_3 누적 = 2019–2021). 본 모델 seed 1 복제 3회 평균 / AutoSched 1회:
+
+| | DS1 | DS2 | DS3 | DS4 |
+|---|---|---|---|---|
+| CT PRL | +3.5% | +0.2%(제품별 −0.6 ~ +0.8) | +4.1% | +1.0%(−0.2 ~ +1.8) |
+| CT ERL | – | – | +4.3% | +0.4% |
+| CT PHL·EHL | +3.5% | +4.0% | +3.9%·+4.1% | +5.2%·+5.0% |
+| CT super hot | +3.4% | +4.0% | +4.3% | +5.6% |
+| 평균 WIP(lot) | 2,345 / 2,265 | 2,148 / 2,140 | 2,520 / 2,420 | 2,761 / 2,734 |
+| SETUP% LithoTrack_FE_95·115 | 10.3·5.9 / 10.8·6.2 | 11.6·5.9 / 11.8·6.0 | 14.3·7.7 / 14.7·7.9 | 19.6·10.0 / 19.7·10.1 |
+| SETUP% Implant_128 | 17.1 / 15.5 | 17.3 / 16.6 | 19.6 / 17.4 | 20.7 / 17.9 |
+| UTIL% Planar_BE_75 | 72.6 / 69.8 | 73.1 / 71.5 | 74.3 / 70.4 | 74.1 / 69.8 |
+
+- 계획 lot 전량 완료(1,460 d: 85,767·85,671·94,360·102,931 lot).
+- PM%는 기준 대비 TG 평균 −0.05%p(TG별 최대 ±0.44%p, DS1·3 확인), 영역 가용도는 [P1] Table III·IV와 ±0.2%p, lot CT 표준편차 차는 제품별 DS1·2·4 ≤ 0.17 d, DS3 ≤ 0.38 d. 복제 간 PRL CT 변동 약 ±2%.
+- 잔여 편차(AutoSched 내부 동작 미문서):
+  - hot lot CT +3.4 ~ +5.6%.
+  - HV/LM(DS1·3) PRL CT +3.5 ~ +4.1%. 고정 납기라 DS3 ONTIME% 하락(PRL 49–85% / 92%).
+  - 대형 cascading TG 가동률 과다(Planar_BE_75 +1.6 ~ +4.3%p, DS1 TF_BE_40 +1.1%p, cascading TG 전체 +0.5%p). 유휴 툴 우선 배정으로 cascading이 기준보다 적은 것으로 추정(job을 막 시작한 툴 우선 배정 시 전체 −1.4%p로 반대 편차).
+  - LSSU Implant SETUP% +0.7 ~ +2.8%p.
+  - CR 데이터셋 part_6·9 ONTIME% 99.6–99.9 / 기준 71–82%([P2] Table 4도 71%).
+- CQT(DS2, 730 d의 2019년, 1회 / [P2] Table 5 default 10회 평균):
+
+  | | PRL ACT(d) | %VL Total | %VL Litho | %VL Rest | AVL(h) |
+  |---|---|---|---|---|---|
+  | BASE | 37.6 / 37.7 | 14.8 / 17.5 | 10.9 / 18.6 | 15.1 / 17.4 | 1.71 / 1.92 |
+  | QTCR | 37.6 / 37.5 | 9.7 / 9.4 | 2.0 / 1.2 | 10.4 / 10.6 | 0.71 / 0.71 |
+  | QTS | 38.2 / 37.7 | 10.0 / 9.3 | 2.0 / 1.1 | 10.7 / 10.5 | 0.79 / 0.73 |
+
+- Stopping(DS2, 같은 조건): [P2] Table 3 임계(small 50/85·55/125)는 default 구간에서 미발동(QTCR+small = QTCR, [P2]는 complex 설정에 적용). 스테퍼 5/10이면 Total %VL BASE 14.8 → 10.2%(litho 10.9 → 3.2), QTCR 9.7 → 7.2%이나 PRL ACT 37.6 → 92.5·81.8 d(용량 낭비, [P2] §2.1), 전 lot 완료.
+- 엔지니어링 전략(730 d의 2019년, 1회, ACT d ERL / PRL):
+
+  | | BASE | EF | CAtE(lp, le 최장) | CoT 100 | CoT 10 |
+  |---|---|---|---|---|---|
+  | DS3 | 47.8 / 40.2 | 30.3 / 42.3 | 68.9 / 40.4 | 57.8 / 38.9 | 47.8 / 40.9 |
+  | DS4 | 49.3 / 39.2 | 33.3 / 46.9 | 49.8 / 39.2 | 49.8 / 39.2 | 49.5 / 39.4 |
+
+  [P1] §V 경향과 일치: EF는 EL 최선·PL 최악, 긴 생산 구간·큰 트리거는 EL 악화, CR(DS4)에서는 전략 간 차이 축소. [P1]이 DS3에서 보고한 PL 악화는 CoT 100에서 재현되지 않음.
+
 ## 성능 측정
 
 - 지표: 이벤트/초, 복제 1회 벽시계 시간, 최대 메모리. 네이티브(`cli`)와 wasm(브라우저)을 같은 코드·입력으로 비교.
 - 참고 기준(하드웨어 상이): AutoSched AP 1,460 d 1회 — DS1 36:02(lot-step 34.69 M), DS2 31:30(30.01 M), DS3 40:48(39.04 M), DS4 39:58(38.15 M).
+- 네이티브 release 1회(1,460 d, Drain 포함): DS1 34.5 s(사건 70.5 M, 2.0 M/s), DS2 32.7 s(60.8 M), DS3 40.7 s(79.3 M), DS4 47.5 s(77.3 M). wasm은 단계 8에서 측정.
 
 ## 구현 구조
 
@@ -154,23 +197,27 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
   - 미래 사건 목록: (시각, 예약 순번) 최소 힙(`BinaryHeap`, 동시각 FIFO, 페이로드 비교 없음).
 - 데이터(`smt2020::data`·`asd`, 구현됨): `options.def`의 활성 파일만 읽어 `Dataset` 생성(이름 → 인덱스, 시간 ms, 날짜는 SIM_START 기준).
   - 지원 범위 밖 값·조합(예: STNCAP 1·2 외, MINRUN 외 setup 기준, SEQ_ADDS_SETUP_DELAYS Y)은 무시하지 않고 `파일:행` 오류.
-  - 검증: 이름 참조(툴그룹·스텝·setup·캘린더·부품·위치), per_batch ⇔ 배치 TG(0 < BATCHMN ≤ BATCHMX), cascading 간격 ⇔ STNCAP 2(0 < c ≤ 최소 공정시간), LTL·CQT 대상은 뒤 스텝, 리워크 대상은 앞 스텝, 투입 ≥ SIM_START, 기간 오름차순.
+  - 검증: 이름 참조(툴그룹·스텝·setup·캘린더·부품·위치), per_batch ⇔ 배치 TG(0 < BATCHMN ≤ BATCHMX), cascading 간격 ⇔ STNCAP 2(0 < c ≤ 최소 공정시간), LTL·CQT 대상은 뒤 스텝, 리워크 대상은 앞 스텝(확률 < 100%), CQT 시작·종료 스텝과 배치·setup run 스텝은 샘플링 100%, 배치·setup run 스텝은 리워크 루프 밖(대기 lot의 도착 보장), fromto 쌍·순위 중복 없음(FIFO·CR 동시 불가), 투입 ≥ SIM_START, 기간 오름차순.
+- 시뮬레이션(`smt2020::sim`, 구현됨): `run(&Dataset, &Config) -> Result<Results, Error>`.
+  - `Config`: 종료 시각, seed·복제 번호, 부하 계수, super hot 예약, CQT 규칙(None·QTCR·QTS), Stopping 임계, 엔지니어링 규칙(BASE·EF·CAtE·CoT).
+  - `Results`: 기간별 보고(제품 × 유형 lot 지표, FF 분위수, WIP, TG 상태 시간, CQT Litho·Rest), 투입·완료 수, 마지막 완료 시각, 사건 수, 스텝 FF(QTS 입력).
+  - 모듈: `fab`(모델·사건 처리), `dispatch`(툴·lot 선택, 배치 구성), `tool`(job 단계·cascading·정지·상태 집계), `routes`(기대 스텝시간·잔여 작업·RPT 사전 계산), `plan`(투입 계획), `stats`, `strategy`, `rng`.
 - 도메인 엔진: 엔티티 `Vec` + 인덱스 id(lot·툴·TG·스텝, route는 평탄 배열), `Event`는 작은 enum. 고장 중단 시 툴 epoch를 올려 기존 사건을 무효화(lazy deletion)하고 재스케줄.
 - 대기열: TG별 `Vec`. 디스패칭은 순위 키 선형 스캔(대기열 수십~수백). 유휴 툴은 TG별 FIFO.
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터 파일: postcard 직렬화 + 포맷 버전 필드. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
 - 메모리: 모델 1 MB 미만, 동시 WIP 약 2,000–2,800 lot, 대기 이벤트 수천 → 작업 집합 수십 MB 이내(추정).
 - 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬). SharedArrayBuffer 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 경계 입출력은 serde-wasm-bindgen, `i64`는 경계에서 f64(2^53 ms까지 정확).
-- 의존성: serde, postcard, rand_xoshiro, libm, wasm-bindgen, serde-wasm-bindgen.
+- 의존성: rand_xoshiro·libm(`smt2020`), wasm-bindgen(`fab-wasm`). 단계 7–8에서 serde·postcard·serde-wasm-bindgen 추가.
 
 ## 구현 단계
 
 1. DES 코어(`des-core`) — 완료
 2. 데이터 모델·`.asd` 로더(`smt2020`) — 완료
-3. lot 흐름·툴 처리: 난수 스트림, 투입·반송·대기, 디스패칭(HP·RSETUP·FIFO·CR), 공정(lot·wafer·batch), cascading, 배치, setup·rule_LSSU·wake, LTL, 리워크, 샘플링, super hot 예약
-4. 가용성: UDT·PM
-5. 통계: lot·툴·CQT 지표, 기간
-6. 운영 전략: QTCR·QTS·Stopping·EF·CAtE·CoT
+3. lot 흐름·툴 처리: 난수 스트림, 투입·반송·대기, 디스패칭(HP·RSETUP·FIFO·CR), 공정(lot·wafer·batch), cascading, 배치, setup·rule_LSSU·wake, LTL, 리워크, 샘플링, super hot 예약 — 완료
+4. 가용성: UDT·PM — 완료
+5. 통계: lot·툴·CQT 지표, 기간 — 완료
+6. 운영 전략: QTCR·QTS·Stopping·EF·CAtE·CoT — 완료
 7. `cli`: convert(.bin)·run, 기준 결과 검증
 8. `wasm` API·웹 UI·성능 측정
 
@@ -178,7 +225,7 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 
 ```bash
 cargo test
-cargo test -p smt2020 -- --ignored   # 실제 데이터 로드 검증, data/raw 필요
+cargo test -p smt2020 --release -- --ignored   # 실제 데이터 로드, 4개 데이터셋 2년 계획 완료, 전략 완료 검증(data/raw 필요)
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129   # crates/wasm/Cargo.toml의 wasm-bindgen 버전과 같아야 함
 cargo build --release --target wasm32-unknown-unknown -p fab-wasm
