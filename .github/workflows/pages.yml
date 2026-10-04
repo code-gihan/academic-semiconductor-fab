@@ -23,11 +23,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test
+        run: cargo test --locked
+
       - name: Add wasm target
         run: rustup target add wasm32-unknown-unknown
 
       - name: Build wasm
-        run: cargo build --release --locked --target wasm32-unknown-unknown
+        run: cargo build --release --locked --target wasm32-unknown-unknown -p fab-wasm
 
       - name: Install wasm-bindgen-cli
         # Must be the exact wasm-bindgen version in Cargo.lock.

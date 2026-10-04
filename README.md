@@ -4,7 +4,7 @@ SMT2020 반도체 FAB 테스트베드(데이터셋 4종)를 정적 웹 페이지
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: Rust/wasm 배포 골격만 구현. 이하 구현 명세.
+현재: DES 코어(`fab-sim::des`)와 wasm 배포 골격 구현. 이하 구현 명세.
 
 ## 참고 문헌·데이터
 
@@ -139,14 +139,19 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 ## 구현 구조
 
 ```text
-crates/sim/   코어 lib(std): 모델 타입(serde), 엔진, 전략, 통계. wasm 의존 없음
+crates/sim/   코어 lib(패키지 fab-sim, std): des(DES 코어), 모델 타입(serde), 전략, 통계. wasm 의존 없음
 crates/cli/   네이티브: convert(.asd → .bin), run(검증·벤치마크)
 crates/wasm/  wasm-bindgen cdylib(패키지 fab-wasm): load(bytes), run(config) → 결과
 www/          index.html, main.js, worker.js, data/ds1–4.bin(변환 결과, 커밋), pkg/(빌드 산출)
 data/raw/     SMT2020 원본(커밋 제외)
 ```
 
-- 엔진: 엔티티 `Vec` + `u32` id(lot·툴·TG·스텝, route는 평탄 배열). 이벤트 큐 `BinaryHeap<Reverse<(Time, seq, Event)>>`, `Event`는 작은 enum. 고장 중단 시 툴 epoch를 올려 기존 이벤트를 무효화(lazy deletion)하고 재스케줄.
+- DES 코어(`des`, 구현됨): 사건 스케줄링 관점, 다음 사건 시각으로 시계 진행.
+  - `Model`: 상태 + 초기화 루틴 `init`(t=0, 1회) + 사건 루틴 `handle`.
+  - `Scheduler`: 시계 `now`, `schedule_at`·`schedule_in`. 과거 시각 예약은 panic(인과성 위반).
+  - `Simulation`: `run_until(end)` = end 이하 사건 전부(처리 중 예약분 포함) 처리 후 시계 = end, 연속 호출로 이어서 실행. `events_processed` 집계.
+  - 미래 사건 목록: (시각, 예약 순번) 최소 힙(`BinaryHeap`, 동시각 FIFO, 페이로드 비교 없음).
+- 도메인 엔진: 엔티티 `Vec` + `u32` id(lot·툴·TG·스텝, route는 평탄 배열), `Event`는 작은 enum. 고장 중단 시 툴 epoch를 올려 기존 사건을 무효화(lazy deletion)하고 재스케줄.
 - 대기열: TG별 `Vec`. 디스패칭은 순위 키 선형 스캔(대기열 수십~수백). 유휴 툴은 TG별 FIFO.
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터 파일: postcard 직렬화 + 포맷 버전 필드. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
@@ -154,12 +159,13 @@ data/raw/     SMT2020 원본(커밋 제외)
 - 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬). SharedArrayBuffer 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 경계 입출력은 serde-wasm-bindgen, `i64`는 경계에서 f64(2^53 ms까지 정확).
 - 의존성: serde, postcard, rand_xoshiro, libm, wasm-bindgen, serde-wasm-bindgen.
 
-## 로컬 빌드(현재 골격)
+## 로컬 빌드·테스트
 
 ```bash
+cargo test
 rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version 0.2.129   # Cargo.toml의 wasm-bindgen 버전과 같아야 함
-cargo build --release --target wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129   # crates/wasm/Cargo.toml의 wasm-bindgen 버전과 같아야 함
+cargo build --release --target wasm32-unknown-unknown -p fab-wasm
 wasm-bindgen --target web --no-typescript --out-dir www/pkg target/wasm32-unknown-unknown/release/fab_wasm.wasm
 ```
 
@@ -167,4 +173,4 @@ wasm-bindgen --target web --no-typescript --out-dir www/pkg target/wasm32-unknow
 
 ## 배포
 
-`main`에 push하면 `.github/workflows/pages.yml`이 빌드해 GitHub Pages로 배포한다.
+`main`에 push하면 `.github/workflows/pages.yml`이 테스트·빌드 후 GitHub Pages로 배포한다.
