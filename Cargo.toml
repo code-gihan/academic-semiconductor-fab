@@ -1,0 +1,12 @@
+[package]
+name = "fab-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pinned: the wasm-bindgen CLI must be this exact version (CI reads it from Cargo.lock).
+wasm-bindgen = "=0.2.129"

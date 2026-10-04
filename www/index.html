@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Academic Semiconductor Fab</title>
+</head>
+<body>
+  <h1>Academic Semiconductor Fab</h1>
+  <p id="out">Loading wasm…</p>
+  <script type="module">
+    import init, { greet } from "./pkg/fab_wasm.js";
+
+    const out = document.getElementById("out");
+    try {
+      await init();
+      out.textContent = greet("GitHub Pages");
+    } catch (e) {
+      out.textContent = `wasm failed to load: ${e}`;
+    }
+  </script>
+</body>
+</html>
