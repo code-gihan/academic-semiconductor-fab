@@ -205,6 +205,7 @@ export default {
   "progress.drain": "투입한 lot 마무리 중({wip}개 남음)",
   "progress.preRun": "QTS 사전 실행",
   "progress.mainRun": "QTS 본 실행",
+  "progress.cqt": "CQT 위반 {share}%",
   "progress.elapsed": "경과 {time}",
   "progress.remaining": "약 {time} 남음",
   "lane.name": "복제 {replication}",
@@ -217,6 +218,7 @@ export default {
   "live.released": "투입 lot",
   "live.completed": "완료 lot",
   "live.wip": "WIP (lot)",
+  "live.cqt": "지금까지 CQT 위반 (%)",
   "live.hint":
     "타일 하나가 툴그룹 하나이고 영역별로 묶었습니다. 채움은 가동 중인 툴 비율(setup·load·공정·unload), 위쪽 빨간 막대는 고장·PM 중인 툴 비율, 숫자는 대기 lot 수입니다. 타일에 포인터를 올리면 자세히 보이고, 위에서 복제를 고르면 그 복제를 따라갑니다.",
   "tip.tools": "툴 {tools}대 · 대기 lot {queue}개",

@@ -121,9 +121,76 @@ Progress = TypedDict(
         "released": int,
         "completed": int,
         "wip": int,
+        "cqt_completed": int,
+        "cqt_violated": int,
         "finished": bool,
     },
 )
+
+# Events from "from" up to "until" (ms, both required), at these tool groups and of these lots
+# (release numbers); empty lists pass all. "from" is a keyword: the functional form declares it.
+EventFilter = TypedDict(
+    "EventFilter",
+    {"from": float, "until": float, "tool_groups": list[str], "lots": list[int]},
+    total=False,
+)
+
+class Recording(TypedDict, total=False):
+    violations: bool
+    """Every CQT segment completion over its limit."""
+    tool_groups: bool
+    """Each tool group's mean queue and tool time per state, day by day."""
+    events: Optional[EventFilter]
+    """The events of a window."""
+
+class Violations(TypedDict):
+    lot: list[int]
+    part: list[int]
+    kind: list[str]
+    segment: list[int]
+    release: list[int]
+    entered: list[int]
+    arrived: list[int]
+    exit: list[int]
+
+class ToolGroupDays(TypedDict):
+    day: list[int]
+    tool_group: list[int]
+    queue: list[float]
+    down: list[int]
+    pm: list[int]
+    setup: list[int]
+    process: list[int]
+    load: list[int]
+    unload: list[int]
+    idle: list[int]
+
+class Events(TypedDict):
+    time: list[int]
+    kind: list[
+        Literal["release", "arrive", "start", "end", "complete", "down", "up", "pm_start", "pm_end"]
+    ]
+    lot: list[Optional[int]]
+    tool: list[Optional[int]]
+    tool_group: list[Optional[int]]
+    step: list[Optional[int]]
+
+class Records(TypedDict):
+    """Tables of equal-length columns (pandas.DataFrame(records["violations"])); indices refer to
+    the dataset info."""
+
+    violations: Violations
+    tool_groups: ToolGroupDays
+    events: Events
+
+class DaySummary(TypedDict):
+    day: int
+    scope: Literal["fab", "cqt"]
+    measure: str
+    n: int
+    mean: float
+    std: Optional[float]
+    ci95: Optional[float]
 
 class LotStatus(TypedDict):
     id: int
@@ -173,7 +240,8 @@ class Summary(TypedDict):
     ci95: Optional[float]
 
 Results = dict[str, Any]
-"""Reporting periods, lot counts, end, events and QTS flow factors of a finished run (README)."""
+"""Seed and replication, reporting periods (with every CQT segment and its steps), days, lot
+counts, end, events and QTS flow factors of a finished run (README)."""
 
 class Dataset:
     """A decoded dataset, shared by the simulations of it."""
@@ -191,11 +259,21 @@ class Simulation:
     """One run of a configuration on a dataset from time 0, advanced in steps. Pausing leaves
     the results unchanged; QTS without flow factors measures them in a first pass."""
 
-    def __init__(self, dataset: Dataset, config: Config) -> None:
-        """The simulation of `config` on `dataset` at time 0 (ValueError if invalid)."""
+    def __init__(
+        self, dataset: Dataset, config: Config, recording: Optional[Recording] = None
+    ) -> None:
+        """The simulation of `config` on `dataset` at time 0, recording what `recording` asks
+        (ValueError if invalid). Recording leaves the results unchanged."""
     def config(self) -> Config: ...
+    def recording(self) -> Recording: ...
+    def records(self) -> Records:
+        """The tables recorded so far (empty during a first pass)."""
+    def flow_factors(self) -> Optional[list[list[Optional[float]]]]:
+        """The QTS flow factors of the configured run (given, or measured by the first pass);
+        a configuration with them runs the same in one pass."""
     def reset(self, config: Optional[Config] = None) -> None:
-        """Starts over at time 0 with `config`, or with the same configuration."""
+        """Starts over at time 0 with `config`, or with the same configuration, and the same
+        recording."""
     def run(
         self,
         until: Optional[float] = None,
@@ -217,6 +295,10 @@ class Simulation:
 
 def summarize(results: list[Results]) -> list[Summary]:
     """Measures of one configuration's replications: means and 95% confidence intervals."""
+
+def daily(results: list[Results]) -> list[DaySummary]:
+    """Day-by-day measures of one configuration's replications: lots released, completed and
+    in the fab, CQT completions, their share over the limit and mean excess."""
 
 def csv(summaries: list[Summary]) -> str:
     """Summaries as CSV: period,scope,item,kind,measure,n,mean,std,ci95."""

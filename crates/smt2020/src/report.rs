@@ -7,7 +7,7 @@ use std::fmt::Write;
 use des_core::{DAY, HOUR};
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{CqtReport, LotKind, PeriodReport, Results, StateTimes};
+use crate::sim::{CqtReport, CqtTimes, LotKind, PeriodReport, Results, StateTimes};
 
 named_enum! {
     /// What a measure describes.
@@ -24,6 +24,10 @@ named_enum! {
         Area = "area",
         /// CQT segments with stepper steps, the others, and all (item `litho`, `rest`, `total`).
         Cqt = "cqt",
+        /// A CQT segment (item `route:entry-exit`, its route and step indices).
+        CqtSegment = "cqt_segment",
+        /// A step of a CQT segment (item `route:entry-exit:step`).
+        CqtStep = "cqt_step",
     }
 }
 
@@ -79,6 +83,14 @@ named_enum! {
         AvlH = "avl_h",
         /// Mean slack under the limits per completed segment.
         AontH = "aont_h",
+        /// Mean transport, queue and processing time per visit of a segment step, of the
+        /// completions within the limit (`ok`) and over it (`vl`).
+        TransportOkH = "transport_ok_h",
+        QueueOkH = "queue_ok_h",
+        ProcessOkH = "process_ok_h",
+        TransportVlH = "transport_vl_h",
+        QueueVlH = "queue_vl_h",
+        ProcessVlH = "process_vl_h",
     }
 }
 
@@ -328,58 +340,77 @@ fn period_metrics(
         add(Scope::Area, area, None, Measure::UtilMaxPct, max);
     }
 
-    let total_cqt = CqtReport {
-        completed: period.cqt_litho.completed + period.cqt_rest.completed,
-        violated: period.cqt_litho.violated + period.cqt_rest.violated,
-        violated_1h: period.cqt_litho.violated_1h + period.cqt_rest.violated_1h,
-        violated_2h: period.cqt_litho.violated_2h + period.cqt_rest.violated_2h,
-        violated_4h: period.cqt_litho.violated_4h + period.cqt_rest.violated_4h,
-        violation: period.cqt_litho.violation + period.cqt_rest.violation,
-        slack: period.cqt_litho.slack + period.cqt_rest.slack,
-    };
+    let total_cqt = period.cqt_litho.merge(&period.cqt_rest);
     for (item, cqt) in [
-        ("litho", period.cqt_litho),
-        ("rest", period.cqt_rest),
-        ("total", total_cqt),
+        ("litho", &period.cqt_litho),
+        ("rest", &period.cqt_rest),
+        ("total", &total_cqt),
     ] {
-        add(
-            Scope::Cqt,
-            item,
-            None,
-            Measure::Completed,
-            cqt.completed as f64,
-        );
-        if cqt.completed == 0 {
-            continue;
-        }
-        let completed = cqt.completed as f64;
-        let share = |count: u64| 100.0 * count as f64 / completed;
-        add(Scope::Cqt, item, None, Measure::VlPct, share(cqt.violated));
-        add(
-            Scope::Cqt,
-            item,
-            None,
-            Measure::Vl1hPct,
-            share(cqt.violated_1h),
-        );
-        add(
-            Scope::Cqt,
-            item,
-            None,
-            Measure::Vl2hPct,
-            share(cqt.violated_2h),
-        );
-        add(
-            Scope::Cqt,
-            item,
-            None,
-            Measure::Vl4hPct,
-            share(cqt.violated_4h),
-        );
-        let hours = |time: i64| time as f64 / completed / HOUR as f64;
-        add(Scope::Cqt, item, None, Measure::AvlH, hours(cqt.violation));
-        add(Scope::Cqt, item, None, Measure::AontH, hours(cqt.slack));
+        cqt_metrics(add, Scope::Cqt, item, cqt);
     }
+    for segment in &period.cqt_segments {
+        let item = format!("{}:{}-{}", segment.route, segment.entry, segment.exit);
+        cqt_metrics(add, Scope::CqtSegment, &item, &segment.cqt);
+        for step in &segment.steps {
+            let item = format!("{item}:{}", step.step);
+            for (times, measures) in [
+                (
+                    &step.met,
+                    [
+                        Measure::TransportOkH,
+                        Measure::QueueOkH,
+                        Measure::ProcessOkH,
+                    ],
+                ),
+                (
+                    &step.violated,
+                    [
+                        Measure::TransportVlH,
+                        Measure::QueueVlH,
+                        Measure::ProcessVlH,
+                    ],
+                ),
+            ] {
+                if times.visits > 0 {
+                    for (measure, time) in measures.into_iter().zip(times_of(times)) {
+                        let hours = time as f64 / times.visits as f64 / HOUR as f64;
+                        add(Scope::CqtStep, &item, None, measure, hours);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn times_of(times: &CqtTimes) -> [i64; 3] {
+    [times.transport, times.queue, times.process]
+}
+
+/// The measures of CQT completions: their count, then (with completions) the shares over the
+/// limit and the mean excess and slack.
+fn cqt_metrics(
+    add: &mut impl FnMut(Scope, &str, Option<LotKind>, Measure, f64),
+    scope: Scope,
+    item: &str,
+    cqt: &CqtReport,
+) {
+    add(scope, item, None, Measure::Completed, cqt.completed as f64);
+    if cqt.completed == 0 {
+        return;
+    }
+    let completed = cqt.completed as f64;
+    let share = |count: u64| 100.0 * count as f64 / completed;
+    for (measure, count) in [
+        (Measure::VlPct, cqt.violated),
+        (Measure::Vl1hPct, cqt.violated_1h),
+        (Measure::Vl2hPct, cqt.violated_2h),
+        (Measure::Vl4hPct, cqt.violated_4h),
+    ] {
+        add(scope, item, None, measure, share(count));
+    }
+    let hours = |time: i64| time as f64 / completed / HOUR as f64;
+    add(scope, item, None, Measure::AvlH, hours(cqt.violation));
+    add(scope, item, None, Measure::AontH, hours(cqt.slack));
 }
 
 fn total(time: &StateTimes) -> f64 {
@@ -436,32 +467,138 @@ pub fn summarize(replications: &[Results]) -> Vec<Summary> {
     keys.into_iter()
         .zip(values)
         .map(|((period, scope, item, kind, measure), values)| {
-            let n = values.len();
-            let mean = values.iter().sum::<f64>() / n as f64;
-            let (std, ci95) = if n > 1 {
-                let variance = values
-                    .iter()
-                    .map(|value| (value - mean).powi(2))
-                    .sum::<f64>()
-                    / (n - 1) as f64;
-                let std = variance.sqrt();
-                (Some(std), Some(t_975(n - 1) * std / (n as f64).sqrt()))
-            } else {
-                (None, None)
-            };
+            let (mean, std, ci95) = statistics(&values);
             Summary {
                 period,
                 scope,
                 item,
                 kind,
                 measure,
-                n,
+                n: values.len(),
                 mean,
                 std,
                 ci95,
             }
         })
         .collect()
+}
+
+/// Mean, sample standard deviation and half-width of the 95% confidence interval of the mean
+/// (Student t) of at least one value; no deviation or interval for one.
+fn statistics(values: &[f64]) -> (f64, Option<f64>, Option<f64>) {
+    let n = values.len();
+    let mean = values.iter().sum::<f64>() / n as f64;
+    if n < 2 {
+        return (mean, None, None);
+    }
+    let variance = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / (n - 1) as f64;
+    let std = variance.sqrt();
+    (
+        mean,
+        Some(std),
+        Some(t_975(n - 1) * std / (n as f64).sqrt()),
+    )
+}
+
+/// A measure of one day over replications.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DaySummary {
+    pub day: usize,
+    /// `fab` (started, completed, wip) or `cqt` (completed, vl_pct, avl_h).
+    pub scope: Scope,
+    pub measure: Measure,
+    /// Replications that ran the day (with CQT completions for the shares).
+    pub n: usize,
+    pub mean: f64,
+    pub std: Option<f64>,
+    pub ci95: Option<f64>,
+}
+
+/// The days of the replications' results, day by day: lots released, completed and in the fab,
+/// CQT completions, their share over the limit and mean excess.
+pub fn daily(replications: &[Results]) -> Vec<DaySummary> {
+    let days = replications
+        .iter()
+        .map(|results| results.days.len())
+        .max()
+        .unwrap_or(0);
+    let mut summaries = Vec::new();
+    for day in 0..days {
+        let reports: Vec<_> = replications
+            .iter()
+            .filter_map(|results| results.days.get(day))
+            .collect();
+        let with_cqt: Vec<_> = reports
+            .iter()
+            .filter(|report| report.cqt.completed > 0)
+            .collect();
+        let measures: [(Scope, Measure, Vec<f64>); 6] = [
+            (
+                Scope::Fab,
+                Measure::Started,
+                reports.iter().map(|report| report.started as f64).collect(),
+            ),
+            (
+                Scope::Fab,
+                Measure::Completed,
+                reports
+                    .iter()
+                    .map(|report| report.completed as f64)
+                    .collect(),
+            ),
+            (
+                Scope::Fab,
+                Measure::Wip,
+                reports.iter().map(|report| report.wip).collect(),
+            ),
+            (
+                Scope::Cqt,
+                Measure::Completed,
+                reports
+                    .iter()
+                    .map(|report| report.cqt.completed as f64)
+                    .collect(),
+            ),
+            (
+                Scope::Cqt,
+                Measure::VlPct,
+                with_cqt
+                    .iter()
+                    .map(|report| 100.0 * report.cqt.violated as f64 / report.cqt.completed as f64)
+                    .collect(),
+            ),
+            (
+                Scope::Cqt,
+                Measure::AvlH,
+                with_cqt
+                    .iter()
+                    .map(|report| {
+                        report.cqt.violation as f64 / report.cqt.completed as f64 / HOUR as f64
+                    })
+                    .collect(),
+            ),
+        ];
+        for (scope, measure, values) in measures {
+            if values.is_empty() {
+                continue;
+            }
+            let (mean, std, ci95) = statistics(&values);
+            summaries.push(DaySummary {
+                day,
+                scope,
+                measure,
+                n: values.len(),
+                mean,
+                std,
+                ci95,
+            });
+        }
+    }
+    summaries
 }
 
 /// 0.975 quantile of Student's t distribution with `df` > 0 degrees of freedom: exact values to
@@ -528,9 +665,12 @@ fn field(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sim::{FlowFactors, LotReport, ToolGroupReport};
+    use crate::sim::{
+        CqtSegmentReport, CqtStepReport, DayReport, FlowFactors, LotReport, ToolGroupReport,
+    };
 
-    /// One period: two parts' regular lots, a tool group, CQT segments.
+    /// One period: two parts' regular lots, a tool group, CQT segments (one segment of two
+    /// steps) and two days.
     fn results(ct: [f64; 2], down: i64) -> Results {
         let lot = |part: &str, completed: u64, mean: f64, std: f64| LotReport {
             part: part.into(),
@@ -551,7 +691,38 @@ mod tests {
             violation: 2 * HOUR,
             slack: 6 * HOUR,
         };
+        // The violation waited 2 h at the exit step; the others 1 h for transport in total.
+        let times = |visits, transport, queue, process| CqtTimes {
+            visits,
+            transport,
+            queue,
+            process,
+        };
+        let steps = vec![
+            CqtStepReport {
+                step: 1,
+                met: times(3, HOUR, 0, 3 * HOUR),
+                violated: times(1, 0, 0, HOUR),
+            },
+            CqtStepReport {
+                step: 2,
+                met: times(3, 0, 6 * HOUR, 0),
+                violated: times(1, 0, 4 * HOUR, 0),
+            },
+        ];
+        let day = |started, wip, violated| DayReport {
+            started,
+            completed: 10,
+            wip,
+            cqt: CqtReport {
+                completed: 2,
+                violated,
+                ..CqtReport::default()
+            },
+        };
         Results {
+            seed: 1,
+            replication: 0,
             periods: vec![PeriodReport {
                 name: "Period_1".into(),
                 start: 0,
@@ -578,7 +749,16 @@ mod tests {
                 }],
                 cqt_litho: CqtReport::default(),
                 cqt_rest: cqt,
+                cqt_segments: vec![CqtSegmentReport {
+                    route: "R1".into(),
+                    entry: 0,
+                    exit: 2,
+                    litho: false,
+                    cqt,
+                    steps,
+                }],
             }],
+            days: vec![day(12, 10.0, 0), day(8, 12.0 + down as f64, 1)],
             released: 20,
             completed: 20,
             end: DAY,
@@ -630,6 +810,37 @@ mod tests {
         // No CQT segment of the stepper set completed: only the count.
         assert_eq!(cqt("litho", Measure::Completed), Some(0.0));
         assert_eq!(cqt("litho", Measure::VlPct), None);
+        // Per segment as for the sets; per step the mean hours per visit.
+        assert_eq!(
+            value(&metrics, Scope::CqtSegment, "R1:0-2", Measure::VlPct),
+            Some(25.0)
+        );
+        let step = |item, measure| value(&metrics, Scope::CqtStep, item, measure).unwrap();
+        assert_eq!(
+            (
+                step("R1:0-2:2", Measure::QueueOkH),
+                step("R1:0-2:2", Measure::QueueVlH)
+            ),
+            (2.0, 4.0)
+        );
+        assert_eq!(step("R1:0-2:1", Measure::ProcessVlH), 1.0);
+        assert!((step("R1:0-2:1", Measure::TransportOkH) - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn days_carry_intervals_day_by_day() {
+        let days = daily(&[results([10.0, 20.0], 0), results([12.0, 20.0], 10)]);
+        let find = |day, scope, measure| {
+            days.iter()
+                .find(|row| row.day == day && row.scope == scope && row.measure == measure)
+                .unwrap()
+        };
+        let wip = find(1, Scope::Fab, Measure::Wip);
+        assert_eq!((wip.n, wip.mean), (2, 17.0));
+        assert!((wip.std.unwrap() - 50f64.sqrt()).abs() < 1e-12);
+        assert_eq!(find(0, Scope::Fab, Measure::Started).mean, 12.0);
+        assert_eq!(find(1, Scope::Cqt, Measure::VlPct).mean, 50.0);
+        assert_eq!(find(0, Scope::Cqt, Measure::VlPct).std, Some(0.0));
     }
 
     #[test]

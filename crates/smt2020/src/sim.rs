@@ -10,6 +10,7 @@
 mod dispatch;
 mod fab;
 mod plan;
+mod record;
 mod routes;
 mod stats;
 mod status;
@@ -30,9 +31,10 @@ use fab::Fab;
 use strategy::Strategy;
 
 pub use fab::LotState;
+pub use record::{EventFilter, EventKind, Events, Recording, Records, ToolGroupDays, Violations};
 pub use stats::{
-    CqtReport, FLOW_FACTOR_PERCENTILES, FlowFactors, LotKind, LotReport, PeriodReport, Results,
-    StateTimes, ToolGroupReport,
+    CqtReport, CqtSegmentReport, CqtStepReport, CqtTimes, DayReport, FLOW_FACTOR_PERCENTILES,
+    FlowFactors, LotKind, LotReport, PeriodReport, Results, StateTimes, ToolGroupReport,
 };
 pub use status::{LotStatus, ToolGroupStatus, ToolStatus};
 pub use strategy::MAX_CRITERIA;
@@ -323,6 +325,9 @@ pub struct Progress {
     pub released: u64,
     pub completed: u64,
     pub wip: u64,
+    /// CQT segment completions so far, and those over the limit.
+    pub cqt_completed: u64,
+    pub cqt_violated: u64,
     /// Every lot of the configured run is complete: the results are final.
     pub finished: bool,
 }
@@ -350,13 +355,16 @@ const DRAIN_LIMIT: Time = 365 * DAY;
 /// the finished run has its [`results`](Self::results). Pausing leaves the results unchanged.
 ///
 /// QTS without flow factors runs in two passes: the [`Config::first_pass`] measures the flow
-/// factors, then the configured run takes them.
+/// factors, then the configured run takes them. Only the configured run is recorded.
 pub struct Simulation {
     data: Arc<Dataset>,
     config: Config,
+    recording: Recording,
     pass: u32,
     passes: u32,
     engine: des_core::Simulation<Fab>,
+    /// QTS flow factors the first pass measured.
+    measured: Option<Vec<Vec<Option<f64>>>>,
     /// Failure of a run that passed its deadline; every later run reports it.
     failure: Option<Error>,
 }
@@ -364,26 +372,45 @@ pub struct Simulation {
 impl Simulation {
     /// The simulation of `config` on `data` at time 0.
     pub fn new(data: Arc<Dataset>, config: Config) -> Result<Self, Error> {
+        Self::with_recording(data, config, Recording::default())
+    }
+
+    /// The simulation of `config` on `data` at time 0, recording what `recording` asks
+    /// ([`records`](Self::records)). Recording leaves the results unchanged.
+    pub fn with_recording(
+        data: Arc<Dataset>,
+        config: Config,
+        recording: Recording,
+    ) -> Result<Self, Error> {
         let first = config.first_pass();
         let fab = match &first {
             Some(first) => {
-                // The configured run's rules are checked now, not after the first pass.
+                // The configured run's rules and recording are checked now, not after the first
+                // pass.
                 let unmeasured: Vec<Vec<Option<f64>>> = data
                     .routes
                     .iter()
                     .map(|route| vec![None; route.steps.len()])
                     .collect();
                 Strategy::new(&data, &config, Some(&unmeasured))?;
-                Fab::new(Arc::clone(&data), first, None)?
+                record::Recorder::new(&data, &recording)?;
+                Fab::new(Arc::clone(&data), first, None, &Recording::default())?
             }
-            None => Fab::new(Arc::clone(&data), &config, config.flow_factors.as_deref())?,
+            None => Fab::new(
+                Arc::clone(&data),
+                &config,
+                config.flow_factors.as_deref(),
+                &recording,
+            )?,
         };
         Ok(Self {
             data,
             config,
+            recording,
             pass: 0,
             passes: if first.is_some() { 2 } else { 1 },
             engine: des_core::Simulation::new(fab),
+            measured: None,
             failure: None,
         })
     }
@@ -392,10 +419,29 @@ impl Simulation {
         &self.config
     }
 
-    /// Starts over at time 0 with `config`; on error the simulation stays as it was.
+    pub fn recording(&self) -> &Recording {
+        &self.recording
+    }
+
+    /// Starts over at time 0 with `config` and the same recording; on error the simulation stays
+    /// as it was.
     pub fn reset(&mut self, config: Config) -> Result<(), Error> {
-        *self = Self::new(Arc::clone(&self.data), config)?;
+        *self = Self::with_recording(Arc::clone(&self.data), config, self.recording.clone())?;
         Ok(())
+    }
+
+    /// The QTS flow factors of the configured run: given, or measured by the first pass once it
+    /// ended; none without QTS. A configuration with them runs the same in one pass (replays).
+    pub fn flow_factors(&self) -> Option<&[Vec<Option<f64>>]> {
+        self.config
+            .flow_factors
+            .as_deref()
+            .or(self.measured.as_deref())
+    }
+
+    /// The tables recorded so far (empty during a first pass).
+    pub fn records(&self) -> &Records {
+        self.engine.model().records()
     }
 
     /// Runs up to `until` (events at it included) or, without it, to the end, and returns where
@@ -442,12 +488,15 @@ impl Simulation {
                 _ if last => return Ok(self.progress()),
                 _ => {
                     // The first pass measured the configured run's flow factors.
+                    let measured = fab.step_flow_factors().to_vec();
                     let fab = Fab::new(
                         Arc::clone(&self.data),
                         &self.config,
-                        Some(fab.step_flow_factors()),
+                        Some(&measured),
+                        &self.recording,
                     )?;
                     self.engine = des_core::Simulation::new(fab);
+                    self.measured = Some(measured);
                     self.pass += 1;
                 }
             }
@@ -498,6 +547,8 @@ impl Progress {
             released: fab.released(),
             completed: fab.completed(),
             wip: fab.wip() as u64,
+            cqt_completed: fab.cqt_total().completed,
+            cqt_violated: fab.cqt_total().violated,
             finished: pass + 1 == passes && fab.finished(),
         }
     }
@@ -621,6 +672,8 @@ mod tests {
                 released: 11,
                 completed: 11,
                 wip: 0,
+                cqt_completed: 0,
+                cqt_violated: 0,
                 finished: true,
             }
         );
@@ -724,6 +777,8 @@ mod tests {
                 released: 0,
                 completed: 0,
                 wip: 0,
+                cqt_completed: 0,
+                cqt_violated: 0,
                 finished: false,
             }
         );
@@ -889,6 +944,186 @@ mod tests {
         assert_eq!(
             (started.completed, started.violated, started.slack),
             (3, 0, 3 * HOUR)
+        );
+    }
+
+    /// [`tiny_batch`] over its day, run to the end with `recording`.
+    fn recorded(recording: Recording) -> Simulation {
+        let data = Arc::new(tiny_batch());
+        let mut sim = Simulation::with_recording(data, Config::new(DAY), recording).unwrap();
+        sim.run(None).unwrap();
+        sim
+    }
+
+    fn everything() -> Recording {
+        Recording {
+            violations: true,
+            tool_groups: true,
+            events: Some(EventFilter {
+                from: 0,
+                until: 2 * DAY,
+                tool_groups: Vec::new(),
+                lots: Vec::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn segments_steps_and_days_account_for_every_wait() {
+        let sim = recorded(Recording::default());
+        let results = sim.results().unwrap();
+        let period = &results.periods[0];
+        // The first lot waited 10 h in the furnace's queue; the others did not wait.
+        let segment = &period.cqt_segments[0];
+        assert_eq!(
+            (segment.route.as_str(), segment.entry, segment.exit),
+            ("R1", 0, 1)
+        );
+        assert_eq!(segment.cqt, period.cqt_rest);
+        let furnace = &segment.steps[0];
+        assert_eq!(
+            (
+                furnace.step,
+                furnace.violated.visits,
+                furnace.violated.queue
+            ),
+            (1, 1, 10 * HOUR)
+        );
+        assert_eq!((furnace.met.visits, furnace.met.queue), (2, 0));
+        // Days: the releases at 0 h, 10 h and 20 h; completions after each furnace hour.
+        let days = &results.days;
+        assert_eq!(days.len(), 2);
+        let sum = |count: fn(&DayReport) -> u64| days.iter().map(count).sum::<u64>();
+        assert_eq!(sum(|day| day.started), results.released);
+        assert_eq!(sum(|day| day.completed), results.completed);
+        assert_eq!(sum(|day| day.cqt.completed), 3);
+        assert_eq!(days[0].cqt.violated, 1);
+        // In the fab: 11.2 h, 1.2 h and 1.2 h; the run ends at midnight with an empty day 1.
+        assert!((days[0].wip - 13.6 / 24.0).abs() < 1e-12);
+        assert_eq!(days[1], DayReport::default());
+    }
+
+    #[test]
+    fn recording_leaves_the_results_unchanged() {
+        let plain = recorded(Recording::default());
+        assert_eq!(plain.records(), &Records::default());
+        let sim = recorded(everything());
+        assert_eq!(sim.results().unwrap(), plain.results().unwrap());
+        let records = sim.records();
+        // The violation: the first lot, entering at 12 min, waiting in the queue until 10 h 12 min.
+        let violations = &records.violations;
+        assert_eq!(
+            (violations.lot.as_slice(), violations.segment.as_slice()),
+            (&[0][..], &[0][..])
+        );
+        assert_eq!(
+            (
+                violations.entered[0],
+                violations.arrived[0],
+                violations.exit[0]
+            ),
+            (12 * MINUTE, 12 * MINUTE, 10 * HOUR + 12 * MINUTE)
+        );
+        // Two days of both tool groups; every tool's time accounted, the furnace's queue of one lot
+        // for 10 h on day 0.
+        let days = &records.tool_groups;
+        assert_eq!(days.day, [0, 0, 1, 1]);
+        let total = |row: usize| {
+            [
+                &days.down,
+                &days.pm,
+                &days.setup,
+                &days.process,
+                &days.load,
+                &days.unload,
+                &days.idle,
+            ]
+            .iter()
+            .map(|column| column[row])
+            .sum::<Time>()
+        };
+        assert_eq!((total(0), total(1)), (2 * DAY, DAY));
+        assert!((days.queue[1] - 10.0 / 24.0).abs() < 1e-12);
+        // Each lot: release, arrive, start, end at both steps, completion.
+        let events = &records.events;
+        let kinds = |lot: u64| {
+            events
+                .lot
+                .iter()
+                .zip(&events.kind)
+                .filter(|(each, _)| **each == Some(lot))
+                .map(|(_, kind)| kind.name())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(2),
+            [
+                "release", "arrive", "start", "end", "arrive", "start", "end", "complete"
+            ]
+        );
+        assert!(events.time.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn events_pass_their_window_and_filters() {
+        let lots = |filter: EventFilter| {
+            let sim = recorded(Recording {
+                events: Some(filter),
+                ..Recording::default()
+            });
+            let events = &sim.records().events;
+            (
+                events.time.clone(),
+                events.lot.clone(),
+                events.tool_group.clone(),
+            )
+        };
+        let window = EventFilter {
+            from: 10 * HOUR,
+            until: 11 * HOUR,
+            tool_groups: vec!["Furnace_1".into()],
+            lots: Vec::new(),
+        };
+        let (times, _, groups) = lots(window.clone());
+        assert!(
+            times
+                .iter()
+                .all(|&time| (10 * HOUR..11 * HOUR).contains(&time))
+        );
+        assert!(!times.is_empty() && groups.iter().all(|&group| group == Some(1)));
+        let (_, events_lots, _) = lots(EventFilter {
+            tool_groups: Vec::new(),
+            lots: vec![1],
+            from: 0,
+            until: 2 * DAY,
+        });
+        assert!(events_lots.iter().all(|&lot| lot == Some(1)));
+        let error = |filter| {
+            Simulation::with_recording(
+                Arc::new(tiny_batch()),
+                Config::new(DAY),
+                Recording {
+                    events: Some(filter),
+                    ..Recording::default()
+                },
+            )
+            .err()
+            .unwrap()
+            .to_string()
+        };
+        assert_eq!(
+            error(EventFilter {
+                until: 10 * HOUR,
+                ..window.clone()
+            }),
+            "the event window must end after it starts"
+        );
+        assert_eq!(
+            error(EventFilter {
+                tool_groups: vec!["Nope".into()],
+                ..window
+            }),
+            "no tool group Nope"
         );
     }
 

@@ -119,6 +119,42 @@ class SimulationTest(unittest.TestCase):
         periods = [period["name"] for period in simulation.results()["periods"]]
         self.assertEqual(periods, ["WarmUp", "Period_1", "Drain"])
 
+    def test_recording_leaves_the_results_unchanged_and_accounts_for_them(self):
+        info = self.dataset.info()
+        first_group = info["tool_groups"][0]["name"]
+        recording = {
+            "violations": True,
+            "tool_groups": True,
+            "events": {"from": DAY, "until": 2 * DAY, "tool_groups": [first_group]},
+        }
+        simulation = smt2020.Simulation(self.dataset, self.config, recording)
+        progress = simulation.run()
+        recorded = simulation.results()
+        self.assertEqual(smt2020.digest(recorded), smt2020.digest(self.results))
+        violated = sum(
+            period["cqt_litho"]["violated"] + period["cqt_rest"]["violated"]
+            for period in recorded["periods"]
+        )
+        self.assertEqual(progress["cqt_violated"], violated)
+        records = simulation.records()
+        self.assertEqual(len(records["violations"]["lot"]), violated)
+        for table in records.values():
+            self.assertEqual(len({len(column) for column in table.values()}), 1)
+        days = records["tool_groups"]
+        self.assertEqual(len(days["day"]), len(recorded["days"]) * len(info["tool_groups"]))
+        events = records["events"]
+        self.assertTrue(all(DAY <= time < 2 * DAY for time in events["time"]))
+        self.assertTrue(all(group == 0 for group in events["tool_group"]))
+        self.assertEqual(sum(day["started"] for day in recorded["days"]), recorded["released"])
+        self.assertEqual(len(recorded["periods"][0]["cqt_segments"]), len(info["segments"]))
+        self.assertIsNone(simulation.flow_factors())
+        wip = next(
+            row
+            for row in smt2020.daily([recorded, self.results])
+            if (row["day"], row["scope"], row["measure"]) == (1, "fab", "wip")
+        )
+        self.assertEqual((wip["n"], wip["std"]), (2, 0.0))
+
     def test_summaries_and_csv(self):
         summaries = smt2020.summarize([self.results, self.results])
         completed = next(
@@ -152,6 +188,9 @@ class SimulationTest(unittest.TestCase):
                 smt2020.Simulation(self.dataset, {"horizon": DAY, "ranking": {"Nope": criteria}})
         with self.assertRaises(ValueError):
             smt2020.Simulation(self.dataset, {"horizon": DAY, "warm_up": DAY})
+        for recording in ({"violation": True}, {"events": {"from": DAY, "until": DAY}}):
+            with self.assertRaises(ValueError):
+                smt2020.Simulation(self.dataset, self.config, recording)
 
 
 if __name__ == "__main__":

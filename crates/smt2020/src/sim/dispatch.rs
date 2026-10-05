@@ -345,7 +345,7 @@ mod tests {
     use super::*;
     use crate::data::tiny;
     use crate::sim::fab::WaitingCqt;
-    use crate::sim::{Config, LotKind};
+    use crate::sim::{Config, LotKind, Recording};
 
     /// Lot `serial` queued at 0 with priority 10, due in 9 days, 10 h of remaining work and a 1 h
     /// step, outside CQT segments.
@@ -384,7 +384,13 @@ mod tests {
 
     /// Serials of `queue` in ranking order under `criteria` at `now`, on a tool without setup.
     fn order(criteria: &[Criterion], queue: &[Waiting], now: Time) -> Vec<u64> {
-        let fab = Fab::new(Arc::new(tiny()), &Config::new(DAY), None).unwrap();
+        let fab = Fab::new(
+            Arc::new(tiny()),
+            &Config::new(DAY),
+            None,
+            &Recording::default(),
+        )
+        .unwrap();
         let ranking = Ranking {
             criteria,
             prefer_engineering: None,

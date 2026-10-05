@@ -4,14 +4,15 @@ use std::collections::VecDeque;
 use std::mem;
 use std::sync::Arc;
 
-use des_core::{Model, Scheduler, Time};
+use des_core::{DAY, Model, Scheduler, Time};
 
 use super::dispatch::Key;
 use super::plan::{Plan, releases_before};
+use super::record::{Entry, EventKind, Recorder, Recording, Records};
 use super::routes::Routes;
-use super::stats::{LotKind, PeriodReport, Results, Stats};
+use super::stats::{CqtReport, Days, LotKind, PeriodReport, Results, Stats, Visit};
 use super::strategy::{Stopping, Strategy};
-use super::tool::{STATES, Tool, Work};
+use super::tool::{STATES, Tool, ToolState, Work};
 use super::{Config, DRAIN_LIMIT, Error};
 use crate::data::{
     Dataset, Dist, LocationId, LotRelease, PartId, PmTrigger, RouteId, Rule, SetupId, StepIndex,
@@ -66,13 +67,13 @@ named_enum! {
     }
 }
 
-/// Open CQT segment: from the end of step `entry` to the start of step `exit`.
+/// Open CQT segment `id`: from the end of step `entry` to the start of step `exit`.
 pub(super) struct Segment {
+    pub id: usize,
     pub entry: StepIndex,
     pub exit: StepIndex,
     pub entered: Time,
     pub limit: Time,
-    pub litho: bool,
 }
 
 pub(super) struct Lot {
@@ -98,6 +99,15 @@ pub(super) struct Lot {
     pub reserve: bool,
     /// Tool group holding a reservation for this lot.
     pub reservation: Option<ToolGroupId>,
+}
+
+/// When a lot arrived at its step's queue and started its job, and the steps of its open CQT
+/// segment so far (the wait's parts). Apart from [`Lot`], whose scans stay compact.
+#[derive(Default)]
+pub(super) struct LotTimes {
+    pub arrived: Time,
+    pub started: Time,
+    pub visits: Vec<Visit>,
 }
 
 pub(super) struct Reservation {
@@ -172,6 +182,17 @@ pub(super) struct Group {
     pub batch_due: Option<Time>,
     /// Earliest pending [`Event::BatchWake`].
     pub wake: Option<Time>,
+    /// Lots queued, integrated over time since the start, up to `queue_since` (records).
+    pub queue_area: f64,
+    pub queue_since: Time,
+}
+
+impl Group {
+    /// Integrates the queue length up to `now`, before it changes or is read.
+    fn integrate_queue(&mut self, now: Time) {
+        self.queue_area += self.queue.len() as f64 * (now - self.queue_since) as f64;
+        self.queue_since = now;
+    }
 }
 
 struct Period {
@@ -191,6 +212,8 @@ pub(super) struct Fab {
     reserve_super_hot: bool,
     pub rng: Streams,
     pub lots: Vec<Lot>,
+    /// Per lot, as `lots`.
+    times: Vec<LotTimes>,
     free: Vec<LotId>,
     serial: u64,
     pub tools: Vec<Tool>,
@@ -201,7 +224,10 @@ pub(super) struct Fab {
     transports: Vec<Option<Dist>>,
     stats: Stats,
     reports: Vec<PeriodReport>,
+    days: Days,
     step_flow_factors: Vec<Vec<Option<f64>>>,
+    seed: u64,
+    replication: u32,
     released: u64,
     completed: u64,
     wip: usize,
@@ -214,13 +240,17 @@ pub(super) struct Fab {
     pub selected: Vec<LotId>,
     pub candidates: Vec<(Key, usize)>,
     pub order: Vec<ToolId>,
+    recorder: Option<Recorder>,
+    records: Records,
 }
 
 impl Fab {
+    /// The fab of `config` at time 0 with QTS `flow_factors`, recording what `recording` asks.
     pub(super) fn new(
         data: Arc<Dataset>,
         config: &Config,
         flow_factors: Option<&[Vec<Option<f64>>]>,
+        recording: &Recording,
     ) -> Result<Self, Error> {
         if config.horizon <= 0 {
             return Err(Error("the horizon must be positive".into()));
@@ -228,6 +258,7 @@ impl Fab {
         let strategy = Strategy::new(&data, config, flow_factors)?;
         let routes = Routes::new(&data, &strategy.steppers);
         let plan = Plan::new(&data, config.horizon, config.load)?;
+        let recorder = Recorder::new(&data, recording)?;
 
         let mut periods = Vec::new();
         match config.warm_up {
@@ -296,7 +327,7 @@ impl Fab {
         }
 
         Ok(Self {
-            stats: Stats::new(&data),
+            stats: Stats::new(&data, &routes),
             data,
             routes,
             strategy,
@@ -306,6 +337,7 @@ impl Fab {
             reserve_super_hot: config.reserve_super_hot,
             rng: Streams::new(config.seed, config.replication),
             lots: Vec::new(),
+            times: Vec::new(),
             free: Vec::new(),
             serial: 0,
             tools,
@@ -313,7 +345,10 @@ impl Fab {
             setup_times,
             transports,
             reports: Vec::new(),
+            days: Days::new(),
             step_flow_factors: Vec::new(),
+            seed: config.seed,
+            replication: config.replication,
             released: 0,
             completed: 0,
             wip: 0,
@@ -323,7 +358,40 @@ impl Fab {
             selected: Vec::new(),
             candidates: Vec::new(),
             order: Vec::new(),
+            recorder,
+            records: Records::default(),
         })
+    }
+
+    /// The tables recorded so far.
+    pub(super) fn records(&self) -> &Records {
+        &self.records
+    }
+
+    /// Every CQT segment completion so far.
+    pub(super) fn cqt_total(&self) -> &CqtReport {
+        &self.stats.cqt_total
+    }
+
+    /// Records the event `entry` describes now, if recording events. The entry is made only
+    /// then: unrecorded runs pay one check per event.
+    #[inline]
+    fn log(&mut self, now: Time, entry: impl FnOnce(&Self) -> Entry) {
+        if let Some(recorder) = &self.recorder {
+            let entry = entry(self);
+            recorder.event(&mut self.records, now, entry);
+        }
+    }
+
+    /// Records an outage event of `tool` now.
+    fn log_tool(&mut self, now: Time, kind: EventKind, tool: ToolId) {
+        self.log(now, |fab| Entry {
+            kind,
+            lot: None,
+            tool: Some(tool),
+            tool_group: Some(fab.tools[tool].group),
+            step: None,
+        });
     }
 
     pub(super) fn finished(&self) -> bool {
@@ -349,7 +417,10 @@ impl Fab {
 
     pub(super) fn results(&self, events: u64) -> Results {
         Results {
+            seed: self.seed,
+            replication: self.replication,
             periods: self.reports.clone(),
+            days: self.days.reports.clone(),
             released: self.released,
             completed: self.completed,
             end: self.finished.unwrap_or_default(),
@@ -434,21 +505,32 @@ impl Fab {
         };
         let id = match self.free.pop() {
             Some(id) => {
+                // The freed lot's buffers serve the new one.
                 let mut dedicated = mem::take(&mut self.lots[id].dedicated);
                 dedicated.clear();
                 self.lots[id] = Lot { dedicated, ..lot };
+                self.times[id].visits.clear();
                 id
             }
             None => {
                 self.lots.push(lot);
+                self.times.push(LotTimes::default());
                 self.lots.len() - 1
             }
         };
+        self.log(now, |fab| Entry {
+            kind: EventKind::Release,
+            lot: Some(fab.serial),
+            tool: None,
+            tool_group: None,
+            step: spec.step,
+        });
         self.serial += 1;
         self.plan.remaining[spec.part] -= 1;
         self.released += 1;
         self.stats.started(spec.part, kind);
         self.stats.wip(now, self.wip);
+        self.days.wip(now, self.wip);
         self.wip += 1;
         if spec.step.is_some() {
             // Initial WIP waits at its current step.
@@ -491,11 +573,21 @@ impl Fab {
     }
 
     fn arrive(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
+        let now = sched.now();
         self.count_segment(id, -1);
         self.lots[id].state = LotState::Queued;
+        self.times[id].arrived = now;
         self.count_segment(id, 1);
         let group = self.group_of(id);
-        let waiting = self.waiting(id, sched.now());
+        self.log(now, |fab| Entry {
+            kind: EventKind::Arrive,
+            lot: Some(fab.lots[id].serial),
+            tool: None,
+            tool_group: Some(group),
+            step: Some(fab.lots[id].step),
+        });
+        let waiting = self.waiting(id, now);
+        self.groups[group].integrate_queue(now);
         self.groups[group].queue.push(waiting);
         if let Some(reservation) = &self.groups[group].reservation
             && reservation.lot == id
@@ -593,8 +685,16 @@ impl Fab {
         lot.alive = false;
         self.free.push(id);
         self.stats.wip(now, self.wip);
+        self.days.wip(now, self.wip);
         self.wip -= 1;
         self.completed += 1;
+        self.log(now, |fab| Entry {
+            kind: EventKind::Complete,
+            lot: Some(fab.lots[id].serial),
+            tool: None,
+            tool_group: None,
+            step: None,
+        });
         if !self.releasing && self.wip == 0 {
             self.finish(sched);
         }
@@ -612,6 +712,7 @@ impl Fab {
         let group_id = step.tool_group;
         let group = &self.data.tool_groups[group_id];
         let rule = group.rule;
+        self.groups[group_id].integrate_queue(now);
         self.groups[group_id]
             .queue
             .retain(|waiting| !lots.contains(&waiting.lot));
@@ -655,17 +756,44 @@ impl Fab {
             cascade: step.cascade_interval,
             unload: group.unload,
         };
+        let dedicate_to = step.dedicate_to;
 
         for &id in &lots {
             let lot = &mut self.lots[id];
+            let times = &mut self.times[id];
             lot.state = LotState::Processing;
+            times.started = now;
             if let Some(segment) = &lot.segment
                 && segment.exit == step_index
             {
-                self.stats
-                    .cqt(segment.litho, now - segment.entered, segment.limit);
+                // The wait ends: the exit step's arrival and queue complete its visits.
+                times.visits.push(Visit {
+                    step: step_index,
+                    transport: times.arrived - lot.last_done,
+                    queue: now - times.arrived,
+                    process: 0,
+                });
+                let violated = self.stats.cqt(
+                    segment.id,
+                    segment.entry,
+                    now - segment.entered,
+                    segment.limit,
+                    &times.visits,
+                );
+                times.visits.clear();
+                if violated && self.recorder.as_ref().is_some_and(Recorder::violations) {
+                    let violations = &mut self.records.violations;
+                    violations.lot.push(lot.serial);
+                    violations.part.push(lot.part);
+                    violations.kind.push(lot.kind);
+                    violations.segment.push(segment.id);
+                    violations.release.push(lot.release);
+                    violations.entered.push(segment.entered);
+                    violations.arrived.push(times.arrived);
+                    violations.exit.push(now);
+                }
             }
-            if let Some(target) = step.dedicate_to {
+            if let Some(target) = dedicate_to {
                 lot.dedicated.retain(|&(step, _)| step != target);
                 lot.dedicated.push((target, tool_id));
             }
@@ -675,6 +803,13 @@ impl Fab {
             {
                 self.groups[group_id].campaign -= 1;
             }
+            self.log(now, |fab| Entry {
+                kind: EventKind::Start,
+                lot: Some(fab.lots[id].serial),
+                tool: Some(tool_id),
+                tool_group: Some(group_id),
+                step: Some(step_index),
+            });
         }
 
         let tool = &mut self.tools[tool_id];
@@ -712,9 +847,17 @@ impl Fab {
         tool.account(now);
         let lots = tool.finish(slot);
         let wafers = lots.iter().map(|&id| self.lots[id].wafers).sum();
-        let pms = &self.data.tool_groups[self.tools[tool_id].group].pms;
+        let group = self.tools[tool_id].group;
+        let pms = &self.data.tool_groups[group].pms;
         self.tools[tool_id].add_wafers(wafers, pms);
         for &id in &lots {
+            self.log(now, |fab| Entry {
+                kind: EventKind::End,
+                lot: Some(fab.lots[id].serial),
+                tool: Some(tool_id),
+                tool_group: Some(group),
+                step: Some(fab.lots[id].step),
+            });
             self.finish_step(id, sched);
         }
         self.selected = lots;
@@ -726,6 +869,7 @@ impl Fab {
         let now = sched.now();
         self.count_segment(id, -1);
         let lot = &mut self.lots[id];
+        let times = &mut self.times[id];
         let step = &self.data.routes[lot.route].steps[lot.step];
         let info = &self.routes.info[lot.route];
         self.stats.step(
@@ -733,22 +877,26 @@ impl Fab {
             lot.step,
             (now - lot.last_done) as f64 / info.step[lot.step].at(lot.wafers),
         );
+        match &lot.segment {
+            Some(segment) if segment.exit == lot.step => lot.segment = None,
+            Some(_) => times.visits.push(Visit {
+                step: lot.step,
+                transport: times.arrived - lot.last_done,
+                queue: times.started - times.arrived,
+                process: now - times.started,
+            }),
+            None => {}
+        }
         lot.last_done = now;
         lot.location = Some(self.data.tool_groups[step.tool_group].location);
-        if lot
-            .segment
-            .as_ref()
-            .is_some_and(|segment| segment.exit == lot.step)
-        {
-            lot.segment = None;
-        }
         if let Some(cqt) = step.cqt {
+            times.visits.clear();
             lot.segment = Some(Segment {
+                id: self.routes.segment_at[lot.route][lot.step].expect("CQT step"),
                 entry: lot.step,
                 exit: cqt.until,
                 entered: now,
                 limit: cqt.limit,
-                litho: info.cqt_litho[lot.step],
             });
         }
         lot.step = match step.rework {
@@ -833,12 +981,14 @@ impl Fab {
                 breakdown,
             },
         );
+        self.log_tool(now, EventKind::Down, tool_id);
         self.unhold(tool_id);
         self.refresh(tool_id, sched);
     }
 
     fn repair(&mut self, tool_id: ToolId, breakdown: usize, sched: &mut Scheduler<Event>) {
         let now = sched.now();
+        self.log_tool(now, EventKind::Up, tool_id);
         let tool = &mut self.tools[tool_id];
         tool.account(now);
         tool.breakdowns -= 1;
@@ -883,10 +1033,12 @@ impl Fab {
             self.rng.sample(Purpose::Pm, pms[pm].duration),
             Event::PmDone(tool_id),
         );
+        self.log_tool(sched.now(), EventKind::PmStart, tool_id);
         self.unhold(tool_id);
     }
 
     fn pm_done(&mut self, tool_id: ToolId, sched: &mut Scheduler<Event>) {
+        self.log_tool(sched.now(), EventKind::PmEnd, tool_id);
         let tool = &mut self.tools[tool_id];
         tool.account(sched.now());
         tool.pm = None;
@@ -1005,12 +1157,60 @@ impl Fab {
         }
     }
 
-    /// The last lot is complete: reports the drain and ends the run.
+    /// The last lot is complete: reports the drain and the last day and ends the run.
     fn finish(&mut self, sched: &mut Scheduler<Event>) {
         let now = sched.now();
         self.snapshot("Drain".into(), now, true, false);
+        self.close_day(now);
         self.finished = Some(now);
         sched.stop();
+    }
+
+    /// Closes the open day at `at`; with tool groups recorded, records their day.
+    fn close_day(&mut self, at: Time) {
+        let day = self.days.reports.len();
+        let length = at - (self.days.end - DAY);
+        self.days.close(
+            at,
+            self.wip,
+            self.released,
+            self.completed,
+            &self.stats.cqt_total,
+        );
+        let Some(recorder) = &mut self.recorder else {
+            return;
+        };
+        if !recorder.tool_groups() {
+            return;
+        }
+        let mut totals = vec![[0; STATES]; self.groups.len()];
+        for tool in &mut self.tools {
+            tool.account(at);
+            for (total, time) in totals[tool.group].iter_mut().zip(tool.total) {
+                *total += time;
+            }
+        }
+        let rows = &mut self.records.tool_groups;
+        for (index, (group, total)) in self.groups.iter_mut().zip(totals).enumerate() {
+            group.integrate_queue(at);
+            let (before, area_before) = recorder.day_start[index];
+            let time = |state: ToolState| total[state as usize] - before[state as usize];
+            rows.day.push(day);
+            rows.tool_group.push(index);
+            rows.queue.push(if length > 0 {
+                (group.queue_area - area_before) / length as f64
+            } else {
+                0.0
+            });
+            rows.down.push(time(ToolState::Down));
+            rows.pm.push(time(ToolState::Pm));
+            rows.setup.push(time(ToolState::Setup));
+            rows.process.push(time(ToolState::Process));
+            rows.load.push(time(ToolState::Load));
+            rows.unload.push(time(ToolState::Unload));
+            rows.idle.push(time(ToolState::Idle));
+            recorder.day_start[index] = (total, group.queue_area);
+        }
     }
 
     /// Closes the statistics window at `now`: reports it (REPORT = yes) and restarts it
@@ -1021,8 +1221,10 @@ impl Fab {
         }
         self.stats.wip(now, self.wip);
         if report {
-            self.reports
-                .push(self.stats.report(name, now, &self.data, &self.tools));
+            self.reports.push(
+                self.stats
+                    .report(name, now, &self.data, &self.routes, &self.tools),
+            );
         }
         if reset {
             self.stats.reset(now);
@@ -1078,6 +1280,10 @@ impl Model for Fab {
     }
 
     fn handle(&mut self, event: Event, sched: &mut Scheduler<Event>) {
+        // Days end before the first event at or after their end.
+        while sched.now() >= self.days.end {
+            self.close_day(self.days.end);
+        }
         match event {
             Event::Stream(index) => self.release_stream(index, sched),
             Event::Listed => self.release_listed(sched),

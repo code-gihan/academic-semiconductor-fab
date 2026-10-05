@@ -103,7 +103,9 @@ pub(super) struct Tool {
     /// Kept free for a super hot lot.
     pub held: bool,
     accounted: Time,
+    /// Time per state since the last statistics reset, and since the start (records).
     pub time: [Time; STATES],
+    pub total: [Time; STATES],
 }
 
 impl Tool {
@@ -143,6 +145,7 @@ impl Tool {
             held: false,
             accounted: 0,
             time: [0; STATES],
+            total: [0; STATES],
         }
     }
 
@@ -237,6 +240,7 @@ impl Tool {
             let (state, change) = self.state_at(self.accounted);
             let end = change.min(until);
             self.time[state as usize] += end - self.accounted;
+            self.total[state as usize] += end - self.accounted;
             self.accounted = end;
         }
     }

@@ -4,7 +4,7 @@ SMT2020 반도체 FAB 테스트베드(데이터셋 4종) 시뮬레이터. DES �
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: 구현 단계 1–10 완료, 11–14 진행 예정([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
+현재: 구현 단계 1–11 완료, 12–14 진행 예정([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
 
 ## Quick Start
 
@@ -48,6 +48,13 @@ simulation.run()  # 끝까지: 투입 lot 전량 완료
 results = simulation.results()
 summary = smt2020.summarize([results])  # 측정값별 평균·95% 신뢰구간
 simulation.reset({**simulation.config(), "queue_time": "qts"})  # 다른 전략으로 시각 0부터
+
+# 같은 실행을 기록과 함께(digest 동일): 위반 lot, 툴그룹 일별 상태
+recorded = smt2020.Simulation(dataset, {"horizon": 730 * DAY, "queue_time": "qtcr"},
+                              {"violations": True, "tool_groups": True})
+recorded.run()
+violations = recorded.records()["violations"]  # 열: lot, segment, entered, arrived, exit …
+segments = dataset.info()["segments"]  # violations["segment"]의 index 대상
 ```
 
 - 실행 중 GIL을 놓으므로 스레드마다 `Simulation`을 두면 복제가 병렬로 실행된다. Ctrl-C는 실행을 일시정지하고 `KeyboardInterrupt`를 발생시킨다.
@@ -211,7 +218,8 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 - RPT = 빈 fab 기대 CT = Σ 샘플링 가중(스텝시간 + 반송) + 리워크 기대분(루프별 q/(1−q)회 재수행, q = 샘플링 × 리워크 확률). [P1] Table II 대비 −0.1 ~ +1.1%(10제품 확인).
 - WIP 시간가중 평균.
 - 툴·TG·영역: DOWN·PM·SETUP·LOAD·UNLOAD·PROC·IDLE %, UTIL = SETUP + LOAD + UNLOAD + PROC, 가용도 = 100 − DOWN − PM, SDT 비중 = PM/(DOWN + PM)(`stnfam.rep` 정의와 동일). cascading 툴의 두 job이 겹치면 DOWN > PM > SETUP > PROC > LOAD > UNLOAD > IDLE 순 하나로 집계(가정, 기준 결과 근거).
-- CQT([P2]): 대기 = 시작 스텝 종료 ~ 종료 스텝 공정 시작. %VL(위반 / 구간 완료), %VL1h·2h·4h, AVL·AONT(h, 구간 완료 전체 평균 위반·여유 시간). Litho(LithoTrack_FE_95·115 포함 구간)·Rest·Total.
+- CQT([P2]): 대기 = 시작 스텝 종료 ~ 종료 스텝 작업 시작(setup·load 전). %VL(위반 / 구간 완료), %VL1h·2h·4h, AVL·AONT(h, 구간 완료 전체 평균 위반·여유 시간). Litho(LithoTrack_FE_95·115 포함 구간)·Rest·Total, 그리고 구간 정의별과 그 스텝별 반송·대기열·공정 시간(위반·충족 완료별, 확장).
+- 일별(확장): 투입·완료 lot, 시간가중 WIP, 그날 끝난 CQT 구간의 완료·위반.
 - 스텝 추적은 저장하지 않고 실행 중 집계(4년 lot-step 3,000만 건 이상 → 저장 시 GB 규모). 분위수용으로 lot별 CT만 보관.
 
 ## 운영 전략
@@ -240,12 +248,13 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 |---|---|---|---|
 | 데이터셋 | `Dataset::from_bytes`·`to_bytes`, `asd::{load, load_with_orders, orders}` | `new Dataset(bytes)` | `Dataset(bytes)`, `load_dataset(source)` |
 | 데이터셋 정보 | `Dataset::info()` | `dataset.info()` | `dataset.info()` |
-| 생성(시각 0) | `Simulation::new(Arc<Dataset>, Config)` | `new Simulation(dataset, config)` | `Simulation(dataset, config)` |
+| 생성(시각 0) | `Simulation::new(Arc<Dataset>, Config)`, `with_recording(…, Recording)` | `new Simulation(dataset, config, recording?)` | `Simulation(dataset, config, recording=None)` |
 | 실행·일시정지 | `run(until)`, `run_observed(until, 관찰자)` | `run(until?, onProgress?)` | `run(until=None, on_progress=None)` |
 | 상태 | `progress()`, `lots()`, `tools()`, `tool_groups()` | `progress()`, `lots()`, `tools()`, `toolGroups()` | `progress()`, `lots()`, `tools()`, `tool_groups()` |
 | 설정·재시작 | `config()`, `reset(Config)` | `config()`, `reset(config?)` | `config()`, `reset(config=None)` |
+| 기록·재생 | `recording()`, `records()`, `flow_factors()` | `recording()`, `records()`, `flowFactors()` | `recording()`, `records()`, `flow_factors()` |
 | 결과 | `results()`, `Results::digest` | `results()`, `digest(results)` | `results()`, `digest(results)` |
-| 복제 요약 | `report::{metrics, summarize, csv}` | `summarize(results[])`, `csv(summaries)` | `summarize(results)`, `csv(summaries)` |
+| 복제 요약 | `report::{metrics, summarize, daily, csv}` | `summarize(results[])`, `daily(results[])`, `csv(summaries)` | `summarize(results)`, `daily(results)`, `csv(summaries)` |
 
 ### 실행 흐름
 
@@ -256,6 +265,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 - `results()`: 끝난 실행의 결과(전에는 오류). `reset(config)`: 같은 데이터셋으로 시각 0부터(설정을 생략하면 같은 설정, 거부되면 그대로 유지).
 - 운영 전략은 설정(`queue_time`, `ranking`, `batch_start_within`, `stopping`, `engineering`, `reserve_super_hot`)으로 정하고 `reset`으로 바꾼다. 실행 중 변경은 없다(대기열 항목이 도착 시 순위 입력을 고정).
 - QTS(규칙 또는 `qts` 기준) + `flow_factors` 없음: 같은 설정에서 QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 1차 실행이 FF를 측정한 뒤 본 실행(진행 `pass` 0/2 → 1/2). `until`·결과는 본 실행 기준이고, 설정 검증은 생성 시 함께 한다.
+- 기록: `with_recording`(JS·Python은 생성자의 세 번째 인자)이 위반 구간 완료, TG 일별 상태, 사건 창을 기록한다([기록](#기록)). 결과는 바뀌지 않는다(digest 동일). 재생 = 같은 설정·복제를 기록과 함께 다시 실행(결정적이라 같은 실행), QTS는 `flow_factors()`를 설정에 넣어 1차 실행을 생략한다.
 - 병렬: JS는 Web Worker마다, Python은 스레드마다(실행 중 GIL 해제), Rust는 스레드마다(`Simulation: Send`) `Simulation`을 둔다. 데이터셋은 공유한다.
 
 ### 실행 설정
@@ -279,14 +289,28 @@ JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생�
 ### 진행·상태·결과
 
 - 데이터셋 정보(`info()`): `areas`, `tool_groups[]` {`name`, `area`, `tools`, `batching`, `setup_runs`, `stepper`, `ranks`(데이터 순위 기준)}, `parts[]` {`name`, `family`, `engineering`, `route`}, `routes[]` {`name`, `steps[]` {`name`, `tool_group`}}, `segments[]`(CQT 구간, route·시작 스텝 순 = 구간 index) {`route`, `entry`, `exit`, `limit`, `litho`, `tool_groups`}, `periods[]` {`name`, `start`, `report`, `reset`}. 숫자 참조는 각 목록의 index.
-- 진행(`Progress`, 관찰자에게 1일 1회, `progress()`·`run`의 반환): `pass`·`passes`(QTS 1차 실행이면 0/2·1/2), `now`(그 pass의 시각), `horizon`, `released`·`completed`(투입·완료 lot), `wip`, `finished`.
+- 진행(`Progress`, 관찰자에게 1일 1회, `progress()`·`run`의 반환): `pass`·`passes`(QTS 1차 실행이면 0/2·1/2), `now`(그 pass의 시각), `horizon`, `released`·`completed`(투입·완료 lot), `wip`, `cqt_completed`·`cqt_violated`(CQT 구간 완료·위반 누적), `finished`.
 - lot(`lots()`, 재공 lot을 id 순으로): `id`(투입 순번, 0부터), `part`, `kind`, `priority`(디스패칭 우선순위, EF 반영), `wafers`, `release`, `due`, `step`·`step_name`·`tool_group`(이동 중이면 향하는, 대기·공정 중이면 그 스텝), `state`(`moving`·`queued`·`processing`), `tool`(공정 중인 툴 id), `cqt_exit`·`cqt_deadline`(진행 중인 CQT 구간의 종료 스텝과 그 스텝의 한도 내 최종 시작 시각).
 - 툴(`tools()`, id = 데이터셋의 툴그룹 순서대로 매긴 번호): `id`, `tool_group`, `state`(`down`·`pm`·`setup`·`process`·`load`·`unload`·`idle`, cascading job이 겹치면 앞선 상태), `setup`(현재 setup), `lots`(공정 중인 lot id, cascading은 job 2개).
 - 툴그룹(`tool_groups()`, 데이터셋 순): `name`, `area`, `tools`, `queue`(대기 lot 수), 상태별 툴 수 `down`·`pm`·`setup`·`process`·`load`·`unload`·`idle`.
-- 결과(`Results`): `periods[]`(보고 기간, 마지막은 Drain: `name`, `start`, `end`, `lots[]` {`part`, `kind`(PRL·PHL·SHL·ERL·EHL), `started`, `completed`, `on_time`, `cycle_time_mean`·`cycle_time_std`(ms, 완료 없으면 null), `flow_factor_mean`}, `flow_factors[]` {`kind`, `percentiles`(0·5·25·50·75·95·100%)}, `wip`, `tool_groups[]` {`name`, `area`, `tools`, `time` {`down`, `pm`, `setup`, `process`, `load`, `unload`, `idle`}(ms)}, `cqt_litho`·`cqt_rest` {`completed`, `violated`, `violated_1h`·`2h`·`4h`, `violation`·`slack`(ms)}), `released`, `completed`, `end`, `events`, `step_flow_factors`(QTS `flow_factors` 입력).
+- 결과(`Results`): `seed`·`replication`, `periods[]`(보고 기간, 마지막은 Drain: `name`, `start`, `end`, `lots[]` {`part`, `kind`(PRL·PHL·SHL·ERL·EHL), `started`, `completed`, `on_time`, `cycle_time_mean`·`cycle_time_std`(ms, 완료 없으면 null), `flow_factor_mean`}, `flow_factors[]` {`kind`, `percentiles`(0·5·25·50·75·95·100%)}, `wip`, `tool_groups[]` {`name`, `area`, `tools`, `time` {`down`, `pm`, `setup`, `process`, `load`, `unload`, `idle`}(ms)}, `cqt_litho`·`cqt_rest` {`completed`, `violated`, `violated_1h`·`2h`·`4h`, `violation`·`slack`(ms)}, `cqt_segments[]`(데이터셋 구간 순) {`route`, `entry`, `exit`, `litho`, `cqt`(같은 형식), `steps[]` {`step`, `met`·`violated` {`visits`, `transport`, `queue`, `process`}(ms 합)}}), `days[]`(일별: `started`, `completed`, `wip`, `cqt`), `released`, `completed`, `end`, `events`, `step_flow_factors`(QTS `flow_factors` 입력).
+- CQT 대기 분해: 대기(시작 스텝 종료 ~ 종료 스텝 작업 시작) = 구간 안 스텝마다 반송(직전 종료 ~ 도착) + 대기열(도착 ~ 작업 시작) + 공정(작업 시작 ~ 종료, setup·load·unload·고장 정지 포함) + 종료 스텝의 반송·대기열. 위반·충족 완료로 나눠 합한다.
 - digest: 결과 postcard 인코딩의 FNV-1a 64비트 해시. 같으면 결과가 비트 단위로 같다.
-- 측정값(`summarize`·`csv`): 범위 fab·kind·lot·tool_group·area·cqt별 측정(`ct_mean_d`, `on_time_pct`, `ff_p50`, `util_pct`, `vl_pct`, `avl_h` 등, 접미사 = 단위)의 n·평균·표본 표준편차·95% CI 반폭(Student t). 목록·정의는 [SIMULATION.md](SIMULATION.md) 9.3. CSV 열 `period,scope,item,kind,measure,n,mean,std,ci95`.
+- 측정값(`summarize`·`csv`): 범위 fab·kind·lot·tool_group·area·cqt·cqt_segment(`route:entry-exit`)·cqt_step(`route:entry-exit:step`)별 측정(`ct_mean_d`, `on_time_pct`, `ff_p50`, `util_pct`, `vl_pct`, `avl_h`, `queue_vl_h` 등, 접미사 = 단위)의 n·평균·표본 표준편차·95% CI 반폭(Student t). `daily`: 일별 fab(started·completed·wip)·cqt(completed·vl_pct·avl_h)의 같은 통계. 목록·정의는 [SIMULATION.md](SIMULATION.md) 9.3–9.4. CSV 열 `period,scope,item,kind,measure,n,mean,std,ci95`.
 - CLI·웹 JSON: `{data, threads, replications: [{config, digest, seconds, results}], summary}`(CLI는 `peak_heap_bytes`, 웹은 복제별 `memory_bytes` 추가).
+
+### 기록
+
+설정 `{"violations": bool, "tool_groups": bool, "events": {"from": ms, "until": ms, "tool_groups": [이름], "lots": [투입 순번]}}`(생략 = 끔, 빈 목록 = 전부). `records()`는 같은 길이 열의 표 3개(Python은 `pandas.DataFrame(records["violations"])`로 바로 쓴다, 숫자 참조는 `info()` index).
+
+| 표 | 행 | 열 |
+|---|---|---|
+| `violations` | 한도를 넘긴 구간 완료 | `lot`, `part`, `kind`, `segment`, `release`, `entered`(시작 스텝 종료), `arrived`(종료 스텝 도착), `exit`(종료 스텝 작업 시작) |
+| `tool_groups` | 날 × TG | `day`, `tool_group`, `queue`(시간가중 대기 lot), `down`·`pm`·`setup`·`process`·`load`·`unload`·`idle`(툴 시간 합, ms) |
+| `events` | 창·필터를 통과한 사건 | `time`, `kind`(release·arrive·start·end·complete·down·up·pm_start·pm_end), `lot`, `tool`, `tool_group`, `step`(없으면 null) |
+
+- TG 필터는 TG 없는 사건(투입·완료)을, lot 필터는 lot 없는 사건(고장·PM)을 거른다. 창 끝 ≤ 시작, 미지 TG는 오류.
+- 규모(DS2 730 d): 위반 약 17.7만 행, TG 일별 약 8.1만 행(JSON 19.5 MB), 기록 시간 1–2% 증가. 사건은 전 TG 하루 약 4.2만 행.
 
 ### 데이터셋 파일
 
@@ -413,15 +437,16 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 | | DS1 | DS2 | DS3 | DS4 |
 |---|---|---|---|---|
 | 사건 | 70.5 M | 60.8 M | 79.3 M | 77.3 M |
-| 네이티브: 시간·사건/s | 25.4 s · 2.78 M | 23.5 s · 2.59 M | 29.7 s · 2.67 M | 33.0 s · 2.34 M |
-| wasm: 시간·사건/s | 30.6 s · 2.30 M | 30.5 s · 1.99 M | 37.8 s · 2.10 M | 43.0 s · 1.80 M |
-| wasm / 네이티브 시간 | 1.20 | 1.30 | 1.27 | 1.30 |
-| 최대 메모리 네이티브 / wasm | 7.9 / 8 MB | 32.7 / 24 MB | 11.4 / 10 MB | 34.4 / 26 MB |
-| 결과 digest(네이티브 = wasm) | a6a4ebb859444917 | 3812b426031492da | 902437158169298d | ad6cd4f70849b303 |
+| 네이티브: 시간·사건/s | 25.5 s · 2.77 M | 23.8 s · 2.55 M | 30.2 s · 2.63 M | 33.1 s · 2.33 M |
+| wasm: 시간·사건/s | 31.3 s · 2.25 M | 28.4 s · 2.15 M | 36.6 s · 2.17 M | 39.6 s · 1.95 M |
+| wasm / 네이티브 시간 | 1.23 | 1.19 | 1.21 | 1.20 |
+| 최대 메모리 네이티브 / wasm | 9.9 / 10 MB | 35.0 / 25 MB | 13.6 / 12 MB | 37.3 / 27 MB |
+| 결과 digest(네이티브 = wasm) | 822207a22054b640 | 89543570bb565f50 | ded1f0a167494bab | 27db95cd7bbcd187 |
 
-- 결정성: 네 데이터셋 모두 네이티브·wasm(브라우저·Node.js)·Python wheel 결과가 비트 단위로 같다(digest 일치). Python은 실행 중 GIL을 놓아 DS1–4를 스레드 4개로 동시에 실행하면 42 s(각각 단독 27–35 s).
-- 2년(730 d, 웹 기본값) 네이티브: 12.6·12.1·14.9·16.8 s. 병렬: DS3 2년 20회 16스레드 57 s.
+- 결정성: 네 데이터셋 모두 네이티브·wasm(브라우저·Node.js)·Python wheel 결과가 비트 단위로 같다(digest 일치). Python은 실행 중 GIL을 놓아 DS1–4를 스레드 4개로 동시에 실행하면 36 s(각각 단독 26–34 s).
+- 2년(730 d, 웹 기본값) 네이티브: 12.9·12.0·15.1·16.8 s. 병렬: DS3 2년 20회 16스레드 57 s.
 - 이전 구현 대비(같은 1,460 d): 34.5·32.7·40.7·47.5 s → 25.4·23.5·29.7·33.0 s(26–31% 단축, 결과 동일). 대기열 항목(도착 시 순위 입력 고정), 선택당 공통 입력 1회 계산, LTO·단일 코드 생성 단위. Stopping 재평가를 임계 해제 사건으로 바꿔 DS4 180 d 스테퍼 5/10 실행 77.8 → 6.3 s.
+- 구현 단계 10–11의 비용(같은 세션 대조): 순위 기준 목록은 같은 속도(키 계산 인라인, 호출이면 약 50% 느림). 구간·스텝 분해·일별 결과·기록 지점은 DS2 730 d 약 2%(기록 꺼짐; 사건 항목은 기록할 때만 만든다, lot 시각표는 lot 구조체 밖). 기록 켬(위반·TG 일별)은 추가 1–2%. 결과 구조가 늘어 최대 힙 +2–3 MB, digest는 새 값(기존 측정값은 CSV 바이트 동일).
 - 참고 기준(하드웨어 상이): AutoSched AP 1,460 d 1회 — DS1 36:02(lot-step 34.69 M), DS2 31:30(30.01 M), DS3 40:48(39.04 M), DS4 39:58(38.15 M).
 
 ## 구현 구조
@@ -472,7 +497,7 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 8. `wasm` API·웹 UI·결정성 확인·성능 측정 — 완료
 9. 재사용 코어: `Simulation`(단계 실행·일시정지·상태 조회·재시작), JS·Python 포장(같은 API), wheel 배포 — 완료
 10. 운영 전략 실험: 툴그룹별 순위 기준(`ranking`, 기준 11종), QT 배치 시작(깨우기 사건), 웜업 설정, 데이터셋 정보(`info()`), 웹 보기 분리(설정·실행·결과·Python)와 전략 편집기·설정 JSON — 완료
-11. 분석 데이터: 구간별·스텝별 CQT 분해, 일별 결과, 기록·재생 — 진행 예정
+11. 분석 데이터: 구간별·스텝별 CQT 대기 분해, 일별 결과·요약, 진행의 CQT 누적, 기록(위반·TG 일별·사건 창)과 재생용 QTS FF — 완료
 12. 분석 보기(드릴다운·시계열·히트맵), 13. 시나리오 비교(쌍대 CI·스윕), 14. 공유·게시 — 진행 예정
 
 ## 로컬 빌드·테스트

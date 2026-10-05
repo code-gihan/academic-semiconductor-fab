@@ -1,10 +1,12 @@
-//! Statistics accumulated since the last reset and the reports taken at period ends.
+//! Statistics accumulated since the last reset and the reports taken at period ends, and the
+//! days of a run.
 
-use des_core::{HOUR, Time};
+use des_core::{DAY, HOUR, Time};
 use serde::{Deserialize, Serialize};
 
+use super::routes::Routes;
 use super::tool::{STATES, Tool, ToolState};
-use crate::data::{Dataset, PartId, RouteId};
+use crate::data::{Dataset, PartId, RouteId, StepIndex};
 
 named_enum! {
     /// Lot categories of the papers.
@@ -50,9 +52,15 @@ impl LotKind {
 /// Outcome of one run. Times are ms since the simulation start.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Results {
+    /// The run's random numbers ([`Config::seed`](super::Config::seed) and replication):
+    /// results of the same pair share them, so strategies compare pairwise.
+    pub seed: u64,
+    pub replication: u32,
     /// Reporting periods (REPORT = yes) up to the horizon, then `Drain` covering the completion
     /// of the lots still in the fab at the horizon.
     pub periods: Vec<PeriodReport>,
+    /// Day k covers [k·DAY, (k + 1)·DAY), the last one up to the end.
+    pub days: Vec<DayReport>,
     /// Lots released (plan and initial WIP) and completed; equal for a finished run.
     pub released: u64,
     pub completed: u64,
@@ -94,6 +102,56 @@ pub struct PeriodReport {
     /// CQT segments with stepper (LithoTrack_FE_95/115) steps, and all others.
     pub cqt_litho: CqtReport,
     pub cqt_rest: CqtReport,
+    /// Every CQT segment of the dataset, in [`Dataset::segments`] order.
+    pub cqt_segments: Vec<CqtSegmentReport>,
+}
+
+/// A CQT segment in a window: its completions and where their waits went.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CqtSegmentReport {
+    pub route: String,
+    /// Entrance and exit step: the wait runs from the end of the one to the start of the other.
+    pub entry: usize,
+    pub exit: usize,
+    /// Includes stepper steps.
+    pub litho: bool,
+    pub cqt: CqtReport,
+    /// The steps after the entrance through the exit, in route order.
+    pub steps: Vec<CqtStepReport>,
+}
+
+/// A step of a CQT segment: the time its completions within and over the limit spent there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CqtStepReport {
+    pub step: usize,
+    pub met: CqtTimes,
+    pub violated: CqtTimes,
+}
+
+/// Time spent at a step of a CQT segment, summed over its visits (steps skipped by sampling
+/// have none); the parts of all steps add up to the waits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CqtTimes {
+    pub visits: u64,
+    /// From the end of the previous processed step to the arrival in the queue.
+    pub transport: Time,
+    /// From the arrival to the start of the job.
+    pub queue: Time,
+    /// From the start of the job to the end of the step (setup, load, processing, unload and
+    /// outages meanwhile); none at the exit step, whose start ends the wait.
+    pub process: Time,
+}
+
+/// A day of a run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DayReport {
+    /// Lots released and completed.
+    pub started: u64,
+    pub completed: u64,
+    /// Time-averaged lots in the fab; 0 for a day of no length (a run ending at midnight).
+    pub wip: f64,
+    /// CQT segments whose exit step started.
+    pub cqt: CqtReport,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -159,6 +217,60 @@ pub struct CqtReport {
     pub slack: Time,
 }
 
+impl CqtReport {
+    /// Counts a completion that waited `wait` under `limit`; true if over it.
+    fn add(&mut self, wait: Time, limit: Time) -> bool {
+        self.completed += 1;
+        if wait > limit {
+            let excess = wait - limit;
+            self.violated += 1;
+            self.violation += excess;
+            self.violated_1h += u64::from(excess > HOUR);
+            self.violated_2h += u64::from(excess > 2 * HOUR);
+            self.violated_4h += u64::from(excess > 4 * HOUR);
+            true
+        } else {
+            self.slack += limit - wait;
+            false
+        }
+    }
+
+    /// The completions of both.
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            completed: self.completed + other.completed,
+            violated: self.violated + other.violated,
+            violated_1h: self.violated_1h + other.violated_1h,
+            violated_2h: self.violated_2h + other.violated_2h,
+            violated_4h: self.violated_4h + other.violated_4h,
+            violation: self.violation + other.violation,
+            slack: self.slack + other.slack,
+        }
+    }
+
+    /// The completions since `earlier`, a count of the same completions before.
+    fn since(&self, earlier: &Self) -> Self {
+        Self {
+            completed: self.completed - earlier.completed,
+            violated: self.violated - earlier.violated,
+            violated_1h: self.violated_1h - earlier.violated_1h,
+            violated_2h: self.violated_2h - earlier.violated_2h,
+            violated_4h: self.violated_4h - earlier.violated_4h,
+            violation: self.violation - earlier.violation,
+            slack: self.slack - earlier.slack,
+        }
+    }
+}
+
+/// A visit of a lot in a CQT segment to one of its steps (`CqtTimes`).
+#[derive(Clone, Copy)]
+pub(super) struct Visit {
+    pub step: StepIndex,
+    pub transport: Time,
+    pub queue: Time,
+    pub process: Time,
+}
+
 #[derive(Default)]
 struct LotStats {
     started: u64,
@@ -167,19 +279,29 @@ struct LotStats {
     flow_factors: Vec<f64>,
 }
 
+/// A CQT segment's completions in the window and, per step after the entrance, their times
+/// within the limit (`[0]`) and over it (`[1]`).
+struct SegmentStats {
+    cqt: CqtReport,
+    steps: Vec<[CqtTimes; 2]>,
+}
+
 pub(super) struct Stats {
     since: Time,
     wip_since: Time,
     wip_area: f64,
     /// Per part and kind.
     lots: Vec<LotStats>,
-    cqt: [CqtReport; 2],
+    /// Per CQT segment of the routes.
+    segments: Vec<SegmentStats>,
+    /// Every CQT completion of the run, never reset (days, progress).
+    pub cqt_total: CqtReport,
     /// Per route and step: sum of step cycle time over expected duration, and visits.
     steps: Vec<Vec<(f64, u64)>>,
 }
 
 impl Stats {
-    pub(super) fn new(data: &Dataset) -> Self {
+    pub(super) fn new(data: &Dataset, routes: &Routes) -> Self {
         Self {
             since: 0,
             wip_since: 0,
@@ -187,7 +309,15 @@ impl Stats {
             lots: (0..data.parts.len() * KINDS.len())
                 .map(|_| LotStats::default())
                 .collect(),
-            cqt: [CqtReport::default(); 2],
+            segments: routes
+                .segments
+                .iter()
+                .map(|segment| SegmentStats {
+                    cqt: CqtReport::default(),
+                    steps: vec![[CqtTimes::default(); 2]; segment.exit - segment.entry],
+                })
+                .collect(),
+            cqt_total: CqtReport::default(),
             steps: data
                 .routes
                 .iter()
@@ -230,19 +360,27 @@ impl Stats {
         *visits += 1;
     }
 
-    pub(super) fn cqt(&mut self, litho: bool, wait: Time, limit: Time) {
-        let cqt = &mut self.cqt[usize::from(litho)];
-        cqt.completed += 1;
-        if wait > limit {
-            let excess = wait - limit;
-            cqt.violated += 1;
-            cqt.violation += excess;
-            cqt.violated_1h += u64::from(excess > HOUR);
-            cqt.violated_2h += u64::from(excess > 2 * HOUR);
-            cqt.violated_4h += u64::from(excess > 4 * HOUR);
-        } else {
-            cqt.slack += limit - wait;
+    /// A completion of CQT `segment` (entrance step `entry`) that waited `wait` under `limit`,
+    /// with the lot's visits to the segment's steps; true if over the limit.
+    pub(super) fn cqt(
+        &mut self,
+        segment: usize,
+        entry: StepIndex,
+        wait: Time,
+        limit: Time,
+        visits: &[Visit],
+    ) -> bool {
+        self.cqt_total.add(wait, limit);
+        let stats = &mut self.segments[segment];
+        let violated = stats.cqt.add(wait, limit);
+        for visit in visits {
+            let times = &mut stats.steps[visit.step - entry - 1][usize::from(violated)];
+            times.visits += 1;
+            times.transport += visit.transport;
+            times.queue += visit.queue;
+            times.process += visit.process;
         }
+        violated
     }
 
     pub(super) fn step_flow_factors(&self) -> Vec<Vec<Option<f64>>> {
@@ -263,6 +401,7 @@ impl Stats {
         name: String,
         now: Time,
         data: &Dataset,
+        routes: &Routes,
         tools: &[Tool],
     ) -> PeriodReport {
         let mut lots = Vec::new();
@@ -340,6 +479,35 @@ impl Stats {
                 },
             })
             .collect();
+        let (mut cqt_litho, mut cqt_rest) = (CqtReport::default(), CqtReport::default());
+        let cqt_segments = routes
+            .segments
+            .iter()
+            .zip(&self.segments)
+            .map(|(segment, stats)| {
+                let total = if segment.litho {
+                    &mut cqt_litho
+                } else {
+                    &mut cqt_rest
+                };
+                *total = total.merge(&stats.cqt);
+                CqtSegmentReport {
+                    route: data.routes[segment.route].name.clone(),
+                    entry: segment.entry,
+                    exit: segment.exit,
+                    litho: segment.litho,
+                    cqt: stats.cqt,
+                    steps: (segment.entry + 1..=segment.exit)
+                        .zip(&stats.steps)
+                        .map(|(step, &[met, violated])| CqtStepReport {
+                            step,
+                            met,
+                            violated,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
         PeriodReport {
             name,
             start: self.since,
@@ -352,8 +520,9 @@ impl Stats {
                 0.0
             },
             tool_groups,
-            cqt_litho: self.cqt[1],
-            cqt_rest: self.cqt[0],
+            cqt_litho,
+            cqt_rest,
+            cqt_segments,
         }
     }
 
@@ -364,11 +533,71 @@ impl Stats {
         self.lots
             .iter_mut()
             .for_each(|lot| *lot = LotStats::default());
-        self.cqt = [CqtReport::default(); 2];
+        for segment in &mut self.segments {
+            segment.cqt = CqtReport::default();
+            segment.steps.fill([CqtTimes::default(); 2]);
+        }
         self.steps
             .iter_mut()
             .flatten()
             .for_each(|step| *step = (0.0, 0));
+    }
+}
+
+/// The days of a run ([`Results::days`]): the open day closes at the first event at or after
+/// its end, and at the end of the run, from totals of the whole run.
+pub(super) struct Days {
+    /// End of the open day.
+    pub end: Time,
+    wip_area: f64,
+    wip_since: Time,
+    /// Lots released and completed and CQT completions before the open day.
+    before: (u64, u64, CqtReport),
+    pub reports: Vec<DayReport>,
+}
+
+impl Days {
+    pub(super) fn new() -> Self {
+        Self {
+            end: DAY,
+            wip_area: 0.0,
+            wip_since: 0,
+            before: (0, 0, CqtReport::default()),
+            reports: Vec::new(),
+        }
+    }
+
+    /// Integrates the WIP level `wip` that held since the last change up to `now`.
+    pub(super) fn wip(&mut self, now: Time, wip: usize) {
+        self.wip_area += wip as f64 * (now - self.wip_since) as f64;
+        self.wip_since = now;
+    }
+
+    /// Closes the open day at `at`, its end or the end of the run, given the totals then.
+    pub(super) fn close(
+        &mut self,
+        at: Time,
+        wip: usize,
+        released: u64,
+        completed: u64,
+        cqt: &CqtReport,
+    ) {
+        self.wip(at, wip);
+        let length = at - (self.end - DAY);
+        let (released_before, completed_before, cqt_before) = &self.before;
+        self.reports.push(DayReport {
+            started: released - released_before,
+            completed: completed - completed_before,
+            wip: if length > 0 {
+                self.wip_area / length as f64
+            } else {
+                0.0
+            },
+            cqt: cqt.since(cqt_before),
+        });
+        self.wip_area = 0.0;
+        self.before = (released, completed, *cqt);
+        self.end += DAY;
     }
 }
 

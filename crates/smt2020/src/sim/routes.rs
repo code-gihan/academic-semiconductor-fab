@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use crate::data::{
-    BatchCriterion, Dataset, LocationId, PartId, Route, SetupId, StepIndex, ToolGroupId, Unit,
+    BatchCriterion, Dataset, LocationId, PartId, Route, RouteId, SetupId, StepIndex, ToolGroupId,
+    Unit,
 };
 
 /// `base + per_wafer · wafers`, in ms.
@@ -50,8 +51,20 @@ pub(super) struct RouteInfo {
     pub segment_groups: Vec<Vec<ToolGroupId>>,
 }
 
+/// A CQT segment of a route ([`Dataset::segments`] order).
+pub(super) struct CqtSegment {
+    pub route: RouteId,
+    pub entry: StepIndex,
+    pub exit: StepIndex,
+    /// Includes stepper steps.
+    pub litho: bool,
+}
+
 pub(super) struct Routes {
     pub info: Vec<RouteInfo>,
+    pub segments: Vec<CqtSegment>,
+    /// Per route and step: the segment starting at the end of the step.
+    pub segment_at: Vec<Vec<Option<usize>>>,
     /// Batch compatibility key per part and step (batch steps only); a key's steps share a tool
     /// group.
     pub batch_key: Vec<Vec<Option<usize>>>,
@@ -106,12 +119,33 @@ impl Routes {
                 }
             }
         }
+        let info: Vec<RouteInfo> = data
+            .routes
+            .iter()
+            .map(|route| RouteInfo::new(data, route, steppers))
+            .collect();
+        let mut segment_at: Vec<Vec<Option<usize>>> = data
+            .routes
+            .iter()
+            .map(|route| vec![None; route.steps.len()])
+            .collect();
+        let segments = data
+            .segments()
+            .enumerate()
+            .map(|(index, (route, entry, cqt))| {
+                segment_at[route][entry] = Some(index);
+                CqtSegment {
+                    route,
+                    entry,
+                    exit: cqt.until,
+                    litho: info[route].cqt_litho[entry],
+                }
+            })
+            .collect();
         Self {
-            info: data
-                .routes
-                .iter()
-                .map(|route| RouteInfo::new(data, route, steppers))
-                .collect(),
+            info,
+            segments,
+            segment_at,
             batch_key,
             batch_members,
             setup_members,

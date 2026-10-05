@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use pythonize::{depythonize, pythonize};
 use serde::Serialize;
 use smt2020::report::{self, Summary};
-use smt2020::sim::{self, Config, Results};
+use smt2020::sim::{self, Config, Recording, Results};
 use smt2020::{DAY, HOUR, MINUTE, SECOND, asd};
 
 /// The web page's dataset files, bundled.
@@ -68,16 +68,40 @@ struct Simulation(smt2020::Simulation);
 
 #[pymethods]
 impl Simulation {
-    /// The simulation of `config` on `dataset` at time 0.
+    /// The simulation of `config` on `dataset` at time 0, recording what `recording` asks.
     #[new]
-    fn new(dataset: &Dataset, config: &Bound<'_, PyAny>) -> PyResult<Self> {
-        smt2020::Simulation::new(Arc::clone(&dataset.0), config_of(config)?)
+    #[pyo3(signature = (dataset, config, recording=None))]
+    fn new(
+        dataset: &Dataset,
+        config: &Bound<'_, PyAny>,
+        recording: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let recording: Recording = match recording {
+            Some(recording) => depythonize(recording).map_err(value_error)?,
+            None => Recording::default(),
+        };
+        smt2020::Simulation::with_recording(Arc::clone(&dataset.0), config_of(config)?, recording)
             .map(Self)
             .map_err(value_error)
     }
 
     fn config<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         to_py(py, self.0.config())
+    }
+
+    fn recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, self.0.recording())
+    }
+
+    /// The tables recorded so far, as dicts of columns.
+    fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, self.0.records())
+    }
+
+    /// The QTS flow factors of the configured run (given, or measured by the first pass), or
+    /// None.
+    fn flow_factors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, &self.0.flow_factors())
     }
 
     /// Starts over at time 0 with `config`, or with the same configuration.
@@ -163,6 +187,14 @@ fn summarize<'py>(py: Python<'py>, results: &Bound<'py, PyAny>) -> PyResult<Boun
     to_py(py, &report::summarize(&results))
 }
 
+/// Day-by-day measures of results of one configuration's replications, with their means and 95%
+/// confidence intervals.
+#[pyfunction]
+fn daily<'py>(py: Python<'py>, results: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let results: Vec<Results> = depythonize(results).map_err(value_error)?;
+    to_py(py, &report::daily(&results))
+}
+
 /// Summaries as CSV.
 #[pyfunction]
 fn csv(summaries: &Bound<'_, PyAny>) -> PyResult<String> {
@@ -189,6 +221,7 @@ fn smt2020_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Simulation>()?;
     module.add_function(wrap_pyfunction!(load_dataset, module)?)?;
     module.add_function(wrap_pyfunction!(summarize, module)?)?;
+    module.add_function(wrap_pyfunction!(daily, module)?)?;
     module.add_function(wrap_pyfunction!(csv, module)?)?;
     module.add_function(wrap_pyfunction!(digest, module)?)?;
     Ok(())

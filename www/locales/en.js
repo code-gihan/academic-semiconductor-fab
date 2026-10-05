@@ -211,6 +211,7 @@ export default {
   "progress.drain": "finishing released lots ({wip} left)",
   "progress.preRun": "QTS pre-run",
   "progress.mainRun": "QTS main run",
+  "progress.cqt": "CQT {share}% over",
   "progress.elapsed": "{time} elapsed",
   "progress.remaining": "about {time} left",
   "lane.name": "Replication {replication}",
@@ -223,6 +224,7 @@ export default {
   "live.released": "Lots released",
   "live.completed": "Lots completed",
   "live.wip": "WIP (lots)",
+  "live.cqt": "CQT over the limit so far (%)",
   "live.hint":
     "A tile per tool group, by area: its fill is the share of tools busy (setup, load, processing, unload), the red bar at its top the share down or in PM, the number the lots queued. Point at a tile for details; choose a replication above to follow it.",
   "tip.tools": "{tools} tools · {queue} lots queued",

@@ -14,7 +14,10 @@ use smt2020::data::{
     BatchCriterion, BatchSize, Breakdown, Cqt, Dataset, Dist, LotRelease, Pm, PmTrigger, Rank,
     ReleaseStream, Rule, ToolGroup, Unit,
 };
-use smt2020::sim::{Config, EngineeringRule, Limits, QueueTimeRule, Results, Simulation, Stopping};
+use smt2020::sim::{
+    Config, EngineeringRule, EventFilter, Limits, QueueTimeRule, Recording, Results, Simulation,
+    Stopping,
+};
 use smt2020::{DAY, HOUR, MINUTE, SECOND, Time};
 
 fn model_dir(dataset: &str, model: &str) -> PathBuf {
@@ -554,40 +557,40 @@ fn paper_strategies(horizon: Time) -> [(&'static str, Config); 7] {
 fn strategy_digests_are_stable() {
     let expected = [
         [
-            "eb414c42d7a55c99",
-            "54a64d4430337f88",
-            "ed89a91770b83906",
-            "5f9677fc0343f1a7",
-            "eb414c42d7a55c99",
-            "eb414c42d7a55c99",
-            "eb414c42d7a55c99",
+            "cbd82a55942ef100",
+            "b7e2af1ba736917f",
+            "a601f455fbf85cab",
+            "54b1c73d19215d9c",
+            "cbd82a55942ef100",
+            "cbd82a55942ef100",
+            "cbd82a55942ef100",
         ],
         [
-            "c6b03d8265bf3d28",
-            "c99c336b91d6cf8f",
-            "bbbc42369d007826",
-            "90ecc3e1251cf1c8",
-            "c6b03d8265bf3d28",
-            "c6b03d8265bf3d28",
-            "c6b03d8265bf3d28",
+            "ad5df5349e4ad018",
+            "ef651c5c147e1bf5",
+            "de971a448d8ea33f",
+            "8d562632af0b3c15",
+            "ad5df5349e4ad018",
+            "ad5df5349e4ad018",
+            "ad5df5349e4ad018",
         ],
         [
-            "448e21232bd66786",
-            "e686ed82c928294e",
-            "61c59a13b17aaec1",
-            "1b3c33239172ae07",
-            "780c69a120fb62d8",
-            "ce8a47a8ae2c4f72",
-            "5c02cf6c69a435ce",
+            "d0b64709721576f5",
+            "0ecbb0f5f3434620",
+            "a76dc61174b05df2",
+            "0651439d48d287d5",
+            "82716f31fd9d1584",
+            "8b84f31ddecf4d1d",
+            "318f70e6273e508c",
         ],
         [
-            "228c0b6ad1987af8",
-            "46c15aca3fc34e5a",
-            "d5ffa1fa9da29d8e",
-            "e9913420af2dd8d0",
-            "8c08d967b0f414a7",
-            "8da5ed37403ca5fc",
-            "9d67a91baaf43838",
+            "7dfe2c2cb365ac70",
+            "0e2e5f2ec1b7221a",
+            "e60112bc3a6fa83d",
+            "b1230f4bb3a47e17",
+            "a10ba76db90b8769",
+            "5c197bf8b252c121",
+            "0b79e4b663c668cb",
         ],
     ];
     for (n, digests) in (1..).zip(expected) {
@@ -636,4 +639,79 @@ fn strategies_complete() {
         ..qts.clone()
     };
     assert_eq!(complete(&ds, &qts).digest(), complete(&ds, &given).digest());
+}
+
+/// Recording leaves a run unchanged, and the records, days and segment steps account for every
+/// wait: the page's DS2 over 60 days (one reset window and the drain).
+#[test]
+#[ignore = "slow in debug builds: cargo test -p smt2020 --release -- --ignored"]
+fn records_account_for_the_run() {
+    let ds = Arc::new(Dataset::from_bytes(&page_dataset(2)).unwrap());
+    let config = Config::new(60 * DAY);
+    let plain = complete(&ds, &config);
+    let recording = Recording {
+        violations: true,
+        tool_groups: true,
+        events: Some(EventFilter {
+            from: 30 * DAY,
+            until: 31 * DAY,
+            tool_groups: Vec::new(),
+            lots: Vec::new(),
+        }),
+    };
+    let mut sim = Simulation::with_recording(Arc::clone(&ds), config, recording).unwrap();
+    sim.run(None).unwrap();
+    let results = sim.results().unwrap();
+    assert_eq!(results.digest(), plain.digest());
+    let records = sim.records();
+    let violations = &records.violations;
+    let periods = &results.periods;
+    let violated: u64 = periods
+        .iter()
+        .map(|period| period.cqt_litho.violated + period.cqt_rest.violated)
+        .sum();
+    assert!(violated > 0);
+    assert_eq!(violations.lot.len() as u64, violated);
+    assert_eq!(
+        results.days.iter().map(|day| day.cqt.violated).sum::<u64>(),
+        violated
+    );
+    // The violations' waits are the time their segments' steps took.
+    let waits: i64 = violations
+        .exit
+        .iter()
+        .zip(&violations.entered)
+        .map(|(exit, entered)| exit - entered)
+        .sum();
+    let parts: i64 = periods
+        .iter()
+        .flat_map(|period| &period.cqt_segments)
+        .flat_map(|segment| &segment.steps)
+        .map(|step| step.violated.transport + step.violated.queue + step.violated.process)
+        .sum();
+    assert_eq!(waits, parts);
+    // Every full day accounts for every tool's time.
+    let info = ds.info();
+    let days = &records.tool_groups;
+    for row in 0..days.day.len() {
+        if days.day[row] + 1 < results.days.len() {
+            let tools = i64::from(info.tool_groups[days.tool_group[row]].tools);
+            let total = days.down[row]
+                + days.pm[row]
+                + days.setup[row]
+                + days.process[row]
+                + days.load[row]
+                + days.unload[row]
+                + days.idle[row];
+            assert_eq!(total, tools * DAY, "row {row}");
+        }
+    }
+    let events = &records.events;
+    assert!(!events.time.is_empty());
+    assert!(
+        events
+            .time
+            .iter()
+            .all(|&time| (30 * DAY..31 * DAY).contains(&time))
+    );
 }

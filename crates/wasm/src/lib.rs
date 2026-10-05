@@ -9,7 +9,7 @@ use js_sys::Function;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use smt2020::report::{self, Summary};
-use smt2020::sim::{self, Results};
+use smt2020::sim::{self, Recording, Results};
 use wasm_bindgen::prelude::*;
 
 /// A decoded dataset file, shared by the simulations of it.
@@ -38,16 +38,42 @@ pub struct Simulation(smt2020::Simulation);
 
 #[wasm_bindgen]
 impl Simulation {
-    /// The simulation of `config` on `dataset` at time 0.
+    /// The simulation of `config` on `dataset` at time 0, recording what `recording` (optional)
+    /// asks.
     #[wasm_bindgen(constructor)]
-    pub fn new(dataset: &Dataset, config: JsValue) -> Result<Simulation, JsValue> {
-        smt2020::Simulation::new(Arc::clone(&dataset.0), json_of(config)?)
+    pub fn new(
+        dataset: &Dataset,
+        config: JsValue,
+        recording: JsValue,
+    ) -> Result<Simulation, JsValue> {
+        let recording = if recording.is_undefined() || recording.is_null() {
+            Recording::default()
+        } else {
+            json_of(recording)?
+        };
+        smt2020::Simulation::with_recording(Arc::clone(&dataset.0), json_of(config)?, recording)
             .map(Simulation)
             .map_err(error)
     }
 
     pub fn config(&self) -> Result<JsValue, JsValue> {
         to_js(self.0.config())
+    }
+
+    pub fn recording(&self) -> Result<JsValue, JsValue> {
+        to_js(self.0.recording())
+    }
+
+    /// The tables recorded so far.
+    pub fn records(&self) -> Result<JsValue, JsValue> {
+        to_js(self.0.records())
+    }
+
+    /// The QTS flow factors of the configured run (given, or measured by the first pass), or
+    /// null.
+    #[wasm_bindgen(js_name = flowFactors)]
+    pub fn flow_factors(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.0.flow_factors())
     }
 
     /// Starts over at time 0 with `config`, or with the same configuration.
@@ -121,6 +147,14 @@ impl Simulation {
 pub fn summarize(results: JsValue) -> Result<JsValue, JsValue> {
     let results: Vec<Results> = from_js(results)?;
     to_js(&report::summarize(&results))
+}
+
+/// Day-by-day measures of results of one configuration's replications, with their means and 95%
+/// confidence intervals.
+#[wasm_bindgen]
+pub fn daily(results: JsValue) -> Result<JsValue, JsValue> {
+    let results: Vec<Results> = from_js(results)?;
+    to_js(&report::daily(&results))
 }
 
 /// Summaries as CSV.

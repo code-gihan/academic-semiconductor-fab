@@ -77,7 +77,8 @@ function laneText(lane) {
   return lane.progress ? phase(lane.progress) : t("lane.starting");
 }
 
-/** Where a replication is: its simulated day or the drain, and the QTS pass. */
+/** Where a replication is: its simulated day or the drain, the QTS pass and its CQT violations
+ * so far. */
 function phase(progress) {
   const parts = [
     progress.now > progress.horizon
@@ -90,7 +91,15 @@ function phase(progress) {
   if (progress.passes > 1) {
     parts.push(t(progress.pass === 0 ? "progress.preRun" : "progress.mainRun"));
   }
+  if (progress.cqt_completed > 0) {
+    parts.push(t("progress.cqt", { share: formatNumber(violationShare(progress), 1) }));
+  }
   return parts.join(" · ");
+}
+
+/** CQT segment completions over the limit so far (%). */
+function violationShare(progress) {
+  return (100 * progress.cqt_violated) / progress.cqt_completed;
 }
 
 /** The followed replication's fab: a tile per tool group, filled by its busy tools, with a bar
@@ -104,15 +113,20 @@ function showLive(run) {
     replication: run.follow,
     phase: laneText(lane),
   });
+  const progress = lane.progress;
   const stats = [
-    ["live.released", lane.progress.released],
-    ["live.completed", lane.progress.completed],
-    ["live.wip", lane.progress.wip],
+    ["live.released", formatNumber(progress.released, 0)],
+    ["live.completed", formatNumber(progress.completed, 0)],
+    ["live.wip", formatNumber(progress.wip, 0)],
+    [
+      "live.cqt",
+      progress.cqt_completed > 0 ? formatNumber(violationShare(progress), 1) : "–",
+    ],
   ];
   $("live-stats").replaceChildren(
     ...stats.map(([label, value]) => {
       const stat = element("div", "stat");
-      stat.append(element("span", "hint", t(label)), element("strong", "", formatNumber(value, 0)));
+      stat.append(element("span", "hint", t(label)), element("strong", "", value));
       return stat;
     }),
   );

@@ -161,18 +161,18 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 
 ### 4.4 진행·종료
 
-- `Simulation::new(데이터, 설정)`: 데이터셋(`Arc`, 시뮬레이션 간 공유)으로 `Fab`을 만들고 시각 0에서 시작. QTS(규칙 또는 `qts` 기준)이고 FF가 없으면 2 pass: 설정 전체를 먼저 검증(FF 자리는 미측정 값)하고, 1차 pass는 `Config::first_pass`(QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 설정, 빈 기준 목록은 데이터 순위, 8.3).
-- `run_observed(until, 관찰자)`: 현재 pass를 des-core `run_observed(종료 시각, 1 d)`로 진행하고 관측마다 `Progress{pass, passes, now, horizon, released, completed, wip, finished}`를 전달. 종료 시각은 마지막 pass에만 `until`(없으면 무한), 1차 pass는 끝까지 진행해 측정 FF(9.1)로 본 pass를 만든다. `Reached`·`Interrupted`(관찰자 `Break`)는 일시정지, 반환값은 현재 `Progress`. 다시 호출하면 이어서 진행하고, 끝난 실행은 그대로 반환. `run(until)` = 관찰자 없는 `run_observed`.
+- `Simulation::new(데이터, 설정)` = `with_recording(데이터, 설정, 기록 없음)`(9.5): 데이터셋(`Arc`, 시뮬레이션 간 공유)으로 `Fab`을 만들고 시각 0에서 시작. QTS(규칙 또는 `qts` 기준)이고 FF가 없으면 2 pass: 설정·기록 전체를 먼저 검증(FF 자리는 미측정 값)하고, 1차 pass는 `Config::first_pass`(QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 설정, 빈 기준 목록은 데이터 순위, 8.3), 기록 없음. 본 pass를 만들 때 측정 FF를 보관한다(`flow_factors()`).
+- `run_observed(until, 관찰자)`: 현재 pass를 des-core `run_observed(종료 시각, 1 d)`로 진행하고 관측마다 `Progress{pass, passes, now, horizon, released, completed, wip, cqt_completed, cqt_violated, finished}`를 전달(CQT는 pass의 누적). 종료 시각은 마지막 pass에만 `until`(없으면 무한), 1차 pass는 끝까지 진행해 측정 FF(9.1)로 본 pass를 만든다. `Reached`·`Interrupted`(관찰자 `Break`)는 일시정지, 반환값은 현재 `Progress`. 다시 호출하면 이어서 진행하고, 끝난 실행은 그대로 반환. `run(until)` = 관찰자 없는 `run_observed`.
 - 결정성: 일시정지·상태 조회는 사건 처리 순서와 통계를 바꾸지 않는다(상태 조회는 읽기 전용, 툴 상태는 `state_at(now)` 계산, 시간 집계 갱신 없음) → 한 번에 실행한 결과와 같다.
 - 완료: horizon 기간 종료 처리 후(투입 종료) WIP = 0이 되는 사건(마지막 lot 완료, horizon 시점에 이미 0이면 그 기간 종료)에서 Drain 창 보고, 완료 시각 기록, `stop`. 이후 사건은 처리하지 않는다.
 - 기한: 완료 전에 `Deadline` 사건을 처리하면 `stop` 후 미완료 오류(미완 lot 수). 실패를 기록해 이후 `run`도 같은 오류를 돌려준다(상태 조회는 가능).
-- `reset(설정)`: 같은 데이터셋으로 `new`와 같다. 설정 오류면 기존 상태 유지.
+- `reset(설정)`: 같은 데이터셋·기록으로 `with_recording`과 같다. 설정 오류면 기존 상태 유지.
 
 ### 4.5 결과·오류
 
-- `Results`: `periods`(보고 기간 + Drain), `released`·`completed`(투입·완료 lot 수, 정상 종료 시 같음), `end`(완료 시각), `events`(완료까지 처리한 모델 사건 수), `step_flow_factors`(9.1). 부품·TG·영역은 이름으로 기록.
+- `Results`: `seed`·`replication`(공통 난수 짝), `periods`(보고 기간 + Drain), `days`(9.4), `released`·`completed`(투입·완료 lot 수, 정상 종료 시 같음), `end`(완료 시각), `events`(완료까지 처리한 모델 사건 수), `step_flow_factors`(9.1). 부품·TG·영역·route는 이름으로 기록.
 - `Results::digest()`: postcard 인코딩의 FNV-1a 64비트 해시(16진). 같으면 결과가 비트 단위로 같다(네이티브·wasm 대조).
-- `Error`: horizon ≤ 0, 웜업 범위 밖, 부하 계수 ≤ 0·비유한, 부하 계수로 투입 간격 0, lot 유형이 없는 (부품, 우선순위), 목록형 투입이 종료 시각 전에 끝남, 종료 시각을 덮는 보고 기간 없음, 전략 설정 오류(8.8), 종료 + 365 d 미완료, 끝나기 전 `results()`, 시각이 아닌 수(`time`: 유한, |ms| < 2^63, ms 반올림).
+- `Error`: horizon ≤ 0, 웜업 범위 밖, 부하 계수 ≤ 0·비유한, 부하 계수로 투입 간격 0, lot 유형이 없는 (부품, 우선순위), 목록형 투입이 종료 시각 전에 끝남, 종료 시각을 덮는 보고 기간 없음, 전략 설정 오류(8.8), 기록 설정 오류(사건 창 끝 ≤ 시작, 미지 TG), 종료 + 365 d 미완료, 끝나기 전 `results()`, 시각이 아닌 수(`time`: 유한, |ms| < 2^63, ms 반올림).
 
 ### 4.6 상태 조회·바인딩
 
@@ -180,6 +180,7 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 - `lots()`: 살아 있는 lot을 투입 순번(`id`) 순으로. 현재 스텝(이동 중이면 향하는 스텝)의 인덱스·이름·TG, 상태(moving·queued·processing), 공정 중인 툴(툴 job에서 역산), 진행 중인 CQT 구간의 종료 스텝과 기한(진입 시각 + 한도).
 - `tools()`: 툴 순번(TG 순, TG 내 위치 순) 순으로 TG, `state_at(now)`의 상태(6.4의 상태 판정), 현재 setup 이름, job의 lot id.
 - `tool_groups()`: TG 순으로 이름, 영역, 툴 수, 대기 lot 수, 상태별 툴 수.
+- `records()`, `recording()`, `flow_factors()`: 9.5.
 - `Dataset::info()`(`info.rs`): 영역, TG(이름, 영역 index, 툴 수, 배치·LSSU·스테퍼 여부, 데이터 순위 기준), 부품(이름, 패밀리, E 여부, route index), route(스텝 이름·TG index), CQT 구간(route·시작·종료 스텝 index, 한도, litho, 구간 TG = 시작 다음 ~ 종료 스텝의 서로 다른 TG), 보고 기간. 구간 순서 = route 순 → 시작 스텝 순(`Dataset::segments`), 이 위치가 구간 index.
 - JS(`fab-wasm`)·Python(`smt2020-python`)은 위 메서드를 그대로 위임하고 값을 serde 스키마로 변환한다. 입력은 미지 필드를 오류로 읽는다(JS는 JSON 값을 거침: serde-wasm-bindgen의 구조체 역직렬화가 알려진 속성만 읽기 때문). 관찰자: `false`(JS)·`False`(Python)만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 관측마다 다시 잡아 관찰자 호출·신호(Ctrl-C) 확인.
 
@@ -198,8 +199,10 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 | last_done | 직전 수행 스텝 종료 시각(첫 스텝은 투입 시각) |
 | location | 직전 수행 스텝 위치(투입 직후 없음) |
 | dedicated | LTL 전용 (스텝, 툴) |
-| segment | 열린 CQT 구간: 시작·종료 스텝, 시작 시각, 한도, litho 여부 |
+| segment | 열린 CQT 구간: 구간 index, 시작·종료 스텝, 시작 시각, 한도 |
 | reserve, reservation | 예약 lot 여부, 예약을 가진 TG |
+
+- lot 시각표(`LotTimes`, lot과 같은 index의 별도 배열): 현 스텝 도착·작업 시작 시각, 열린 구간의 방문(6.5). lot 배열을 훑는 판정(7.8)의 메모리 접근을 늘리지 않으려고 분리했다(lot 216 → 176 B).
 
 ### 5.2 툴
 
@@ -222,6 +225,7 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 - reservation: super hot 예약(lot, 예약 스텝, 유지 툴).
 - campaign: CoT 잔여 EL 수.
 - batch_due, wake: QT 배치 시작(8.10)에서 디스패칭 중 보류한 배치의 가장 이른 시작 시각, 예약된 가장 이른 `BatchWake` 시각.
+- queue_area, queue_since: 대기 lot 수의 시간 적분(대기열 변화마다, 기록 9.5).
 
 그 외: Stopping 집계 front·upstream(TG별)과 사건 중 변경 TG 기록(8.4), 보류 TG 목록, 투입 진행(스트림 회차, 목록 위치, 부품별 잔여 투입 수), 통계(9장).
 
@@ -310,10 +314,11 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 
 ### 6.5 CQT 구간
 
-- 열림: 시작 스텝(STEP_CQT 보유) 종료 시. segment = (시작, 종료 스텝, 시각, 한도, litho = 시작~종료 스텝에 LithoTrack_FE_95·115 포함).
-- 측정: 종료 스텝 공정 시작 시 대기 = now − 시작 시각, 한도와 비교(9.1).
-- 닫힘: 종료 스텝 종료 시. 그 스텝이 다음 구간 시작이면 닫은 뒤 새로 연다(연쇄).
-- 열린 구간의 lot은 Stopping 집계 대상(8.4), QTCR·QTS 긴급도 계산 대상(8.2, 8.3).
+- 열림: 시작 스텝(STEP_CQT 보유) 종료 시. segment = (구간 index(`Dataset::segments` 순, 7.13), 시작, 종료 스텝, 시각, 한도). litho = 시작~종료 스텝에 LithoTrack_FE_95·115 포함(구간 정의 속성).
+- 방문: 열린 구간 안의 스텝 종료마다 (스텝, 반송 = 도착 − 직전 종료, 대기 = 작업 시작 − 도착, 공정 = 종료 − 작업 시작)을 lot 시각표(5.1)에 쌓는다. 공정은 setup·load·공정·unload와 그 사이 고장 정지를 포함한다.
+- 측정: 종료 스텝 작업 시작(setup·load 전, job 시작) 시 대기 = now − 시작 시각, 한도와 비교(9.1). 종료 스텝의 (반송, 대기, 공정 0)을 더한 방문을 구간·스텝별 위반/충족 합에 더하고 비운다. 방문 합 = 대기(시간이 이어지므로 정확히, ms 정수).
+- 닫힘: 종료 스텝 종료 시. 그 스텝이 다음 구간 시작이면 닫은 뒤 새로 연다(연쇄, 방문 초기화).
+- 열린 구간의 lot은 Stopping 집계 대상(8.4), QT 기준 계산 대상(8.2, 8.3, 8.9).
 
 ### 6.6 super hot 예약
 
@@ -428,7 +433,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 - 기대 스텝시간 e_j(n): load + unload + 공정(per_piece 비cascading n·p̄, per_piece cascading p̄ + (n−1)c, per_lot·per_batch p̄), p̄ = 공정 시간 평균. setup 제외. a + b·n 형태.
 - 잔여 작업 R_k(n) = Σ_{j≥k} 샘플링_j · e_j(n)(반송·리워크 제외), R_{끝} = 0.
 - RPT(n) = Σ_j 샘플링_j·(e_j(n) + E[반송_j]) + Σ_리워크 q_k/(1 − q_k)·Σ_{j=목표..k} 샘플링_j·(e_j(n) + E[반송_j]), q_k = 샘플링_k × 리워크 확률_k. E[반송_j]는 직전 수행 위치 분포(처음 = 없음, 스텝 j 후 확률 샘플링_j로 j 위치)로 계산한 기대 반송 시간.
-- CQT litho 여부, 구간 TG(시작 다음 ~ 종료 스텝의 서로 다른 TG, Stopping 판정), 배치 호환 키·구성원, (TG, setup)별 구성원.
+- CQT litho 여부, 구간 TG(시작 다음 ~ 종료 스텝의 서로 다른 TG, Stopping 판정), 구간 정의 목록(`Dataset::segments` 순: route, 시작, 종료, litho)과 (route, 시작 스텝) → 구간 index, 배치 호환 키·구성원, (TG, setup)별 구성원.
 
 ## 8. 운영 전략
 
@@ -511,7 +516,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 - lot(부품 × 유형): 투입 수(투입 시), 완료 lot의 CT = 완료 − 투입, FF = CT/RPT(wafer 수), ONTIME = 완료 ≤ 납기.
 - WIP: 투입·완료·창 종료마다 직전 WIP × 경과 시간 적분.
 - 툴 상태 시간(6.4), 보고 시 TG별 합.
-- CQT: 구간 완료 수, 위반 수(대기 > 한도), 1·2·4 h 초과 위반 수, 위반 초과분 합, 여유분 합. Litho·Rest 분리.
+- CQT: 구간 정의별 완료 수, 위반 수(대기 > 한도), 1·2·4 h 초과 위반 수, 위반 초과분 합, 여유분 합, 그리고 스텝(시작 다음 ~ 종료)별 위반·충족 완료의 방문 수·반송·대기·공정 합(6.5). Litho·Rest는 보고 시 구간 합(정수 합이라 구간 집계 전과 같은 값). 전체 누적(초기화 없음)도 둔다(진행·일별).
 - 스텝 FF: 스텝 종료마다 (now − last_done)/e_j(n), route·스텝별 평균. horizon에서 확정해 `Results::step_flow_factors`로 출력(측정 없으면 없음).
 
 ### 9.2 보고서(`PeriodReport`)
@@ -522,6 +527,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 - wip: 시간가중 평균 WIP.
 - tool_groups: TG별 상태 시간 합(ms). UTIL = SETUP + LOAD + UNLOAD + PROC, 가용도 = 100 − DOWN − PM, SDT 비중 = PM/(DOWN + PM)(`stnfam.rep` 정의).
 - cqt_litho, cqt_rest: 완료·위반·1·2·4 h 초과 위반 수, 위반 초과분·여유분 합(ms).
+- cqt_segments: 데이터셋의 모든 구간(`Dataset::segments` 순, 완료 없어도 포함) {route 이름, entry, exit, litho, cqt(위와 같은 수), steps[] {step, met·violated: {visits, transport, queue, process}(ms 합)}}.
 
 ### 9.3 측정값·복제 요약(`report`)
 
@@ -535,12 +541,30 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 | tool_group | TG | down·pm·setup·process·load·unload·idle·util·availability `_pct`, sdt_share_pct |
 | area | 영역 | availability_pct, sdt_share_pct, util_pct, util_max_pct |
 | cqt | litho·rest·total | completed, vl_pct, vl1h_pct, vl2h_pct, vl4h_pct, avl_h, aont_h |
+| cqt_segment | `route:entry-exit` | cqt와 같음 |
+| cqt_step | `route:entry-exit:step` | transport·queue·process `_ok_h`(한도 안 완료)·`_vl_h`(위반 완료), 방문당 평균 h(방문 있을 때만) |
 
 - kind 결합: CT 평균 = Σnμ/Σn, 표준편차 = √(Σn(σ² + μ²)/Σn − μ²)(모집단), FF 평균·ONTIME도 완료 수 가중. 분위수는 보고서의 유형별 분위수.
 - 비율: 상태 시간 합 대비. 영역은 영역 TG 상태 시간 합 대비(툴 시간 가중, 가정: [P1] Table III·IV 평균 정의 미기술), util_max = 영역 TG 가동률 최댓값. %VL = 위반/완료, AVL·AONT = 초과분·여유분 합/완료.
 - 기반이 없는 측정(완료 없는 CT·ONTIME, 빈 창의 비율, 완료 없는 CQT 비율)은 생략.
 - `summarize(결과 목록)`: (기간, 범위, 항목, 유형, 측정)별 복제 값의 n, 평균, 표본 표준편차, 95% CI 반폭 t_{0.975,n−1}·s/√n(n ≥ 2). t: n − 1 ≤ 9는 정확값, 그 외 Cornish–Fisher 전개(A&S 26.7.5, 오차 < 3e-5). 순서 = 첫 등장 순.
 - `csv(요약)`: `period,scope,item,kind,measure,n,mean,std,ci95`, 없는 값은 빈 칸.
+- `daily(결과 목록)`: 일별 (fab: started·completed·wip, cqt: completed·vl_pct·avl_h)의 n·평균·표준편차·CI. 날 수는 복제마다 다를 수 있다(Drain 길이), n = 그날이 있는 복제(비율은 CQT 완료가 있는 복제). 평균·표준편차·CI는 `summarize`와 같은 함수.
+
+### 9.4 일별 결과(`Results::days`)
+
+- 날 k = [k·DAY, (k + 1)·DAY), 마지막 날은 실행 끝까지(끝이 자정이면 길이 0, WIP 0). 날 경계 이후 첫 사건 직전과 실행 끝에 닫는다(`Fab::handle`, `finish`).
+- 값: 투입·완료 lot 수, 시간가중 WIP(기간 통계와 별도 적분), 그날 종료 스텝을 시작한 CQT 완료의 수·위반·초과·여유(전체 누적의 차). 기간 통계의 연산 순서는 바뀌지 않는다.
+
+### 9.5 기록(`record.rs`, 선택)
+
+- `Simulation::with_recording(데이터, 설정, Recording)`: `Recording{violations, tool_groups, events: EventFilter{from, until, tool_groups, lots}}`. 아무것도 켜지 않으면 기록기를 만들지 않는다. QTS 1차 pass는 기록하지 않는다. 기록은 사건·난수·통계를 바꾸지 않는다(digest 동일, 테스트).
+- `records()`: 열 단위 표(같은 길이 Vec), 문자열 대신 데이터셋 정보 index.
+  - violations: 위반 구간 완료마다 lot(투입 순번), part, kind, segment, release, entered(시작 스텝 종료), arrived(종료 스텝 도착), exit(종료 스텝 작업 시작).
+  - tool_groups: 날 × TG(날 닫힘 때 모든 툴을 그 시각까지 집계): 시간가중 대기 lot 수(대기열 변화마다 적분), 상태별 툴 시간 합(초기화 없는 툴 누적의 차).
+  - events: 창 [from, until)·TG·lot 필터를 통과한 사건의 시각, 종류(release·arrive·start·end·complete·down·up·pm_start·pm_end), lot, 툴, TG, 스텝(없으면 null). TG 없는 사건(투입·완료)은 TG 필터, lot 없는 사건(고장·PM)은 lot 필터를 통과하지 못한다.
+- `flow_factors()`: 본 실행의 QTS FF(입력 또는 1차 pass 측정). 이를 설정에 넣으면 1 pass로 같은 결과 → 재생(같은 설정·복제를 기록과 함께 다시 실행)이 1차 pass를 생략한다.
+- 규모(DS2 730 d): 위반 17.7만 행, TG 일별 8.1만 행(JSON 19.5 MB), 기록 오버헤드 1–2%.
 
 ## 10. 난수
 
@@ -577,18 +601,18 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 | `des-core` 통합(1) | 단일 서버 FIFO 출발 시각 = Lindley 재귀 d_k = max(a_k, d_{k−1}) + s, 사건 소진 종료 |
 | `asd::table`(4) | UTF-16LE·UTF-8 디코딩, 셀·주석·행 번호, 값·분포·날짜 변환, 달력 유효성 |
 | `data`(3) | 데이터셋 파일 왕복, 바이트 고정(버전 1), 거부(매직·잘림·버전·잔여·손상) |
-| `sim`(9) | 설정 직렬화(기본값·ms 반올림·이름·기준·왕복·미지 필드 오류), 1일 관측·완료 후 정지, 일시정지 중 lot·툴·TG 상태와 재개 결과 = 한 번에 실행한 결과, reset(거부 시 유지·같은 설정 = 같은 결과·다른 seed), QTS 1차 pass·`until`은 본 실행 기준·측정 FF = 준 FF, `qts` 기준만으로도 1차 pass, 웜업 기간, QT 배치 시작(미설정: 10 h 대기 위반, 30 min: 최소 미만 시작·위반 0·여유 합 3 h), 설정 오류(1차 pass 전에 검출) |
+| `sim`(12) | 설정 직렬화(기본값·ms 반올림·이름·기준·왕복·미지 필드 오류), 1일 관측·완료 후 정지, 일시정지 중 lot·툴·TG 상태와 재개 결과 = 한 번에 실행한 결과, reset(거부 시 유지·같은 설정 = 같은 결과·다른 seed), QTS 1차 pass·`until`은 본 실행 기준·측정 FF = 준 FF, `qts` 기준만으로도 1차 pass, 웜업 기간, QT 배치 시작(미설정: 10 h 대기 위반, 30 min: 최소 미만 시작·위반 0·여유 합 3 h), 구간·스텝 분해와 일별(위반 대기 10 h = 확산로 대기, 일별 합 = 실행 합, 일별 WIP, 길이 0인 마지막 날), 기록(결과 불변, 위반 행, TG 일별 툴 시간·대기, lot별 사건 순서, 창·TG·lot 필터와 오류), 설정 오류(1차 pass 전에 검출) |
 | `sim::dispatch`(2) | 기준 11종의 순서(동률 serial, 구간 밖 lot 마지막, QT 여유 임계), QTCR 식 |
 | `sim::strategy`(2) | 데이터 순위 + QT 규칙 삽입, 기준 목록 검증 |
 | `info`(1) | 데이터셋 정보 이름·index |
 | `sim::tool`(3) | cascading 시간(25 wafer·후속 lot), 슬롯2 점유 대기, 상태 집계·일시정지 |
-| `report`(5) | 측정값 결합·비율, Student t 구간, t 분위수, CSV 이름·인용, 이름 = 직렬화 형태 |
+| `report`(6) | 측정값 결합·비율(구간·스텝 측정 포함), Student t 구간, 일별 요약, t 분위수, CSV 이름·인용, 이름 = 직렬화 형태 |
 | `rng`(2) | 스트림 재현·독립, 표본 범위 |
 | CLI `reference`(1) | `.rep` 셀(수·시간) 해석 |
 | 페이지 데이터셋(2) | `www/data/ds1–4.bin`을 현재 빌드로 디코딩, 재인코딩 바이트 동일. DS1 5일차 상태: 한 번에 실행 = 1일 7시간·관찰자 3일·5일로 나눠 실행(진행·lot·툴·TG 동일) |
-| JS API(Node, 8) | `crates/wasm/tests/api.test.mjs`, DS1 10 d: 완료, 일시정지 중 상태 정합성(lot 수 = WIP, 대기 수, 공정 lot ↔ 툴, TG 상태 합 = 툴 수)과 재개 digest, 관찰자 예외 = 일시정지, reset, 데이터셋 정보(106 TG·66 구간, 구간 index 정합, 스테퍼), 기준 목록·QT 배치 시작·웜업 설정, 요약·CSV, 입력 오류(미지 필드·미지 TG·NaN 시각·데이터셋·미지 기준·웜업) |
-| Python API(unittest, 9) | `crates/python/tests`, JS와 같은 항목 + 스레드 병렬 복제(digest) |
-| 느린 검사·실데이터(ignored, 11) | 페이지 데이터셋 DS1–4 60 d × 논문 규칙 7종(BASE·QTCR·QTS·스테퍼 Stopping·EF·CAtE·CoT) digest 고정(리팩터링 회귀 검사), DS1–4 로드 값 검증(order 이름, 비활성 주기형 투입, 데이터셋 파일 왕복 포함), 페이지 데이터셋 = 원천 변환, DS1–4 2년 계획 전량 완료, DS4 180 d: BASE(QTS FF 산출) 후 QTCR + Stopping 스테퍼 5/10 + EF, QTS + CAtE(19.2, 4.8 h), CoT 10 전량 완료, FF 없는 QTS = BASE FF를 준 QTS(digest) |
+| JS API(Node, 9) | `crates/wasm/tests/api.test.mjs`, DS1 10 d: 완료, 일시정지 중 상태 정합성(lot 수 = WIP, 대기 수, 공정 lot ↔ 툴, TG 상태 합 = 툴 수)과 재개 digest, 관찰자 예외 = 일시정지, reset, 데이터셋 정보(106 TG·66 구간, 구간 index 정합, 스테퍼), 기준 목록·QT 배치 시작·웜업 설정, 기록(digest 불변, 위반 행 = 위반 수 = 진행 누적, 열 길이 일치, TG 일별 행 수, 사건 창·TG 필터, 일별 투입 합, 구간 수, FF 없음, 일별 요약), 요약·CSV, 입력 오류(미지 필드·미지 TG·NaN 시각·데이터셋·미지 기준·웜업·기록 필드·사건 창) |
+| Python API(unittest, 10) | `crates/python/tests`, JS와 같은 항목 + 스레드 병렬 복제(digest) |
+| 느린 검사·실데이터(ignored, 12) | 페이지 데이터셋 DS1–4 60 d × 논문 규칙 7종(BASE·QTCR·QTS·스테퍼 Stopping·EF·CAtE·CoT) digest 고정(리팩터링 회귀 검사), DS2 60 d 기록(digest 불변, 위반 행 = 위반 수 = 일별 합, 위반 대기 합 = 스텝 분해 합, 하루 툴 시간 = 툴 수 × 1 d, 사건 창), DS1–4 로드 값 검증(order 이름, 비활성 주기형 투입, 데이터셋 파일 왕복 포함), 페이지 데이터셋 = 원천 변환, DS1–4 2년 계획 전량 완료, DS4 180 d: BASE(QTS FF 산출) 후 QTCR + Stopping 스테퍼 5/10 + EF, QTS + CAtE(19.2, 4.8 h), CoT 10 전량 완료, FF 없는 QTS = BASE FF를 준 QTS(digest) |
 
 ```bash
 cargo test
@@ -599,7 +623,8 @@ python -m unittest discover -s crates/python/tests
 
 ## 13. 성능
 
-- 1,460 d(Drain 포함), 단일 스레드 1회: 네이티브 DS1–4 25.4·23.5·29.7·33.0 s(2.3–2.8 M 사건/s, 최대 힙 7.9–34.4 MB), wasm(Chromium) 30.6·30.5·37.8·43.0 s(네이티브의 1.20–1.30배, 선형 메모리 8–26 MB). 결과 digest는 네이티브·wasm·Python 동일. 측정 조건·표는 README "성능 측정".
+- 1,460 d(Drain 포함), 단일 스레드 1회: 네이티브 DS1–4 25.5·23.8·30.2·33.1 s(2.3–2.8 M 사건/s, 최대 힙 9.9–37.3 MB), wasm(Chromium) 31.3·28.4·36.6·39.6 s(네이티브의 1.19–1.23배, 선형 메모리 10–27 MB). 결과 digest는 네이티브·wasm·Python 동일. 측정 조건·표는 README "성능 측정".
+- 확장의 비용: 순위 키 계산은 선택 루프에 인라인(7.5). 사건 기록 항목은 기록할 때만 만든다(꺼지면 사건당 확인 1회). lot 시각표는 lot 밖(5.1). 구간·스텝 분해·일별 결과·기록 지점 합계 DS2 730 d 약 2%, 기록 켬 추가 1–2%.
 - 비용 구조: 디스패칭(대기열 항목 순회·순위 키)과 미래 사건 목록 꺼내기가 대부분. 대기열 항목(5.3)과 선택당 공통 입력 1회 계산(7.4)으로 lot·route 자료의 무작위 접근을 없앴다.
 - 사건 구동 종료(4.4)는 완료일의 남은 사건을 처리하지 않아 사건 수가 이전보다 약간 적다(결과는 동일).
 - Stopping 재평가(8.4)를 제약 lot 이동마다에서 임계 해제 사건으로 바꿔 보류 lot이 많은 실행의 반복 평가를 없앴다(DS4 180 d, 스테퍼 5/10: 77.8 → 6.3 s). 판정은 같고, 한 사건에서 여러 보류 TG가 해제될 때의 디스패칭 순서만 달라 난수 배정 순서가 바뀐다(통계 동일 수준).

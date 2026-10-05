@@ -7,6 +7,7 @@ import {
   Dataset,
   Simulation,
   csv,
+  daily,
   digest,
   initSync,
   summarize,
@@ -124,6 +125,43 @@ test("rankings, batch starts and a warm-up configure a run", () => {
   assert.deepEqual(periods, ["WarmUp", "Period_1", "Drain"]);
 });
 
+test("recording leaves the results unchanged and accounts for them", () => {
+  const info = dataset.info();
+  const recording = {
+    violations: true,
+    tool_groups: true,
+    events: { from: DAY, until: 2 * DAY, tool_groups: [info.tool_groups[0].name] },
+  };
+  const simulation = new Simulation(dataset, config, recording);
+  assert.deepEqual(simulation.recording(), { ...recording, events: { ...recording.events, lots: [] } });
+  const progress = simulation.run();
+  const recorded = simulation.results();
+  assert.equal(digest(recorded), digest(results));
+  const violated = recorded.periods.reduce(
+    (sum, period) => sum + period.cqt_litho.violated + period.cqt_rest.violated,
+    0,
+  );
+  assert.equal(progress.cqt_violated, violated);
+  const { violations, tool_groups: days, events } = simulation.records();
+  assert.equal(violations.lot.length, violated);
+  for (const table of [violations, days, events]) {
+    const lengths = new Set(Object.values(table).map((column) => column.length));
+    assert.equal(lengths.size, 1);
+  }
+  assert.equal(days.day.length, recorded.days.length * info.tool_groups.length);
+  assert.ok(events.time.every((time) => time >= DAY && time < 2 * DAY));
+  assert.ok(events.tool_group.every((group) => group === 0));
+  assert.equal(
+    recorded.days.reduce((sum, day) => sum + day.started, 0),
+    recorded.released,
+  );
+  assert.equal(recorded.periods[0].cqt_segments.length, info.segments.length);
+  assert.equal(simulation.flowFactors(), null);
+  const byDay = daily([recorded, results]);
+  const wip = byDay.find((row) => row.day === 1 && row.scope === "fab" && row.measure === "wip");
+  assert.deepEqual([wip.n, wip.std], [2, 0]);
+});
+
 test("summaries and CSV", () => {
   const summaries = summarize([results, results]);
   const completed = summaries.find(
@@ -146,4 +184,7 @@ test("bad input is rejected", () => {
   assert.throws(() => ranking(["fifoo"]), /unknown variant/);
   assert.throws(() => ranking(["fifo"]), /no tool group Nope/);
   assert.throws(() => new Simulation(dataset, { horizon: DAY, warm_up: DAY }), /warm-up/);
+  assert.throws(() => new Simulation(dataset, config, { violation: true }), /unknown field/);
+  const window = { events: { from: DAY, until: DAY } };
+  assert.throws(() => new Simulation(dataset, config, window), /must end after it starts/);
 });
