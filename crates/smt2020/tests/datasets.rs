@@ -1,8 +1,10 @@
 //! Loads and runs the four SMT2020 AutoSched datasets from `data/raw` (the extracted
 //! `SMT_2020 - Final` folder, not committed): `cargo test -p smt2020 --release -- --ignored`.
-//! Expected values were read off the raw files.
+//! Expected values were read off the raw files. The web page's dataset files (`www/data`) are
+//! checked without the raw data.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::PathBuf;
 
 use smt2020::asd::{self, Order};
@@ -354,6 +356,50 @@ fn dataset_4_lvhm_e() {
             step: None,
         }
     );
+}
+
+/// The web page's file of dataset `n` (`www/data/ds{n}.bin`).
+fn page_dataset(n: usize) -> Vec<u8> {
+    let path: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "../../www/data",
+        &format!("ds{n}.bin"),
+    ]
+    .iter()
+    .collect();
+    fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The page's dataset files decode with this build and encode back to the same bytes.
+#[test]
+fn page_datasets_decode() {
+    for n in 1..=4 {
+        let bytes = page_dataset(n);
+        let dataset =
+            Dataset::from_bytes(&bytes).unwrap_or_else(|error| panic!("ds{n}.bin: {error}"));
+        assert!(
+            dataset.to_bytes() == bytes,
+            "ds{n}.bin re-encodes differently"
+        );
+    }
+}
+
+/// The page's dataset files are the conversions of the raw models.
+#[test]
+#[ignore = "needs the SMT2020 data in data/raw"]
+fn page_datasets_match_raw() {
+    let models = [
+        ("dataset 1", "HVLM_Model"),
+        ("dataset 2", "LVHM_Model"),
+        ("dataset 3", "HVLM_E_Model"),
+        ("dataset 4", "LVHM_E_Model"),
+    ];
+    for (n, (dataset, model)) in (1..).zip(models) {
+        assert!(
+            load(dataset, model).to_bytes() == page_dataset(n),
+            "ds{n}.bin is not the conversion of {dataset}: run smt2020 convert again"
+        );
+    }
 }
 
 /// Runs `config`; every lot of the plan must complete.

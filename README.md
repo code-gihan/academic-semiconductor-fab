@@ -10,11 +10,11 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 
 ### 웹 페이지
 
-1. 데이터셋, 종료 시각(일), 복제 수, seed, 부하 계수, 운영 전략(CQT 디스패칭, [P2] Table 3 Stopping, [P1] 엔지니어링 lot 전략, super hot 예약)을 고르고 실행한다.
-2. 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 진행률은 워커 메시지(1일 단위 관측)로 갱신하고, 취소는 워커를 종료한다.
-3. 결과: 보고 기간별 lot 유형·제품 지표, FF 분위수, CQT 위반, 영역·툴그룹 상태 비율(복제 평균 ± 95% 신뢰구간), 복제별 digest. JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
+영어 기본, 한국어 전환(선택은 브라우저에 저장). 항목마다 설명을 표시한다.
 
-배포본에는 데이터셋 파일(`data/ds1–4.bin`)이 없다([참고 문헌·데이터](#참고-문헌데이터)). 원천 데이터로 `smt2020 convert`가 만든 `.bin`을 '로컬 파일'로 선택한다.
+1. 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`), 운영 전략(CQT 디스패칭, [P2] Table 3 Stopping, [P1] 엔지니어링 lot 전략, super hot 예약), 실행 설정(종료 시각(일), 복제 수, seed, 부하 계수)을 고르고 실행한다.
+2. 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 진행(1일 관측 사건마다): 완료 복제, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 경과·남은 시간(진행률 비례 추정). 실행 중 설정 잠금, 취소는 워커 종료.
+3. 결과: 실행 설정, 보고 기간별 핵심 지표(투입·완료 lot, 평균 WIP, PRL ACT·ONTIME, ERL ACT, CQT %VL)와 표 6종(lot 유형, FF 분위수, 제품 × 유형, CQT 구간, 영역, 툴그룹. 복제 평균 ± 95% 신뢰구간), 복제별 digest·성능. JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
 
 ### JavaScript
 
@@ -36,6 +36,7 @@ const fingerprint = digest(results); // 같으면 결과가 비트 단위로 같
 ```
 
 - 복제는 `replication`만 다르게 워커마다 실행하고 결과 배열을 `summarize`·`csv`에 넘긴다(`www/main.js`·`www/worker.js`).
+- 데이터셋 파일: 배포 페이지의 `data/ds1.bin`–`ds4.bin`(다른 출처에서도 fetch 가능, 예: `https://code-gihan.github.io/academic-semiconductor-fab/data/ds2.bin`) 또는 `smt2020 convert` 출력.
 - Node.js: `initSync({ module: readFileSync("www/pkg/fab_wasm_bg.wasm") })` 후 같은 API.
 
 ### CLI
@@ -60,7 +61,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 - [P1] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, "SMT2020—A Semiconductor Manufacturing Testbed," *IEEE Trans. Semicond. Manuf.*, 33(4), 522–531, 2020. doi:10.1109/TSM.2020.3001933
 - [P2] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, "Integrating Critical Queue Time Constraints into SMT2020 Simulation Models," *Proc. WSC 2020*, 1813–1824. doi:10.1109/WSC48552.2020.9383889
 - 데이터: SMT2020 Testbed Release 1.0(2020-03), https://p2schedgen.fernuni-hagen.de/downloads/simulation (논문의 `index.php?id=simulation` 주소는 이전됨) — `AutoSched/`(AutoSched AP 모델·실행 결과), `General Data/`(xlsx 일반 형식·명세). 출처 [P1] 표기.
-- 재배포: 배포 페이지에 이용 조건 문구가 없어 미확인. 변환 데이터(`www/data/*.bin`)는 커밋·배포하지 않는다(`.gitignore`). 조건 확인 후 `.gitignore`에서 `/www/data`를 빼고 커밋하면 페이지가 기본 데이터셋으로 실행된다.
+- 재배포: 배포처에 이용 조건 문구 없음. 변환 데이터셋 파일(`www/data/ds1–4.bin`)을 출처([P1], 배포처) 표기와 함께 커밋·배포한다.
 
 ## 데이터셋
 
@@ -346,7 +347,7 @@ crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, �
 crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더·데이터셋 파일, 시뮬레이션 모델, 전략, 통계, 측정값·복제 요약. wasm 의존 없음
 crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert, run, validate
 crates/wasm/      wasm-bindgen cdylib(패키지 fab-wasm): Dataset, run, summarize, csv, digest
-www/              index.html, style.css, main.js(UI·워커 풀), worker.js(복제 실행), data/(데이터셋 파일, 커밋 제외), pkg/(빌드 산출)
+www/              index.html, style.css, main.js(폼·워커 풀·진행), results.js(결과 표시), i18n.js(문구·숫자 형식), locales/(en·ko 문구), worker.js(복제 실행), data/(DS1–4 데이터셋 파일), pkg/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
@@ -367,6 +368,7 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터셋 파일: postcard + 매직·형식 버전. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
 - 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 진행률은 워커 `postMessage`, 취소는 `worker.terminate()`. 경계 입출력은 serde-wasm-bindgen(JSON 호환 객체), `i64`는 경계에서 f64(2^53 ms까지 정확).
+- 다국어: 언어별 문구 파일(`www/locales/*.js`, `en.js`와 같은 키, `{이름}` 자리 표시, 빠진 키는 영어). 정적 요소는 `data-i18n` 키, 동적 문구는 `t()`, 숫자는 `Intl.NumberFormat`. 상태 문구·결과는 언어 전환 시 다시 그린다. 언어 추가 = 문구 파일 + `www/i18n.js`의 `LANGUAGES`·`MESSAGES` 등록.
 - 빌드: release 프로필 `lto = true`, `codegen-units = 1`, `panic = "abort"`(네이티브 약 7% 단축, 결과 동일).
 - 의존성: rand_xoshiro·libm·serde·postcard(`smt2020`), clap·serde_json(`smt2020-cli`), wasm-bindgen·js-sys·serde-wasm-bindgen(`fab-wasm`).
 
@@ -385,8 +387,9 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 
 ```bash
 cargo test
-cargo test -p smt2020 --release -- --ignored   # 실데이터 로드·데이터셋 파일 왕복, 4개 데이터셋 2년 계획 완료, 전략 완료(data/raw 필요)
+cargo test -p smt2020 --release -- --ignored   # 실데이터 로드·데이터셋 파일 왕복, 동봉 데이터셋 파일 = 원천 변환, 4개 데이터셋 2년 계획 완료, 전략 완료(data/raw 필요)
 cargo build --release -p smt2020-cli
+# 데이터셋 파일(커밋 대상) 재생성: 로더·형식 변경 시
 for n in 1 2 3 4; do target/release/smt2020 convert "$(ls -d "data/raw/AutoSched/dataset $n"/*/*.asd)" www/data/ds$n.bin; done
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129   # crates/wasm/Cargo.toml의 wasm-bindgen 버전과 같아야 함
@@ -399,4 +402,4 @@ python -m http.server -d www
 
 ## 배포
 
-`main`에 push하면 `.github/workflows/pages.yml`이 테스트·빌드 후 `www/`를 GitHub Pages로 배포한다. `www/data`는 커밋 제외라 배포본은 '로컬 파일'로 데이터셋을 받는다([참고 문헌·데이터](#참고-문헌데이터)).
+`main`에 push하면 `.github/workflows/pages.yml`이 테스트(동봉 데이터셋 파일을 현재 빌드로 디코딩 포함)·빌드 후 `www/`(데이터셋 파일 포함)를 GitHub Pages로 배포한다.

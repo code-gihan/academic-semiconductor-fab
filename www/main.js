@@ -1,18 +1,20 @@
-// SMT2020 simulator page: replications run in Web Workers, one replication per worker and at most
-// navigator.hardwareConcurrency at once; the wasm module then summarizes them. Everything reacts
-// to events (form input, worker messages); nothing polls.
+// SMT2020 simulator page: the form describes a run, Web Workers run its replications (one per
+// worker, at most navigator.hardwareConcurrency at once) and the wasm module summarizes them.
+// Everything reacts to events (input, worker messages); nothing polls.
 import init, { csv, summarize } from "./pkg/fab_wasm.js";
+import {
+  LANGUAGES,
+  formatDuration,
+  formatNumber,
+  initLanguage,
+  language,
+  setLanguage,
+  t,
+} from "./i18n.js";
+import { defaultPeriod, showResults } from "./results.js";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
-
-/** Dataset files served next to the page (`smt2020 convert` output). */
-const DATASETS = {
-  ds1: { label: "DS1 HV/LM", file: "data/ds1.bin" },
-  ds2: { label: "DS2 LV/HM", file: "data/ds2.bin" },
-  ds3: { label: "DS3 HV/LM + 엔지니어링", file: "data/ds3.bin" },
-  ds4: { label: "DS4 LV/HM + 엔지니어링", file: "data/ds4.bin" },
-};
 
 /** [P2] Table 3: stepper limits (front/total); other tool groups 1,000/1,000. */
 const STOPPING = {
@@ -21,93 +23,53 @@ const STOPPING = {
   small: { LithoTrack_FE_95: [50, 85], LithoTrack_FE_115: [55, 125] },
 };
 
-/** [P1] §V: CAtE (production, engineering) interval hours per dataset, CoT trigger limits. */
+/** [P1] §V: CAtE (production, engineering) window hours per dataset, CoT trigger limits. */
 const CATE = {
   ds3: [[151.2, 16.8], [75.6, 8.4], [21.6, 2.4]],
   ds4: [[134.6, 33.4], [67.2, 16.8], [19.2, 4.8]],
 };
 const COT = [100, 50, 25, 10];
 
-const KINDS = ["PRL", "PHL", "SHL", "ERL", "EHL"];
-const LOT_COLUMNS = [
-  ["completed", "완료 lot", 0],
-  ["ct_mean_d", "ACT (d)", 2],
-  ["ct_std_d", "CT 표준편차 (d)", 2],
-  ["on_time_pct", "ONTIME (%)", 1],
-  ["ff_mean", "FF 평균", 3],
-];
-const TABLES = [
-  { title: "lot 유형", scope: "kind", columns: LOT_COLUMNS },
-  {
-    title: "흐름 계수(FF) 분위수",
-    scope: "kind",
-    columns: ["ff_p0", "ff_p5", "ff_p25", "ff_p50", "ff_p75", "ff_p95", "ff_p100"].map((measure) => [
-      measure,
-      `${measure.slice(4)}%`,
-      3,
-    ]),
-  },
-  { title: "제품 × lot 유형", scope: "lot", columns: LOT_COLUMNS },
-  {
-    title: "CQT 구간",
-    scope: "cqt",
-    columns: [
-      ["completed", "완료", 0],
-      ["vl_pct", "%VL", 2],
-      ["vl1h_pct", "%VL1h", 2],
-      ["vl2h_pct", "%VL2h", 2],
-      ["vl4h_pct", "%VL4h", 2],
-      ["avl_h", "AVL (h)", 3],
-      ["aont_h", "AONT (h)", 3],
-    ],
-  },
-  {
-    title: "영역",
-    scope: "area",
-    columns: [
-      ["availability_pct", "가용도 (%)", 2],
-      ["sdt_share_pct", "SDT 비중 (%)", 1],
-      ["util_pct", "가동률 (%)", 2],
-      ["util_max_pct", "최대 TG 가동률 (%)", 2],
-    ],
-  },
-  {
-    title: "툴그룹 (가동률 순)",
-    scope: "tool_group",
-    sortBy: "util_pct",
-    columns: [
-      ["util_pct", "가동률", 2],
-      ["availability_pct", "가용도", 2],
-      ["down_pct", "DOWN", 2],
-      ["pm_pct", "PM", 2],
-      ["setup_pct", "SETUP", 2],
-      ["process_pct", "PROC", 2],
-      ["load_pct", "LOAD", 2],
-      ["unload_pct", "UNLOAD", 2],
-      ["idle_pct", "IDLE", 2],
-    ],
-  },
-];
+/** A failure shown to the user: a text key and its values. */
+class Failure extends Error {
+  constructor(key, params) {
+    super(key);
+    this.key = key;
+    this.params = params;
+  }
+}
 
 const $ = (id) => document.getElementById(id);
 const form = $("setup");
 const fields = form.elements;
-const status = $("status");
-const bar = $("progress");
+const threads = navigator.hardwareConcurrency || 4;
 let active = null;
 let finished = null;
+let statusText = () => "";
 
-fillEngineering();
-fields.dataset.addEventListener("change", () => {
-  $("file-field").hidden = fields.dataset.value !== "file";
-  fillEngineering();
+initLanguage();
+const languages = Object.entries(LANGUAGES);
+$("language").replaceChildren(
+  ...languages.map(([code, name]) => new Option(name, code, false, code === language())),
+);
+describeForm();
+setStatus(() => t("status.loadingWasm"));
+
+$("language").addEventListener("change", (event) => {
+  setLanguage(event.target.value);
+  describeForm();
+  setStatus(statusText);
+  if (finished) showResults(finished, $("period").value);
+});
+form.addEventListener("change", (event) => {
+  if (event.target.name === "dataset") selectDataset();
 });
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  start().catch((error) => stop(`오류: ${error.message}`));
+  start();
 });
-$("cancel").addEventListener("click", () => stop("취소했습니다."));
-$("period").addEventListener("change", () => render(finished, $("period").value));
+$("cancel").addEventListener("click", () => stop(() => t("status.cancelled")));
+$("period").addEventListener("change", () => showResults(finished, $("period").value));
 $("download-json").addEventListener("click", downloadJson);
 $("download-csv").addEventListener("click", () =>
   download(`${finished.name}.csv`, csv(finished.summary), "text/csv"),
@@ -116,34 +78,55 @@ $("download-csv").addEventListener("click", () =>
 try {
   await init();
   fields.run.disabled = false;
+  setStatus(() => "");
 } catch (error) {
-  status.textContent = `wasm 모듈을 불러오지 못했습니다: ${error.message}`;
+  setStatus(() => t("status.wasmFailed", { message: error.message }));
 }
 
-/** Engineering presets of the chosen dataset: none without engineering lots (DS1, DS2), the
- * dataset's CAtE settings for DS3 and DS4, both sets for a local file. */
+/** Form texts that depend on the language and the device: engineering choices, threads. */
+function describeForm() {
+  selectDataset();
+  $("replications-hint").textContent = t("settings.replications.hint", { threads });
+}
+
+/** Fields of the chosen dataset (also one the browser restored): its file input, if a file, and
+ * its engineering strategies. */
+function selectDataset() {
+  $("file-field").hidden = fields.dataset.value !== "file";
+  fillEngineering();
+}
+
+/** Engineering strategies of the chosen dataset, keeping the chosen one if it remains. */
 function fillEngineering() {
-  const options = [["base", "BASE"]];
-  const dataset = fields.dataset.value;
-  if (dataset === "ds1" || dataset === "ds2") {
-    fields.engineering.replaceChildren(new Option("BASE (엔지니어링 lot 없음)", "base"));
-    return;
-  }
-  options.push(["engineering_first", "EF (엔지니어링 우선)"]);
+  const select = fields.engineering;
+  const chosen = select.value;
+  const choices = engineeringChoices(fields.dataset.value);
+  select.replaceChildren(...choices.map(([value, label]) => new Option(label, value)));
+  select.value = choices.some(([value]) => value === chosen) ? chosen : "base";
+  select.disabled = choices.length === 1;
+}
+
+/** [value, label] of the engineering strategies of `dataset`: none without engineering lots (DS1,
+ * DS2), the dataset's CAtE windows for DS3 and DS4, both sets for a dataset file. */
+function engineeringChoices(dataset) {
+  if (dataset === "ds1" || dataset === "ds2") return [["base", t("strategy.engineering.none")]];
+  const choices = [
+    ["base", t("strategy.engineering.base")],
+    ["engineering_first", t("strategy.engineering.ef")],
+  ];
   const sets = CATE[dataset] ? [dataset] : Object.keys(CATE);
+  const label = sets.length > 1 ? "strategy.engineering.cateSet" : "strategy.engineering.cate";
   for (const set of sets) {
     for (const [production, engineering] of CATE[set]) {
       const cycle = Math.round(production + engineering);
-      const label = `CAtE ${cycle} h (${production}/${engineering})${sets.length > 1 ? ` ${set.toUpperCase()}` : ""}`;
-      options.push([`cate:${production}:${engineering}`, label]);
+      const params = { cycle, production, engineering, dataset: set.toUpperCase() };
+      choices.push([`cate:${production}:${engineering}`, t(label, params)]);
     }
   }
   for (const trigger of COT) {
-    options.push([`cot:${trigger}`, `CoT ${trigger}`]);
+    choices.push([`cot:${trigger}`, t("strategy.engineering.cot", { trigger })]);
   }
-  fields.engineering.replaceChildren(
-    ...options.map(([value, label]) => new Option(label, value)),
-  );
+  return choices;
 }
 
 /** The run configuration of the form, in the schema of every interface (times in ms). */
@@ -173,36 +156,60 @@ function config() {
   };
 }
 
-/** Bytes and name of the chosen dataset: a served file or a local one. */
-async function dataset() {
-  if (fields.dataset.value === "file") {
-    const file = fields.file.files[0];
-    if (!file) throw new Error("데이터셋 파일을 선택하세요.");
-    return { name: file.name.replace(/\.bin$/, ""), bytes: await file.arrayBuffer() };
-  }
-  const { file } = DATASETS[fields.dataset.value];
-  const response = await fetch(file);
-  if (!response.ok) {
-    throw new Error(
-      `${file}이(가) 없습니다(${response.status}). smt2020 convert로 만든 파일을 '로컬 파일'로 선택하세요.`,
-    );
-  }
-  return { name: fields.dataset.value, bytes: await response.arrayBuffer() };
+/** The form's choices as [label key, text] pairs; texts follow the language. */
+function setupOf(dataset, name) {
+  const rule = fields.queueTime.value;
+  const preset = fields.stopping.value;
+  const choice = fields.engineering.value;
+  const reserve = fields.reserveSuperHot.checked;
+  const entered = (field) => {
+    const text = fields[field].value;
+    return () => text;
+  };
+  return [
+    ["dataset.heading", () => datasetName(dataset, name)],
+    ["strategy.queueTime.label", () => t(`strategy.queueTime.${rule}`)],
+    ["strategy.stopping.label", () => t(`strategy.stopping.${preset}`)],
+    [
+      "strategy.engineering.label",
+      () => engineeringChoices(dataset).find(([value]) => value === choice)[1],
+    ],
+    ["strategy.superHot.short", () => t(reserve ? "common.on" : "common.off")],
+    ["settings.horizon.label", entered("horizon")],
+    ["settings.replications.label", entered("replications")],
+    ["settings.seed.label", entered("seed")],
+    ["settings.load.label", entered("load")],
+  ];
+}
+
+function datasetName(dataset, name) {
+  return dataset === "file" ? name : t(`dataset.${dataset}.name`);
+}
+
+/** Bytes of the chosen dataset: a file served next to the page or a local one. */
+async function datasetBytes(dataset, file) {
+  if (dataset === "file") return file.arrayBuffer();
+  const path = `data/${dataset}.bin`;
+  const response = await fetch(path);
+  if (!response.ok) throw new Failure("error.fetch", { file: path, status: response.status });
+  return response.arrayBuffer();
 }
 
 async function start() {
-  stop();
-  $("results").hidden = true;
-  const base = config();
+  const dataset = fields.dataset.value;
+  const file = fields.file.files[0];
+  if (dataset === "file" && !file) {
+    setStatus(() => t("error.noFile"));
+    return;
+  }
+  const name = dataset === "file" ? file.name.replace(/\.bin$/i, "") : dataset;
   const count = Number(fields.replications.value);
-  status.textContent = "데이터셋을 불러오는 중…";
-  setRunning(true);
-  const { name, bytes } = await dataset();
-  const threads = Math.min(count, navigator.hardwareConcurrency || 4);
+  const base = config();
   const run = {
     name,
     count,
-    threads,
+    threads: Math.min(count, threads),
+    setup: setupOf(dataset, name),
     next: 0,
     done: [],
     workers: [],
@@ -212,15 +219,32 @@ async function start() {
     frame: 0,
   };
   active = run;
-  for (let index = 0; index < threads; index++) {
-    const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
-    worker.onmessage = ({ data: message }) => receive(run, worker, base, message);
-    worker.onerror = (event) => stop(`오류: ${event.message ?? "워커를 시작하지 못했습니다."}`);
-    const copy = bytes.slice(0);
-    worker.postMessage({ type: "load", bytes: copy }, [copy]);
-    run.workers.push(worker);
+  $("results").hidden = true;
+  setRunning(true);
+  setStatus(() => t("status.loadingDataset", { dataset: datasetName(dataset, name) }));
+  try {
+    const bytes = await datasetBytes(dataset, file);
+    if (run !== active) return;
+    for (let index = 0; index < run.threads; index++) {
+      const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
+      worker.onmessage = ({ data: message }) => receive(run, worker, base, message);
+      worker.onerror = (event) => {
+        if (run !== active) return;
+        stop(() => t("error.worker", { message: event.message || event.type }));
+      };
+      const copy = bytes.slice(0);
+      worker.postMessage({ type: "load", bytes: copy }, [copy]);
+      run.workers.push(worker);
+    }
+    setStatus(() => t("status.starting"));
+  } catch (error) {
+    if (run !== active) return;
+    stop(() =>
+      error instanceof Failure
+        ? t(error.key, error.params)
+        : t("status.error", { message: error.message }),
+    );
   }
-  status.textContent = `${DATASETS[name]?.label ?? name}: 복제 ${count}회, 워커 ${threads}개 시작`;
 }
 
 function receive(run, worker, base, message) {
@@ -239,14 +263,11 @@ function receive(run, worker, base, message) {
     case "done":
       run.fractions.delete(message.config.replication);
       run.done.push(message);
-      if (run.done.length === run.count) {
-        finish(run);
-      } else {
-        assign(run, worker, base);
-      }
+      assign(run, worker, base);
+      if (run.done.length === run.count) finish(run);
       break;
     case "error":
-      stop(`오류: ${message.message}`);
+      stop(() => t("status.error", { message: message.message }));
       break;
   }
 }
@@ -260,121 +281,83 @@ function assign(run, worker, base) {
   }
 }
 
-/** Progress bar and the latest observation, at most once per frame. */
+/** Share of the run's work done: finished replications and the running ones' progress. */
+function fraction(run) {
+  const running = [...run.fractions.values()].reduce((sum, value) => sum + value, 0);
+  return (run.done.length + running) / run.count;
+}
+
+/** Progress bar and text, at most once per frame. */
 function showProgress(run) {
   run.frame = 0;
   if (run !== active) return;
+  $("progress").value = fraction(run);
+  setStatus(() => progressText(run));
+}
+
+function progressText(run) {
+  const parts = [t("progress.done", { done: run.done.length, count: run.count })];
   const last = run.latest;
-  const running = [...run.fractions.values()].reduce((sum, fraction) => sum + fraction, 0);
-  bar.value = (run.done.length + running) / run.count;
-  const day = Math.floor(last.now / DAY);
-  const phase =
-    last.now > last.horizon ? `Drain(잔여 WIP ${last.wip} lot)` : `${day}/${last.horizon / DAY}일`;
-  const pass = last.passes > 1 ? ` · QTS ${last.pass === 0 ? "FF 사전 실행" : "본 실행"}` : "";
-  status.textContent = `복제 ${run.done.length}/${run.count} 완료 · 실행 중 ${run.fractions.size}개 · ${phase}${pass}`;
+  if (last) {
+    parts.push(
+      last.now > last.horizon
+        ? t("progress.drain", { wip: formatNumber(last.wip, 0) })
+        : t("progress.day", {
+            day: formatNumber(Math.floor(last.now / DAY), 0),
+            days: formatNumber(last.horizon / DAY, 0),
+          }),
+    );
+    if (last.passes > 1) parts.push(t(last.pass === 0 ? "progress.preRun" : "progress.mainRun"));
+  }
+  const elapsed = (performance.now() - run.started) / 1000;
+  parts.push(t("progress.elapsed", { time: formatDuration(elapsed) }));
+  const done = fraction(run);
+  // Estimated from the pace so far, once there is some, until the horizon (the drain is not).
+  if (done >= 0.02 && done < 1) {
+    parts.push(t("progress.remaining", { time: formatDuration((elapsed * (1 - done)) / done) }));
+  }
+  return parts.join(" · ");
 }
 
 function finish(run) {
   const seconds = (performance.now() - run.started) / 1000;
-  run.done.sort((a, b) => a.config.replication - b.config.replication);
-  const summary = summarize(run.done.map((replication) => replication.results));
-  const events = run.done.reduce((sum, replication) => sum + replication.results.events, 0);
-  const busy = run.done.reduce((sum, replication) => sum + replication.seconds, 0);
-  const memory = Math.max(...run.done.map((replication) => replication.memoryBytes));
   active = null;
   setRunning(false);
-  bar.value = 1;
-  status.textContent = "완료";
-  finished = { ...run, summary };
-  $("performance").textContent =
-    `복제 ${run.count}회 · 워커 ${run.threads}개 · 전체 ${seconds.toFixed(1)} s · ` +
-    `복제당 ${(busy / run.count).toFixed(1)} s · ${(events / busy / 1e6).toFixed(2)} M 사건/s · ` +
-    `wasm 메모리 최대 ${(memory / 1e6).toFixed(0)} MB`;
-  $("digests").replaceChildren(
-    ...run.done.map((replication) => {
-      const item = document.createElement("li");
-      item.textContent = `복제 ${replication.config.replication}: ${replication.digest} (${replication.seconds.toFixed(1)} s)`;
-      return item;
-    }),
-  );
-  const periods = run.done[0].results.periods.map((period) => period.name);
-  const period = periods.at(-2) ?? periods[0];
-  $("period").replaceChildren(...periods.map((name) => new Option(name, name, false, name === period)));
-  render(finished, period);
+  setStatus(() => t("status.done", { time: formatDuration(seconds) }));
+  run.done.sort((a, b) => a.config.replication - b.config.replication);
+  const summary = summarize(run.done.map((replication) => replication.results));
+  finished = { ...run, seconds, summary };
+  showResults(finished, defaultPeriod(finished));
   $("results").hidden = false;
+  $("results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-/** Ends the active run, if any: terminates its workers. */
-function stop(message) {
+/** Ends the active run, if any, by terminating its workers, and shows `render()` and the results
+ * of the last finished run. */
+function stop(render) {
   if (active) {
     for (const worker of active.workers) worker.terminate();
     cancelAnimationFrame(active.frame);
     active = null;
   }
   setRunning(false);
-  if (message) status.textContent = message;
+  setStatus(render);
+  $("results").hidden = !finished;
 }
 
+/** While running, the settings are locked and the progress bar shows. */
 function setRunning(running) {
   fields.run.disabled = running;
   $("cancel").disabled = !running;
-  if (running) {
-    bar.hidden = false;
-    bar.value = 0;
-  }
+  for (const step of form.querySelectorAll("fieldset")) step.disabled = running;
+  $("progress").hidden = !running;
+  $("progress").value = 0;
 }
 
-function render(run, period) {
-  const rows = run.summary.filter((row) => row.period === period);
-  const at = new Map(rows.map((row) => [`${row.scope}|${row.item}|${row.kind}|${row.measure}`, row]));
-  const value = (scope, item, kind, measure) => at.get(`${scope}|${item}|${kind}|${measure}`);
-  const fab = (measure, decimals) => cell(value("fab", "", null, measure), decimals);
-  $("fab").textContent = `평균 WIP ${fab("wip", 0)} lot · 투입 ${fab("started", 0)} · 완료 ${fab("completed", 0)} lot`;
-  $("tables").replaceChildren(...TABLES.map((table) => tableOf(table, rows, value)).filter(Boolean));
-}
-
-function tableOf(spec, rows, value) {
-  const keys = new Map();
-  for (const row of rows.filter((row) => row.scope === spec.scope)) {
-    keys.set(`${row.item}|${row.kind}`, [row.item, row.kind]);
-  }
-  let items = [...keys.values()].filter(([item, kind]) =>
-    spec.columns.some(([measure]) => value(spec.scope, item, kind, measure)),
-  );
-  if (items.length === 0) return null;
-  if (spec.sortBy) {
-    const key = ([item, kind]) => value(spec.scope, item, kind, spec.sortBy)?.mean ?? -Infinity;
-    items = items.sort((a, b) => key(b) - key(a));
-  } else if (spec.scope === "kind") {
-    items = items.sort(([, a], [, b]) => KINDS.indexOf(a) - KINDS.indexOf(b));
-  }
-  const table = document.createElement("table");
-  const head = table.createTHead().insertRow();
-  for (const label of ["", ...spec.columns.map(([, label]) => label)]) {
-    head.append(Object.assign(document.createElement("th"), { textContent: label }));
-  }
-  const body = table.createTBody();
-  for (const [item, kind] of items) {
-    const row = body.insertRow();
-    row.insertCell().textContent = [item, kind].filter(Boolean).join(" ");
-    for (const [measure, , decimals] of spec.columns) {
-      row.insertCell().textContent = cell(value(spec.scope, item, kind, measure), decimals);
-    }
-  }
-  const section = document.createElement("section");
-  section.append(Object.assign(document.createElement("h3"), { textContent: spec.title }));
-  const scroll = document.createElement("div");
-  scroll.className = "scroll";
-  scroll.append(table);
-  section.append(scroll);
-  return section;
-}
-
-/** Mean, ± the 95% confidence interval half-width of several replications. */
-function cell(summary, decimals) {
-  if (!summary) return "–";
-  const mean = summary.mean.toFixed(decimals);
-  return summary.ci95 == null ? mean : `${mean} ± ${summary.ci95.toFixed(decimals)}`;
+/** Shows the status text `render()` returns; it is rendered again when the language changes. */
+function setStatus(render) {
+  statusText = render;
+  $("status").textContent = render();
 }
 
 /** The results in the JSON form of the command line's --json output. */
@@ -396,7 +379,7 @@ function downloadJson() {
 
 function download(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
-  const link = Object.assign(document.createElement("a"), { href: url, download: name });
-  link.click();
-  URL.revokeObjectURL(url);
+  Object.assign(document.createElement("a"), { href: url, download: name }).click();
+  // Some browsers read the file after click() returns: release it later, not at once.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

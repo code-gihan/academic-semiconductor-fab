@@ -1,102 +1,166 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SMT2020 시뮬레이터</title>
-  <meta name="description" content="SMT2020 반도체 FAB 테스트베드를 브라우저(wasm)에서 실행하는 이산 사건 시뮬레이터">
+  <title>SMT2020 Fab Simulator</title>
+  <meta name="description" content="Run the SMT2020 semiconductor fab testbed in your browser: a Rust discrete-event simulator compiled to WebAssembly.">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="main.js"></script>
 </head>
 <body>
-  <header>
-    <h1>SMT2020 시뮬레이터</h1>
-    <p>
-      SMT2020 반도체 FAB 테스트베드 4종을 브라우저에서 실행합니다. Rust 이산 사건 엔진이 wasm으로
-      동작하며, 복제 1회를 Web Worker 1개가 맡아 CPU 코어 수만큼 병렬로 실행합니다. 모델·전략·검증은
-      <a href="https://github.com/code-gihan/academic-semiconductor-fab">README</a>를 따릅니다.
-    </p>
+  <header class="top">
+    <div>
+      <h1 data-i18n="header.title"></h1>
+      <p class="lead" data-i18n="header.tagline"></p>
+    </div>
+    <nav class="top-links">
+      <label>
+        <span class="sr-only" data-i18n="header.language"></span>
+        <select id="language"></select>
+      </label>
+      <a href="https://github.com/code-gihan/academic-semiconductor-fab" data-i18n="header.source"></a>
+    </nav>
   </header>
 
   <main>
+    <p class="intro" data-i18n="intro.local"></p>
+    <noscript><p class="intro">This simulator needs JavaScript and WebAssembly.</p></noscript>
+
     <form id="setup">
-      <fieldset>
-        <legend>데이터셋·실행</legend>
-        <label>데이터셋
-          <select name="dataset">
-            <option value="ds1">DS1 HV/LM</option>
-            <option value="ds2">DS2 LV/HM</option>
-            <option value="ds3">DS3 HV/LM + 엔지니어링</option>
-            <option value="ds4">DS4 LV/HM + 엔지니어링</option>
-            <option value="file">로컬 파일(.bin)</option>
-          </select>
-        </label>
-        <label id="file-field" hidden>데이터셋 파일
-          <input name="file" type="file" accept=".bin">
-        </label>
-        <label>종료 시각 (일)
-          <input name="horizon" type="number" min="1" step="any" value="730" required>
-        </label>
-        <label>복제 수
-          <input name="replications" type="number" min="1" max="1000" step="1" value="4" required>
-        </label>
-        <label>seed
-          <input name="seed" type="number" min="0" step="1" value="1" required>
-        </label>
-        <label>부하 계수
-          <input name="load" type="number" min="0.01" step="any" value="1" required>
-        </label>
+      <fieldset class="step">
+        <legend><span class="step-number" aria-hidden="true">1</span><span data-i18n="dataset.heading"></span></legend>
+        <div class="choices">
+          <label class="choice">
+            <input type="radio" name="dataset" value="ds1" checked>
+            <span><strong data-i18n="dataset.ds1.name"></strong><span class="hint" data-i18n="dataset.ds1.description"></span></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="dataset" value="ds2">
+            <span><strong data-i18n="dataset.ds2.name"></strong><span class="hint" data-i18n="dataset.ds2.description"></span></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="dataset" value="ds3">
+            <span><strong data-i18n="dataset.ds3.name"></strong><span class="hint" data-i18n="dataset.ds3.description"></span></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="dataset" value="ds4">
+            <span><strong data-i18n="dataset.ds4.name"></strong><span class="hint" data-i18n="dataset.ds4.description"></span></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="dataset" value="file">
+            <span><strong data-i18n="dataset.file.name"></strong><span class="hint" data-i18n="dataset.file.description"></span></span>
+          </label>
+        </div>
+        <div class="field" id="file-field" hidden>
+          <label for="file" data-i18n="dataset.file.label"></label>
+          <input id="file" name="file" type="file" accept=".bin">
+        </div>
+        <p class="hint"><span data-i18n="dataset.common"></span> <a href="#ref-p1">[P1]</a></p>
       </fieldset>
 
-      <fieldset>
-        <legend>운영 전략</legend>
-        <label>CQT 디스패칭 [P2]
-          <select name="queueTime">
-            <option value="none">없음 (BASE)</option>
-            <option value="qtcr">QTCR</option>
-            <option value="qts">QTS (FF 사전 실행 포함)</option>
-          </select>
-        </label>
-        <label>Stopping [P2] Table 3
-          <select name="stopping">
-            <option value="none">없음</option>
-            <option value="high">high (90/130 · 90/220)</option>
-            <option value="medium">medium (60/95 · 70/150)</option>
-            <option value="small">small (50/85 · 55/125)</option>
-          </select>
-        </label>
-        <label>엔지니어링 lot [P1]
-          <select name="engineering"></select>
-        </label>
-        <label class="check">
-          <input name="reserveSuperHot" type="checkbox"> super hot lot 툴 예약
-        </label>
+      <fieldset class="step">
+        <legend><span class="step-number" aria-hidden="true">2</span><span data-i18n="strategy.heading"></span></legend>
+        <div class="fields">
+          <div class="field">
+            <label for="queue-time" data-i18n="strategy.queueTime.label"></label>
+            <select id="queue-time" name="queueTime" aria-describedby="queue-time-hint">
+              <option value="none" data-i18n="strategy.queueTime.none"></option>
+              <option value="qtcr" data-i18n="strategy.queueTime.qtcr"></option>
+              <option value="qts" data-i18n="strategy.queueTime.qts"></option>
+            </select>
+            <p class="hint" id="queue-time-hint"><span data-i18n="strategy.queueTime.hint"></span> <a href="#ref-p2">[P2]</a></p>
+          </div>
+          <div class="field">
+            <label for="stopping" data-i18n="strategy.stopping.label"></label>
+            <select id="stopping" name="stopping" aria-describedby="stopping-hint">
+              <option value="none" data-i18n="strategy.stopping.none"></option>
+              <option value="high" data-i18n="strategy.stopping.high"></option>
+              <option value="medium" data-i18n="strategy.stopping.medium"></option>
+              <option value="small" data-i18n="strategy.stopping.small"></option>
+            </select>
+            <p class="hint" id="stopping-hint"><span data-i18n="strategy.stopping.hint"></span> <a href="#ref-p2">[P2]</a></p>
+          </div>
+          <div class="field">
+            <label for="engineering" data-i18n="strategy.engineering.label"></label>
+            <select id="engineering" name="engineering" aria-describedby="engineering-hint"></select>
+            <p class="hint" id="engineering-hint"><span data-i18n="strategy.engineering.hint"></span> <a href="#ref-p1">[P1]</a></p>
+          </div>
+          <div class="field check">
+            <input id="reserve-super-hot" name="reserveSuperHot" type="checkbox" aria-describedby="super-hot-hint">
+            <label for="reserve-super-hot" data-i18n="strategy.superHot.label"></label>
+            <p class="hint" id="super-hot-hint" data-i18n="strategy.superHot.hint"></p>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="step">
+        <legend><span class="step-number" aria-hidden="true">3</span><span data-i18n="settings.heading"></span></legend>
+        <div class="fields">
+          <div class="field">
+            <label for="horizon" data-i18n="settings.horizon.label"></label>
+            <input id="horizon" name="horizon" type="number" min="1" step="any" value="730" required aria-describedby="horizon-hint">
+            <p class="hint" id="horizon-hint" data-i18n="settings.horizon.hint"></p>
+          </div>
+          <div class="field">
+            <label for="replications" data-i18n="settings.replications.label"></label>
+            <input id="replications" name="replications" type="number" min="1" max="1000" step="1" value="4" required aria-describedby="replications-hint">
+            <p class="hint" id="replications-hint"></p>
+          </div>
+          <div class="field">
+            <label for="seed" data-i18n="settings.seed.label"></label>
+            <input id="seed" name="seed" type="number" min="0" step="1" value="1" required aria-describedby="seed-hint">
+            <p class="hint" id="seed-hint" data-i18n="settings.seed.hint"></p>
+          </div>
+          <div class="field">
+            <label for="load" data-i18n="settings.load.label"></label>
+            <input id="load" name="load" type="number" min="0.01" step="any" value="1" required aria-describedby="load-hint">
+            <p class="hint" id="load-hint" data-i18n="settings.load.hint"></p>
+          </div>
+        </div>
       </fieldset>
 
       <div class="actions">
-        <button name="run" type="submit" disabled>실행</button>
-        <button id="cancel" type="button" disabled>취소</button>
-        <progress id="progress" max="1" value="0" hidden></progress>
-        <output id="status" aria-live="polite"></output>
+        <button name="run" type="submit" class="primary" disabled data-i18n="run.start"></button>
+        <button id="cancel" type="button" disabled data-i18n="run.cancel"></button>
+        <p class="hint" data-i18n="run.duration"></p>
       </div>
+      <progress id="progress" max="1" value="0" hidden></progress>
+      <output id="status" aria-live="polite"></output>
     </form>
 
     <section id="results" hidden>
-      <div class="bar">
-        <label>보고 기간 <select id="period"></select></label>
-        <button id="download-json" type="button">JSON</button>
-        <button id="download-csv" type="button">CSV</button>
+      <h2 data-i18n="results.heading"></h2>
+      <dl id="run-setup" class="setup"></dl>
+      <div class="toolbar">
+        <div class="field">
+          <label for="period" data-i18n="results.period"></label>
+          <select id="period" aria-describedby="period-hint"></select>
+        </div>
+        <button id="download-json" type="button" data-i18n="results.downloadJson"></button>
+        <button id="download-csv" type="button" data-i18n="results.downloadCsv"></button>
       </div>
-      <p id="fab"></p>
-      <p id="performance" class="muted"></p>
-      <details>
-        <summary>복제별 결과 digest</summary>
-        <p class="muted">같은 설정(JSON의 config)을 <code>smt2020 run --config</code>로 실행하면 네이티브 결과의 digest가 같습니다.</p>
-        <ol id="digests"></ol>
-      </details>
-      <p class="muted">표의 값은 복제 평균이며, ± 뒤는 95% 신뢰구간 반폭(Student t)입니다.</p>
+      <p class="hint" id="period-hint" data-i18n="results.periodHint"></p>
+      <div id="kpis" class="kpis"></div>
+      <p class="hint" data-i18n="results.ci"></p>
+      <p class="hint" data-i18n="results.kinds"></p>
       <div id="tables"></div>
+      <details>
+        <summary data-i18n="results.reproduce.title"></summary>
+        <p class="hint" data-i18n="results.reproduce.text"></p>
+        <ol id="digests"></ol>
+        <p class="hint" id="performance"></p>
+      </details>
     </section>
   </main>
+
+  <footer>
+    <h2 data-i18n="footer.references"></h2>
+    <ol class="references">
+      <li id="ref-p1">[P1] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “SMT2020—A Semiconductor Manufacturing Testbed,” <i>IEEE Trans. Semicond. Manuf.</i>, 33(4), 522–531, 2020. <a href="https://doi.org/10.1109/TSM.2020.3001933">doi:10.1109/TSM.2020.3001933</a></li>
+      <li id="ref-p2">[P2] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “Integrating Critical Queue Time Constraints into SMT2020 Simulation Models,” <i>Proc. Winter Simulation Conference 2020</i>, 1813–1824. <a href="https://doi.org/10.1109/WSC48552.2020.9383889">doi:10.1109/WSC48552.2020.9383889</a></li>
+    </ol>
+    <p><span data-i18n="footer.data"></span> <a href="https://p2schedgen.fernuni-hagen.de/downloads/simulation">p2schedgen.fernuni-hagen.de</a></p>
+  </footer>
 </body>
 </html>

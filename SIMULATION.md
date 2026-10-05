@@ -112,7 +112,7 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 
 - 구성: `SMT2020\0`(8 B) + `FORMAT_VERSION`(u32 LE, 현재 1) + postcard(`Dataset`). `Dataset::to_bytes`·`from_bytes`.
 - 거부: 매직 불일치, 잘림, 다른 버전(재변환 안내), 잔여 바이트, 손상.
-- 직렬화 타입을 바꾸면 `FORMAT_VERSION`을 올린다. 최소 데이터셋의 바이트를 고정한 테스트가 변경을 검출한다.
+- 직렬화 타입을 바꾸면 `FORMAT_VERSION`을 올린다. 최소 데이터셋의 바이트를 고정한 테스트가 변경을 검출한다. 이때 웹 페이지의 데이터셋 파일(`www/data/ds1–4.bin`)을 다시 변환한다(현재 빌드 디코딩 테스트가 검출).
 
 ## 4. 실행 설정·흐름(`sim.rs`, `fab.rs`)
 
@@ -531,7 +531,8 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 | `report`(5) | 측정값 결합·비율, Student t 구간, t 분위수, CSV 이름·인용, 이름 = 직렬화 형태 |
 | `rng`(2) | 스트림 재현·독립, 표본 범위 |
 | CLI `reference`(1) | `.rep` 셀(수·시간) 해석 |
-| 실데이터(ignored, 9) | DS1–4 로드 값 검증(order 이름, 비활성 주기형 투입, 데이터셋 파일 왕복 포함), DS1–4 2년 계획 전량 완료, DS4 180 d: BASE(QTS FF 산출) 후 QTCR + Stopping 스테퍼 5/10 + EF, QTS + CAtE(19.2, 4.8 h), CoT 10 전량 완료, FF 없는 QTS = BASE FF를 준 QTS(digest) |
+| 페이지 데이터셋(1) | `www/data/ds1–4.bin`을 현재 빌드로 디코딩, 재인코딩 바이트 동일 |
+| 실데이터(ignored, 10) | DS1–4 로드 값 검증(order 이름, 비활성 주기형 투입, 데이터셋 파일 왕복 포함), 페이지 데이터셋 = 원천 변환, DS1–4 2년 계획 전량 완료, DS4 180 d: BASE(QTS FF 산출) 후 QTCR + Stopping 스테퍼 5/10 + EF, QTS + CAtE(19.2, 4.8 h), CoT 10 전량 완료, FF 없는 QTS = BASE FF를 준 QTS(digest) |
 
 ```bash
 cargo test
