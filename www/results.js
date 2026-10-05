@@ -122,7 +122,7 @@ export function showResults(run, period, animated) {
       return summary ? [kpi(t(spec.label), summary, spec.decimals, animated)] : [];
     }),
   );
-  // The narrow charts fill a row before the tool groups, which take one of their own.
+  // Lot outcomes side by side, then the capacity by area and by tool group, a row each.
   const charts = [
     kindChart(value),
     cqtChart(value),
@@ -279,7 +279,9 @@ function areaChart(rows, value) {
     }),
     100,
   );
-  return figure("chart.areas", bars);
+  const result = figure("chart.areas", bars);
+  result.classList.add("wide");
+  return result;
 }
 
 /** A scale a little above the largest bar with its interval. */
