@@ -8,19 +8,25 @@ const DAY = 86_400_000;
 const $ = (id) => document.getElementById(id);
 const tooltip = $("tooltip");
 
-/** A lane of the run per replication: waiting, then running with its latest progress and tool
- * groups, then done. */
-export function lanes(count) {
-  return Array.from({ length: count }, () => ({ state: "waiting" }));
+/** A lane of the run per scenario (named by `names`) and replication: waiting, then running with
+ * its latest progress and tool groups, then done. */
+export function lanes(names, replications) {
+  return names.flatMap((name) =>
+    Array.from({ length: replications }, (_, replication) => ({
+      state: "waiting",
+      scenario: names.length > 1 ? name : null,
+      replication,
+    })),
+  );
 }
 
-/** Empties the panel for `run`; a click on a lane follows that replication in the fab map. */
+/** Empties the panel for `run`; a click on a lane follows it in the fab map. */
 export function startProgress(run, follow) {
   $("lanes").replaceChildren(
-    ...run.lanes.map((_, replication) => {
+    ...run.lanes.map((_, index) => {
       const button = element("button", "lane");
       button.type = "button";
-      button.addEventListener("click", () => follow(replication));
+      button.addEventListener("click", () => follow(index));
       const bar = element("span", "lane-bar");
       bar.append(element("span", "lane-fill"));
       button.append(element("span", "lane-name"), element("span", "lane-state"), bar);
@@ -53,15 +59,21 @@ export function showProgress(run) {
     parts.push(t("progress.remaining", { time: formatDuration((elapsed * (1 - done)) / done) }));
   }
   $("progress-summary").textContent = parts.join(" · ");
-  run.lanes.forEach((lane, replication) => {
-    const button = $("lanes").children[replication].firstElementChild;
-    button.classList.toggle("followed", replication === run.follow);
+  run.lanes.forEach((lane, index) => {
+    const button = $("lanes").children[index].firstElementChild;
+    button.classList.toggle("followed", index === run.follow);
     button.classList.toggle("done", lane.state === "done");
-    button.children[0].textContent = t("lane.name", { replication });
+    button.children[0].textContent = laneName(lane);
     button.children[1].textContent = laneText(lane);
     button.children[2].firstElementChild.style.transform = `scaleX(${laneFraction(lane)})`;
   });
   showLive(run);
+}
+
+/** A lane's replication, after its scenario if the run has several. */
+function laneName(lane) {
+  const name = t("lane.name", { replication: lane.replication });
+  return lane.scenario ? `${lane.scenario} · ${name}` : name;
 }
 
 function laneFraction(lane) {
@@ -109,10 +121,7 @@ function showLive(run) {
   const groups = lane?.toolGroups;
   if (!groups) return;
   $("live").hidden = false;
-  $("live-caption").textContent = t("live.caption", {
-    replication: run.follow,
-    phase: laneText(lane),
-  });
+  $("live-caption").textContent = t("live.caption", { lane: laneName(lane), phase: laneText(lane) });
   const progress = lane.progress;
   const stats = [
     ["live.released", formatNumber(progress.released, 0)],

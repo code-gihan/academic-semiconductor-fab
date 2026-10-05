@@ -6,6 +6,8 @@ import { test } from "node:test";
 import {
   Dataset,
   Simulation,
+  compare,
+  comparisonCsv,
   csv,
   daily,
   digest,
@@ -170,6 +172,24 @@ test("summaries and CSV", () => {
   );
   assert.deepEqual([completed.n, completed.std], [2, 0]);
   assert.ok(csv(summaries).startsWith("period,scope,item,kind,measure,n,mean,std,ci95\n"));
+});
+
+test("comparisons pair replications", () => {
+  const run = (replication, queueTime) => {
+    const simulation = new Simulation(dataset, { horizon: 3 * DAY, queue_time: queueTime, replication });
+    simulation.run();
+    return simulation.results();
+  };
+  const baseline = [run(0, "none"), run(1, "none")];
+  const other = [run(1, "qtcr"), run(0, "qtcr")];
+  const rows = compare(baseline, other);
+  const vl = rows.find((row) => row.period === "WarmUp" && row.scope === "cqt" && row.item === "total" && row.measure === "vl_pct");
+  assert.equal(vl.n, 2);
+  assert.ok(Math.abs(vl.other - vl.baseline - vl.difference) < 1e-9);
+  // A configuration against itself: no difference.
+  assert.ok(compare(baseline, baseline).every((row) => row.difference === 0));
+  assert.ok(comparisonCsv(rows).startsWith("period,scope,item,kind,measure,n,baseline,other,difference,std,ci95\n"));
+  assert.throws(() => compare(baseline, other.slice(1)), /do not pair/);
 });
 
 test("bad input is rejected", () => {

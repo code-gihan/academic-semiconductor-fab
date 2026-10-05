@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SMT2020 Fab Simulator</title>
   <meta name="description" content="Run the SMT2020 semiconductor fab testbed in your browser: a Rust discrete-event simulator compiled to WebAssembly.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="SMT2020 Fab Simulator: try strategies against queue-time violations">
+  <meta property="og:description" content="Simulate the four SMT2020 wafer fab testbeds in your browser, no install: build dispatching strategies, see where critical queue times are violated and compare strategies pair by pair.">
+  <meta property="og:url" content="https://code-gihan.github.io/academic-semiconductor-fab/">
+  <meta property="og:image" content="https://code-gihan.github.io/academic-semiconductor-fab/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="main.js"></script>
 </head>
@@ -25,6 +33,7 @@
       <a href="#setup" data-view="setup"><span data-i18n="view.setup"></span></a>
       <a href="#run" data-view="run"><span data-i18n="view.run"></span><span id="run-badge" class="badge" hidden></span></a>
       <a href="#analysis" data-view="analysis"><span data-i18n="view.analysis"></span></a>
+      <a href="#compare" data-view="compare"><span data-i18n="view.compare"></span></a>
       <a href="#python" data-view="python"><span data-i18n="view.python"></span></a>
     </nav>
   </header>
@@ -106,6 +115,23 @@
           <button name="run" type="submit" form="setup" class="primary" disabled data-i18n="run.start"></button>
           <output id="status" aria-live="polite"></output>
         </div>
+        <section id="scenarios-panel" class="card scenarios">
+          <h2><span class="step-number" aria-hidden="true">4</span><span data-i18n="scenarios.heading"></span></h2>
+          <p class="hint" data-i18n="scenarios.intro"></p>
+          <div class="row">
+            <input id="scenario-name" type="text" maxlength="60" data-i18n-attr="placeholder:scenarios.name;aria-label:scenarios.name">
+            <button id="scenario-add" type="button" data-i18n="scenarios.add"></button>
+          </div>
+          <p id="scenarios-empty" class="hint" data-i18n="scenarios.empty"></p>
+          <ol id="scenarios" class="scenario-list"></ol>
+          <div class="row">
+            <button id="scenarios-run" type="button" class="primary" data-i18n="scenarios.run"></button>
+            <button id="scenarios-demo" type="button" data-i18n="scenarios.demo"></button>
+            <button id="scenarios-share" type="button" data-i18n="scenarios.share"></button>
+          </div>
+          <input id="share-link" type="text" readonly hidden data-i18n-attr="aria-label:scenarios.share">
+          <output id="scenarios-status" aria-live="polite"></output>
+        </section>
         <div class="notes">
           <p class="hint" data-i18n="run.duration"></p>
           <p class="hint" data-i18n="intro.local"></p>
@@ -163,6 +189,7 @@
           <div class="panel-head">
             <h2 data-i18n="results.heading"></h2>
             <div class="toolbar">
+              <select id="scenario" hidden data-i18n-attr="aria-label:compare.scenario"></select>
               <label for="period" data-i18n="results.period"></label>
               <select id="period" aria-describedby="period-hint"></select>
               <button id="download-json" type="button" data-i18n="results.downloadJson"></button>
@@ -197,6 +224,22 @@
         </div>
         <p class="hint" data-i18n="details.intro"></p>
         <div id="details-body" class="details"></div>
+      </div>
+    </section>
+
+    <section id="view-compare" class="view" data-view="compare" hidden>
+      <div class="panel">
+        <p id="compare-empty" class="hint" data-i18n="compare.empty"></p>
+        <div id="compare-body" hidden>
+          <div class="panel-head">
+            <h2 data-i18n="compare.heading"></h2>
+            <div id="compare-tools" class="toolbar"></div>
+          </div>
+          <dl id="compare-setup" class="chips"></dl>
+          <p id="compare-same" class="note" hidden></p>
+          <div id="compare-table"></div>
+          <div id="compare-charts" class="charts"></div>
+        </div>
       </div>
     </section>
 

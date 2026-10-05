@@ -38,6 +38,7 @@ run(until)·run_observed(until, 관찰자)   반복 호출 = 이어서 진행
 progress()·lots()·tools()·tool_groups()   어느 시점이든 읽기 전용
 reset(Config) ─▶ 시각 0
 report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
+report::compare(&[Results], &[Results]) ─▶ 복제 짝 차이 평균·95% CI
 ```
 
 ## 2. DES 엔진(`des-core`)
@@ -550,6 +551,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 - `summarize(결과 목록)`: (기간, 범위, 항목, 유형, 측정)별 복제 값의 n, 평균, 표본 표준편차, 95% CI 반폭 t_{0.975,n−1}·s/√n(n ≥ 2). t: n − 1 ≤ 9는 정확값, 그 외 Cornish–Fisher 전개(A&S 26.7.5, 오차 < 3e-5). 순서 = 첫 등장 순.
 - `csv(요약)`: `period,scope,item,kind,measure,n,mean,std,ci95`, 없는 값은 빈 칸.
 - `daily(결과 목록)`: 일별 (fab: started·completed·wip, cqt: completed·vl_pct·avl_h)의 n·평균·표준편차·CI. 날 수는 복제마다 다를 수 있다(Drain 길이), n = 그날이 있는 복제(비율은 CQT 완료가 있는 복제). 평균·표준편차·CI는 `summarize`와 같은 함수.
+- `compare(기준, 대안)`: 두 설정의 결과를 (seed, replication)으로 짝짓는다(공통 난수). 짝이 없거나 겹치면 오류. 측정별로 두 결과에 모두 있는 짝의 n, 기준·대안 평균, 차이 d = 대안 − 기준의 평균·표본 표준편차·95% CI 반폭(t_{0.975,n−1}·s_d/√n). 순서 = 첫 짝 기준 결과의 측정 순. `comparison_csv`는 같은 열 + baseline·other·difference.
 
 ### 9.4 일별 결과(`Results::days`)
 

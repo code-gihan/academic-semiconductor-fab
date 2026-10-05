@@ -10,19 +10,21 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 
 ### 웹 페이지
 
-영어 기본, 한국어 전환(선택은 브라우저에 저장). 화면은 상단 탭의 보기 4개(설정·실행·분석·Python, 주소 `#setup`·`#run`·`#analysis`·`#python`)로 나뉜다.
+영어 기본, 한국어 전환(선택은 브라우저에 저장). 화면은 상단 탭의 보기 5개(설정·실행·분석·비교·Python, 주소 `#setup`·`#run`·`#analysis`·`#compare`·`#python`)로 나뉜다.
 
 1. 설정: 왼쪽에 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`)과 실행 설정(종료 시각, 웜업(비우면 데이터셋 기간), 복제 수, seed, 부하 계수), 오른쪽에 운영 전략.
    - CQT 디스패칭(논문 QTCR·QTS, 자체 순위 없는 툴그룹에 적용).
    - 툴그룹별 lot 순위: 기준 조합(최대 6개, 순서 변경, `qt_within`은 시간 입력)을 만들어 체크한 툴그룹에 적용. 표는 CQT 구간 툴그룹만·영역·이름으로 거르고, 툴그룹의 현재 순위(데이터셋 또는 자체)를 보여 주며 클릭하면 조합으로 불러온다.
    - 배치 조기 시작(CQT 여유 h), Stopping(CQT 구간 툴그룹별 한도·기본값, [P2] Table 3 프리셋), 엔지니어링 lot(EF·CAtE 구간·CoT 임계 직접 입력과 [P1] 값, 엔지니어링 lot 없는 데이터셋은 안내), super hot 예약.
    - 설정 JSON: 보기·복사·붙여넣어 적용(Python·CLI와 같은 스키마). 적용·실행 전에 코어가 설정을 검증해 오류를 보여 준다.
+   - 전략 비교: 편집한 전략을 이름으로 저장(브라우저 보관, 첫 번째 = 기준)하고 편집기로 다시 불러온다. 실행하고 비교 = 모든 전략을 같은 실행 설정·seed·복제 번호로 실행. 데모(DS1 120 d, 웜업 30 d, 복제 2: 데이터셋 규칙·QTCR·QTCR + 배치 조기 시작 2 h). 공유 링크: 데이터셋(동봉분)·실행 설정·전략을 JSON → deflate-raw → base64url로 `#share=`에 담고, 링크를 열면 그대로 불러온다(서버 전송 없음).
    - 넓은 화면은 왼쪽 열이 고정되고, 좁은 화면은 1열(전략 뒤에 실행 버튼, 아래에 고정).
-2. 진행: 복제는 워커 풀(Web Worker 최대 `navigator.hardwareConcurrency`개)이 하나씩 실행한다. 전체(완료 복제, 경과·남은 시간(진행률 비례 추정))와 복제별(대기, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 완료 시간) 진행 막대. FAB 지도: 따라가는 복제(처음 진행을 보고한 복제, 완료되면 실행 중인 다른 복제, 복제 클릭으로 변경)의 투입·완료 lot·WIP와 영역별 툴그룹 타일(채움 = 작업 중 툴 비율, 위쪽 막대 = 고장·PM 툴 비율, 숫자 = 대기 lot, 툴팁 = 상태별 툴 수). 갱신은 약 250 ms(벽시계)마다. 실행 중 설정 잠금(실행 탭 표시), 취소는 워커 종료. 실행이 끝나면 분석 보기로 넘어간다.
+2. 진행: 복제는 워커 풀(Web Worker 최대 `navigator.hardwareConcurrency`개)이 하나씩 실행한다. 전체(완료 복제, 경과·남은 시간(진행률 비례 추정))와 복제별(대기, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 완료 시간) 진행 막대. FAB 지도: 따라가는 복제(처음 진행을 보고한 복제, 완료되면 실행 중인 다른 복제, 복제 클릭으로 변경)의 투입·완료 lot·WIP와 영역별 툴그룹 타일(채움 = 작업 중 툴 비율, 위쪽 막대 = 고장·PM 툴 비율, 숫자 = 대기 lot, 툴팁 = 상태별 툴 수). 갱신은 약 250 ms(벽시계)마다. 실행 중 설정 잠금(실행 탭 표시), 취소는 워커 종료. 실행이 끝나면 분석 보기(전략이 여럿이면 비교 보기)로 넘어간다.
 3. 분석: 값은 복제 평균 ± 95% 신뢰구간.
    - 개요(보고 기간별): 실행 설정, 핵심 지표(투입·완료 lot, 평균 WIP, PRL ACT·ONTIME, ERL ACT, CQT %VL), 차트(lot 유형별 ACT, CQT %VL, 구간별 %VL(위반 수 순, 상위 15개 또는 전체), 선택 구간의 스텝별 반송·대기·공정 시간(위반·충족), 일별 추이(%VL·WIP·완료, 신뢰구간 띠), 영역 가동률, 툴그룹 상태별 시간), 표 6종, 복제별 digest·성능. JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
-   - 상세(복제 1개): 복제 0은 실행 중 기록하고, 다른 복제는 같은 설정으로 재생해 기록한다(digest가 다르면 오류). 구간 × 일(120 d 초과는 주) 위반 히트맵(칸 = 목록 필터), 위반 목록(구간·lot 유형·제품·기간 필터, 초과·시각 정렬, 쪽 단위, CSV), 툴그룹 일별 대기 lot·툴 시간 비율(두 차트 커서·확대 연동), 툴그룹 구간 사건(최대 7 d, 툴별 작업·고장·PM 타임라인과 도착, 목록·CSV), lot 이력(투입부터 위반까지 스텝별 반송·대기·공정, 구간 확대, 가장 오래 기다린 툴그룹의 그때 사건으로 이동). 개요에서 고른 구간이 상세 필터가 된다.
-4. Python 패키지: 페이지의 pip 명령·플랫폼별 wheel.
+   - 상세(복제 1개): 복제 0은 실행 중 기록하고, 다른 복제는 같은 설정으로 재생해 기록한다(digest가 다르면 오류). 구간 × 일(120 d 초과는 주) 위반 히트맵(칸 = 목록 필터), 위반 목록(구간·lot 유형·제품·기간 필터, 초과·시각 정렬, 쪽 단위, CSV), 툴그룹 일별 대기 lot·툴 시간 비율(두 차트 커서·확대 연동), 툴그룹 구간 사건(최대 7 d, 툴별 작업·고장·PM 타임라인과 도착, 목록·CSV), lot 이력(투입부터 위반까지 스텝별 반송·대기·공정, 구간 확대, 가장 오래 기다린 툴그룹의 그때 사건으로 이동). 개요에서 고른 구간이 상세 필터가 된다. 전략이 여럿이면 전략을 골라 본다(첫 전략의 복제 0만 실행 중 기록).
+4. 비교: 기준 전략 선택, 보고 기간별 지표 × 전략 표(평균 ± CI, 기준 대비 Δ = 복제 짝 차이 평균 ± 95% CI, 구간이 0을 포함하지 않으면 개선 초록·악화 빨강), 전략별 지표 막대(± CI), 기준에서 위반이 많은 CQT 구간 10개의 전략별 %VL·Δ, 모든 복제 digest가 기준과 같은 전략 표시(결정을 바꾸지 않음), CSV(전략·기준 열 + 코어 비교 CSV).
+5. Python 패키지: 페이지의 pip 명령·플랫폼별 wheel.
 
 ### Python
 
@@ -257,6 +259,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 | 기록·재생 | `recording()`, `records()`, `flow_factors()` | `recording()`, `records()`, `flowFactors()` | `recording()`, `records()`, `flow_factors()` |
 | 결과 | `results()`, `Results::digest` | `results()`, `digest(results)` | `results()`, `digest(results)` |
 | 복제 요약 | `report::{metrics, summarize, daily, csv}` | `summarize(results[])`, `daily(results[])`, `csv(summaries)` | `summarize(results)`, `daily(results)`, `csv(summaries)` |
+| 전략 비교 | `report::{compare, comparison_csv}` | `compare(baseline[], other[])`, `comparisonCsv(rows)` | `compare(baseline, other)`, `comparison_csv(rows)` |
 
 ### 실행 흐름
 
@@ -299,6 +302,7 @@ JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생�
 - CQT 대기 분해: 대기(시작 스텝 종료 ~ 종료 스텝 작업 시작) = 구간 안 스텝마다 반송(직전 종료 ~ 도착) + 대기열(도착 ~ 작업 시작) + 공정(작업 시작 ~ 종료, setup·load·unload·고장 정지 포함) + 종료 스텝의 반송·대기열. 위반·충족 완료로 나눠 합한다.
 - digest: 결과 postcard 인코딩의 FNV-1a 64비트 해시. 같으면 결과가 비트 단위로 같다.
 - 측정값(`summarize`·`csv`): 범위 fab·kind·lot·tool_group·area·cqt·cqt_segment(`route:entry-exit`)·cqt_step(`route:entry-exit:step`)별 측정(`ct_mean_d`, `on_time_pct`, `ff_p50`, `util_pct`, `vl_pct`, `avl_h`, `queue_vl_h` 등, 접미사 = 단위)의 n·평균·표본 표준편차·95% CI 반폭(Student t). `daily`: 일별 fab(started·completed·wip)·cqt(completed·vl_pct·avl_h)의 같은 통계. 목록·정의는 [SIMULATION.md](SIMULATION.md) 9.3–9.4. CSV 열 `period,scope,item,kind,measure,n,mean,std,ci95`.
+- 비교(`compare`·`comparison_csv`): 두 설정의 결과를 (seed, replication)으로 짝지어(짝 없는 실행은 오류) 측정별 n·기준 평균·대안 평균·차이(대안 − 기준) 평균·표본 표준편차·95% CI 반폭. 공통 난수로 짝의 공통 변동이 빠져 두 CI를 따로 볼 때보다 좁다. CSV 열 `period,scope,item,kind,measure,n,baseline,other,difference,std,ci95`.
 - CLI·웹 JSON: `{data, threads, replications: [{config, digest, seconds, results}], summary}`(CLI는 `peak_heap_bytes`, 웹은 복제별 `memory_bytes` 추가).
 
 ### 기록
@@ -457,9 +461,9 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프, 종료 시각, 관측 사건
 crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더·데이터셋 파일, Simulation(단계 실행·상태), 전략, 통계, 측정값·복제 요약. 바인딩 의존 없음
 crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert, run, validate
-crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, summarize, csv, digest. tests/(Node API 테스트)
+crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, summarize, daily, csv, compare, comparisonCsv, digest. tests/(Node API 테스트)
 crates/python/    Python 포장, PyO3 cdylib(패키지 smt2020-python, maturin wheel smt2020): 같은 API + load_dataset(DS1–4 동봉), smt2020.pyi(타입), tests/(unittest)
-www/              index.html, style.css, main.js(실행 조율·wheel 목록), views.js(보기), setup.js·strategy.js(시나리오·전략 편집기), pool.js·worker.js(워커 풀·실행·재생), progress.js(진행·FAB 지도), results.js(분석 개요), details.js(분석 상세), charts.js(ECharts 차트), labels.js(구간·스텝·시각 표기), files.js(내려받기), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0 MIT, Apache ECharts 6.1.0 Apache-2.0), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
+www/              index.html, style.css, main.js(실행 조율·wheel 목록), views.js(보기), setup.js·strategy.js(시나리오·전략 편집기), pool.js·worker.js(워커 풀·실행·재생), progress.js(진행·FAB 지도), results.js(분석 개요), details.js(분석 상세), compare.js(비교), share.js(공유 링크), charts.js(ECharts 차트), labels.js(구간·스텝·시각 표기), files.js(내려받기), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0 MIT, Apache ECharts 6.1.0 Apache-2.0), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
@@ -502,7 +506,9 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 9. 재사용 코어: `Simulation`(단계 실행·일시정지·상태 조회·재시작), JS·Python 포장(같은 API), wheel 배포 — 완료
 10. 운영 전략 실험: 툴그룹별 순위 기준(`ranking`, 기준 11종), QT 배치 시작(깨우기 사건), 웜업 설정, 데이터셋 정보(`info()`), 웹 보기 분리(설정·실행·결과·Python)와 전략 편집기·설정 JSON — 완료
 11. 분석 데이터: 구간별·스텝별 CQT 대기 분해, 일별 결과·요약, 진행의 CQT 누적, 기록(위반·TG 일별·사건 창)과 재생용 QTS FF — 완료
-12. 분석 보기(드릴다운·시계열·히트맵), 13. 시나리오 비교(쌍대 CI·스윕), 14. 공유·게시 — 진행 예정
+12. 분석 보기: 개요(구간·스텝 분해·일별)와 복제 상세(히트맵·위반 목록·TG 일별·사건 창·lot 이력), 워커 풀, 기록·재생, ECharts — 완료
+13. 전략 비교: `report::compare`(복제 짝 차이 ± CI), 전략 목록·일괄 실행·비교 보기 — 완료
+14. 공유: 공유 링크, 데모, 링크 미리보기(og 메타·`www/og.png`) — 완료
 
 ## 로컬 빌드·테스트
 

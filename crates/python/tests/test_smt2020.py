@@ -170,6 +170,33 @@ class SimulationTest(unittest.TestCase):
             smt2020.csv(summaries).startswith("period,scope,item,kind,measure,n,mean,std,ci95\n")
         )
 
+    def test_comparisons_pair_replications(self):
+        def run(replication, queue_time):
+            config = {"horizon": 3 * DAY, "queue_time": queue_time, "replication": replication}
+            simulation = smt2020.Simulation(self.dataset, config)
+            simulation.run()
+            return simulation.results()
+
+        baseline = [run(0, "none"), run(1, "none")]
+        other = [run(1, "qtcr"), run(0, "qtcr")]
+        rows = smt2020.compare(baseline, other)
+        vl = next(
+            row
+            for row in rows
+            if (row["period"], row["scope"], row["item"], row["measure"])
+            == ("WarmUp", "cqt", "total", "vl_pct")
+        )
+        self.assertEqual(vl["n"], 2)
+        self.assertAlmostEqual(vl["other"] - vl["baseline"], vl["difference"])
+        self.assertTrue(all(row["difference"] == 0 for row in smt2020.compare(baseline, baseline)))
+        self.assertTrue(
+            smt2020.comparison_csv(rows).startswith(
+                "period,scope,item,kind,measure,n,baseline,other,difference,std,ci95\n"
+            )
+        )
+        with self.assertRaises(ValueError):
+            smt2020.compare(baseline, other[1:])
+
     def test_bad_input_is_rejected(self):
         with self.assertRaises(ValueError):
             smt2020.Simulation(self.dataset, {"horizon": DAY, "sead": 2})

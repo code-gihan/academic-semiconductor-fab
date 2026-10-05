@@ -8,7 +8,7 @@ use std::sync::Arc;
 use js_sys::Function;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use smt2020::report::{self, Summary};
+use smt2020::report::{self, Comparison, Summary};
 use smt2020::sim::{self, Recording, Results};
 use wasm_bindgen::prelude::*;
 
@@ -162,6 +162,23 @@ pub fn daily(results: JsValue) -> Result<JsValue, JsValue> {
 pub fn csv(summaries: JsValue) -> Result<String, JsValue> {
     let summaries: Vec<Summary> = from_js(summaries)?;
     Ok(report::csv(&summaries))
+}
+
+/// The measures of `other` against `baseline`, results of two configurations' replications
+/// paired by seed and replication: the means and the mean difference with its 95% confidence
+/// interval.
+#[wasm_bindgen]
+pub fn compare(baseline: JsValue, other: JsValue) -> Result<JsValue, JsValue> {
+    let baseline: Vec<Results> = from_js(baseline)?;
+    let other: Vec<Results> = from_js(other)?;
+    to_js(&report::compare(&baseline, &other).map_err(error)?)
+}
+
+/// Comparisons as CSV.
+#[wasm_bindgen(js_name = comparisonCsv)]
+pub fn comparison_csv(comparisons: JsValue) -> Result<String, JsValue> {
+    let comparisons: Vec<Comparison> = from_js(comparisons)?;
+    Ok(report::comparison_csv(&comparisons))
 }
 
 /// Digest of results: equal digests mean bit-identical results.

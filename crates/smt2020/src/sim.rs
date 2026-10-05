@@ -333,7 +333,7 @@ pub struct Progress {
 }
 
 #[derive(Clone, Debug)]
-pub struct Error(String);
+pub struct Error(pub(crate) String);
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

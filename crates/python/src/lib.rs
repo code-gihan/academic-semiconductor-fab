@@ -12,7 +12,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pythonize::{depythonize, pythonize};
 use serde::Serialize;
-use smt2020::report::{self, Summary};
+use smt2020::report::{self, Comparison, Summary};
 use smt2020::sim::{self, Config, Recording, Results};
 use smt2020::{DAY, HOUR, MINUTE, SECOND, asd};
 
@@ -202,6 +202,30 @@ fn csv(summaries: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(report::csv(&summaries))
 }
 
+/// The measures of `other` against `baseline`, results of two configurations' replications
+/// paired by seed and replication: the means and the mean difference with its 95% confidence
+/// interval.
+#[pyfunction]
+fn compare<'py>(
+    py: Python<'py>,
+    baseline: &Bound<'py, PyAny>,
+    other: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let baseline: Vec<Results> = depythonize(baseline).map_err(value_error)?;
+    let other: Vec<Results> = depythonize(other).map_err(value_error)?;
+    to_py(
+        py,
+        &report::compare(&baseline, &other).map_err(value_error)?,
+    )
+}
+
+/// Comparisons as CSV.
+#[pyfunction]
+fn comparison_csv(comparisons: &Bound<'_, PyAny>) -> PyResult<String> {
+    let comparisons: Vec<Comparison> = depythonize(comparisons).map_err(value_error)?;
+    Ok(report::comparison_csv(&comparisons))
+}
+
 /// Digest of results: equal digests mean bit-identical results.
 #[pyfunction]
 fn digest(results: &Bound<'_, PyAny>) -> PyResult<String> {
@@ -223,6 +247,8 @@ fn smt2020_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(summarize, module)?)?;
     module.add_function(wrap_pyfunction!(daily, module)?)?;
     module.add_function(wrap_pyfunction!(csv, module)?)?;
+    module.add_function(wrap_pyfunction!(compare, module)?)?;
+    module.add_function(wrap_pyfunction!(comparison_csv, module)?)?;
     module.add_function(wrap_pyfunction!(digest, module)?)?;
     Ok(())
 }

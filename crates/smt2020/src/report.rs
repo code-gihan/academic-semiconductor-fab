@@ -1,13 +1,14 @@
-//! Measures of run results in the papers' units, and their statistics over replications: the
-//! tables of the CLI and the web page and their CSV.
+//! Measures of run results in the papers' units, their statistics over replications and the
+//! comparison of two configurations pair by pair: the tables of the CLI and the web page and
+//! their CSV.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use des_core::{DAY, HOUR};
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{CqtReport, CqtTimes, LotKind, PeriodReport, Results, StateTimes};
+use crate::sim::{CqtReport, CqtTimes, Error, LotKind, PeriodReport, Results, StateTimes};
 
 named_enum! {
     /// What a measure describes.
@@ -483,6 +484,120 @@ pub fn summarize(replications: &[Results]) -> Vec<Summary> {
         .collect()
 }
 
+/// A measure of two configurations whose replications share their random numbers pair by pair.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Comparison {
+    pub period: String,
+    pub scope: Scope,
+    pub item: String,
+    pub kind: Option<LotKind>,
+    pub measure: Measure,
+    /// Pairs with the measure in both runs.
+    pub n: usize,
+    /// Means over those pairs of the baseline and of the other configuration.
+    pub baseline: f64,
+    pub other: f64,
+    /// Mean difference (other − baseline), sample standard deviation of the differences and
+    /// half-width of the 95% confidence interval of the mean difference (Student t); `None` for
+    /// one pair.
+    pub difference: f64,
+    pub std: Option<f64>,
+    pub ci95: Option<f64>,
+}
+
+/// Every measure of `other` against `baseline`, the results of two configurations' replications
+/// paired by seed and replication (common random numbers): each run needs exactly one partner.
+/// Pairing removes the variation the two runs share, so the interval of the difference is
+/// narrower than the two intervals suggest.
+pub fn compare(baseline: &[Results], other: &[Results]) -> Result<Vec<Comparison>, Error> {
+    let pair = |results: &Results| (results.seed, results.replication);
+    let unpaired = |results: &Results, side: &str| {
+        Error(format!(
+            "the runs do not pair: {side} seed {} replication {}",
+            results.seed, results.replication
+        ))
+    };
+    let mut partners = HashMap::new();
+    for (index, results) in baseline.iter().enumerate() {
+        if partners.insert(pair(results), index).is_some() {
+            return Err(unpaired(results, "a second baseline run of"));
+        }
+    }
+    type Key = (String, Scope, String, Option<LotKind>, Measure);
+    let key = |metric: Metric| -> (Key, f64) {
+        (
+            (
+                metric.period,
+                metric.scope,
+                metric.item,
+                metric.kind,
+                metric.measure,
+            ),
+            metric.value,
+        )
+    };
+    let mut keys: Vec<Key> = Vec::new();
+    let mut values: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut index: HashMap<Key, usize> = HashMap::new();
+    let mut paired = HashSet::new();
+    for results in other {
+        let Some(&partner) = partners.get(&pair(results)) else {
+            return Err(unpaired(results, "no baseline run of"));
+        };
+        if !paired.insert(pair(results)) {
+            return Err(unpaired(results, "a second run of"));
+        }
+        let theirs: HashMap<Key, f64> = metrics(results).into_iter().map(key).collect();
+        for (key, value) in metrics(&baseline[partner]).into_iter().map(key) {
+            let Some(&their) = theirs.get(&key) else {
+                continue;
+            };
+            match index.get(&key) {
+                Some(&at) => values[at].push((value, their)),
+                None => {
+                    index.insert(key.clone(), keys.len());
+                    keys.push(key);
+                    values.push(vec![(value, their)]);
+                }
+            }
+        }
+    }
+    if paired.len() < baseline.len() {
+        let results = baseline
+            .iter()
+            .find(|results| !paired.contains(&pair(results)))
+            .expect("an unpaired baseline run");
+        return Err(unpaired(results, "no run to compare with baseline"));
+    }
+    Ok(keys
+        .into_iter()
+        .zip(values)
+        .map(|((period, scope, item, kind, measure), pairs)| {
+            let n = pairs.len();
+            let mean =
+                |side: fn(&(f64, f64)) -> f64| pairs.iter().map(side).sum::<f64>() / n as f64;
+            let differences: Vec<f64> = pairs
+                .iter()
+                .map(|(baseline, other)| other - baseline)
+                .collect();
+            let (difference, std, ci95) = statistics(&differences);
+            Comparison {
+                period,
+                scope,
+                item,
+                kind,
+                measure,
+                n,
+                baseline: mean(|pair| pair.0),
+                other: mean(|pair| pair.1),
+                difference,
+                std,
+                ci95,
+            }
+        })
+        .collect())
+}
+
 /// Mean, sample standard deviation and half-width of the 95% confidence interval of the mean
 /// (Student t) of at least one value; no deviation or interval for one.
 fn statistics(values: &[f64]) -> (f64, Option<f64>, Option<f64>) {
@@ -648,6 +763,33 @@ pub fn csv(summaries: &[Summary]) -> String {
             summary.mean,
             optional(summary.std),
             optional(summary.ci95),
+        );
+    }
+    csv
+}
+
+/// Comparisons as CSV: `period,scope,item,kind,measure,n,baseline,other,difference,std,ci95`;
+/// empty cells for none.
+pub fn comparison_csv(comparisons: &[Comparison]) -> String {
+    let mut csv =
+        String::from("period,scope,item,kind,measure,n,baseline,other,difference,std,ci95\n");
+    for comparison in comparisons {
+        let optional =
+            |value: Option<f64>| value.map(|value| value.to_string()).unwrap_or_default();
+        let _ = writeln!(
+            csv,
+            "{},{},{},{},{},{},{},{},{},{},{}",
+            field(&comparison.period),
+            comparison.scope.name(),
+            field(&comparison.item),
+            comparison.kind.map(LotKind::name).unwrap_or_default(),
+            comparison.measure.name(),
+            comparison.n,
+            comparison.baseline,
+            comparison.other,
+            comparison.difference,
+            optional(comparison.std),
+            optional(comparison.ci95),
         );
     }
     csv
@@ -867,6 +1009,44 @@ mod tests {
                 .iter()
                 .all(|summary| summary.std.is_none() && summary.ci95.is_none())
         );
+    }
+
+    #[test]
+    fn comparisons_pair_replications() {
+        let second = |ct| Results {
+            replication: 1,
+            ..results(ct, 0)
+        };
+        let baseline = [results([10.0, 20.0], 0), second([12.0, 20.0])];
+        // In the other order: pairs go by seed and replication.
+        let other = [second([13.0, 20.0]), results([11.0, 20.0], 0)];
+        let comparisons = compare(&baseline, &other).unwrap();
+        let ct = comparisons
+            .iter()
+            .find(|comparison| {
+                comparison.scope == Scope::Lot
+                    && comparison.item == "part_1"
+                    && comparison.measure == Measure::CtMeanD
+            })
+            .unwrap();
+        // Pairs (10, 11) and (12, 13): the difference is 1 in both, without spread.
+        assert_eq!(
+            (ct.n, ct.baseline, ct.other, ct.difference, ct.std, ct.ci95),
+            (2, 11.0, 12.0, 1.0, Some(0.0), Some(0.0))
+        );
+        let csv = comparison_csv(&comparisons);
+        assert!(
+            csv.starts_with(
+                "period,scope,item,kind,measure,n,baseline,other,difference,std,ci95\n"
+            )
+        );
+        assert!(csv.contains("Period_1,lot,part_1,PRL,ct_mean_d,2,11,12,1,0,0\n"));
+        // Every run needs exactly one partner.
+        assert!(compare(&baseline, &other[..1]).is_err());
+        assert!(compare(&baseline[..1], &other).is_err());
+        let twice = [results([10.0, 20.0], 0), results([11.0, 20.0], 0)];
+        assert!(compare(&twice, &other).is_err());
+        assert!(compare(&baseline, &twice).is_err());
     }
 
     #[test]

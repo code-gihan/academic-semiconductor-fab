@@ -240,6 +240,21 @@ class Summary(TypedDict):
     std: Optional[float]
     ci95: Optional[float]
 
+class Comparison(TypedDict):
+    """A measure of two configurations, their replications paired by seed and replication."""
+
+    period: str
+    scope: str
+    item: str
+    kind: Optional[str]
+    measure: str
+    n: int
+    baseline: float
+    other: float
+    difference: float
+    std: Optional[float]
+    ci95: Optional[float]
+
 Results = dict[str, Any]
 """Seed and replication, reporting periods (with every CQT segment and its steps), days, lot
 counts, end, events and QTS flow factors of a finished run (README)."""
@@ -303,6 +318,14 @@ def daily(results: list[Results]) -> list[DaySummary]:
 
 def csv(summaries: list[Summary]) -> str:
     """Summaries as CSV: period,scope,item,kind,measure,n,mean,std,ci95."""
+
+def compare(baseline: list[Results], other: list[Results]) -> list[Comparison]:
+    """Every measure of `other` against `baseline`, replications paired by seed and replication:
+    the means and the mean difference (other - baseline) with its 95% confidence interval.
+    Raises ValueError if a run has no partner."""
+
+def comparison_csv(comparisons: list[Comparison]) -> str:
+    """Comparisons as CSV: period,scope,item,kind,measure,n,baseline,other,difference,std,ci95."""
 
 def digest(results: Results) -> str:
     """Equal digests mean bit-identical results."""
