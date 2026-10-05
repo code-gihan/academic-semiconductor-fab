@@ -96,6 +96,34 @@ test("reset starts over", () => {
   assert.equal(simulation.config().queue_time, "qtcr");
 });
 
+test("the dataset info names and indexes the dataset", () => {
+  const info = dataset.info();
+  assert.deepEqual([info.tool_groups.length, info.segments.length], [106, 66]);
+  for (const segment of info.segments) {
+    const steps = info.routes[segment.route].steps;
+    assert.ok(segment.entry < segment.exit && segment.exit < steps.length);
+    assert.ok(segment.tool_groups.includes(steps[segment.exit].tool_group));
+  }
+  assert.deepEqual(
+    info.tool_groups.filter((group) => group.stepper).map((group) => group.name).sort(),
+    ["LithoTrack_FE_115", "LithoTrack_FE_95"],
+  );
+  assert.deepEqual(info.periods.slice(0, 2).map((period) => period.name), ["WarmUp", "Period_1"]);
+});
+
+test("rankings, batch starts and a warm-up configure a run", () => {
+  const info = dataset.info();
+  const segment = info.segments[0];
+  const exit = info.routes[segment.route].steps[segment.exit].tool_group;
+  const ranking = { [info.tool_groups[exit].name]: [{ qt_within: HOUR }, "priority", "fifo"] };
+  const strategy = { ...config, warm_up: 2 * DAY, batch_start_within: HOUR, ranking };
+  const simulation = new Simulation(dataset, strategy);
+  assert.deepEqual(simulation.config().ranking, ranking);
+  simulation.run();
+  const periods = simulation.results().periods.map((period) => period.name);
+  assert.deepEqual(periods, ["WarmUp", "Period_1", "Drain"]);
+});
+
 test("summaries and CSV", () => {
   const summaries = summarize([results, results]);
   const completed = summaries.find(
@@ -114,4 +142,8 @@ test("bad input is rejected", () => {
   );
   assert.throws(() => new Simulation(dataset, config).run(Number.NaN), /not a time/);
   assert.throws(() => new Dataset(new Uint8Array([1, 2, 3])), /not an SMT2020 dataset file/);
+  const ranking = (criteria) => new Simulation(dataset, { horizon: DAY, ranking: { Nope: criteria } });
+  assert.throws(() => ranking(["fifoo"]), /unknown variant/);
+  assert.throws(() => ranking(["fifo"]), /no tool group Nope/);
+  assert.throws(() => new Simulation(dataset, { horizon: DAY, warm_up: DAY }), /warm-up/);
 });

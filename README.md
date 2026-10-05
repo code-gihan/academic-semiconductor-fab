@@ -4,16 +4,21 @@ SMT2020 반도체 FAB 테스트베드(데이터셋 4종) 시뮬레이터. DES �
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: 구현 단계 1–9 완료([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
+현재: 구현 단계 1–10 완료, 11–14 진행 예정([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
 
 ## Quick Start
 
 ### 웹 페이지
 
-영어 기본, 한국어 전환(선택은 브라우저에 저장). 넓은 화면은 2열(왼쪽 설정, 오른쪽 진행·결과, 열마다 스크롤), 좁은 화면은 1열. 항목 설명은 `?` 버튼으로 펼친다.
+영어 기본, 한국어 전환(선택은 브라우저에 저장). 화면은 상단 탭의 보기 4개(설정·실행·결과·Python, 주소 `#setup`·`#run`·`#results`·`#python`)로 나뉜다.
 
-1. 설정: 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`), 운영 전략(CQT 디스패칭, [P2] Table 3 Stopping, [P1] 엔지니어링 lot 전략, super hot 예약), 실행 설정(종료 시각(일), 복제 수, seed, 부하 계수)을 고르고 실행한다.
-2. 진행: 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 전체(완료 복제, 경과·남은 시간(진행률 비례 추정))와 복제별(대기, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 완료 시간) 진행 막대. FAB 지도: 따라가는 복제(처음 진행을 보고한 복제, 완료되면 실행 중인 다른 복제, 복제 클릭으로 변경)의 투입·완료 lot·WIP와 영역별 툴그룹 타일(채움 = 작업 중 툴 비율, 아래 막대 = 고장·PM 툴 비율, 숫자 = 대기 lot, 툴팁 = 상태별 툴 수). 갱신은 약 250 ms(벽시계)마다. 실행 중 설정 잠금, 취소는 워커 종료.
+1. 설정: 왼쪽에 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`)과 실행 설정(종료 시각, 웜업(비우면 데이터셋 기간), 복제 수, seed, 부하 계수), 오른쪽에 운영 전략.
+   - CQT 디스패칭(논문 QTCR·QTS, 자체 순위 없는 툴그룹에 적용).
+   - 툴그룹별 lot 순위: 기준 조합(최대 6개, 순서 변경, `qt_within`은 시간 입력)을 만들어 체크한 툴그룹에 적용. 표는 CQT 구간 툴그룹만·영역·이름으로 거르고, 툴그룹의 현재 순위(데이터셋 또는 자체)를 보여 주며 클릭하면 조합으로 불러온다.
+   - 배치 조기 시작(CQT 여유 h), Stopping(CQT 구간 툴그룹별 한도·기본값, [P2] Table 3 프리셋), 엔지니어링 lot(EF·CAtE 구간·CoT 임계 직접 입력과 [P1] 값, 엔지니어링 lot 없는 데이터셋은 안내), super hot 예약.
+   - 설정 JSON: 보기·복사·붙여넣어 적용(Python·CLI와 같은 스키마). 적용·실행 전에 코어가 설정을 검증해 오류를 보여 준다.
+   - 넓은 화면은 왼쪽 열이 고정되고, 좁은 화면은 1열(전략 뒤에 실행 버튼, 아래에 고정).
+2. 진행: 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 전체(완료 복제, 경과·남은 시간(진행률 비례 추정))와 복제별(대기, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 완료 시간) 진행 막대. FAB 지도: 따라가는 복제(처음 진행을 보고한 복제, 완료되면 실행 중인 다른 복제, 복제 클릭으로 변경)의 투입·완료 lot·WIP와 영역별 툴그룹 타일(채움 = 작업 중 툴 비율, 위쪽 막대 = 고장·PM 툴 비율, 숫자 = 대기 lot, 툴팁 = 상태별 툴 수). 갱신은 약 250 ms(벽시계)마다. 실행 중 설정 잠금(실행 탭 표시), 취소는 워커 종료. 실행이 끝나면 결과 보기로 넘어간다.
 3. 결과: 실행 설정, 보고 기간별 핵심 지표(투입·완료 lot, 평균 WIP, PRL ACT·ONTIME, ERL ACT, CQT %VL), 차트 4종(lot 유형별 ACT, CQT %VL, 영역 가동률, 툴그룹 상태별 시간 비율(가동률 상위 15개 또는 전체)), 표 6종(lot 유형, FF 분위수, 제품 × 유형, CQT 구간, 영역, 툴그룹), 복제별 digest·성능. 값은 복제 평균 ± 95% 신뢰구간(툴그룹 외 차트는 오차 막대, 툴팁에 수치). JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
 4. Python 패키지: 페이지의 pip 명령·플랫폼별 wheel.
 
@@ -106,7 +111,7 @@ target/release/smt2020 run www/data/ds2.bin --config config.json
 target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 ```
 
-- `run`: 데이터셋 파일 또는 `.asd` 디렉터리. 설정은 `--config`(JSON, [실행 설정](#실행-설정)) 위에 옵션을 덮어쓴다: `--horizon` 일, `--seed`, `--load`, `--reserve-super-hot`, `--queue-time none|qtcr|qts`, `--stopping TG=FRONT/TOTAL`(반복), `--stopping-default FRONT/TOTAL`, `--engineering base|engineering_first|cate:생산h/엔지니어링h|cot:N`. `--replications N`(설정의 replication부터 번호), `--threads`(기본 가용 코어), `--period`(표 기간), `--json`·`--csv` 출력.
+- `run`: 데이터셋 파일 또는 `.asd` 디렉터리. 설정은 `--config`(JSON, [실행 설정](#실행-설정)) 위에 옵션을 덮어쓴다: `--horizon` 일, `--warm-up` 일, `--seed`, `--load`, `--reserve-super-hot`, `--queue-time none|qtcr|qts`, `--batch-start-within` 시간, `--stopping TG=FRONT/TOTAL`(반복), `--stopping-default FRONT/TOTAL`, `--engineering base|engineering_first|cate:생산h/엔지니어링h|cot:N`. 기준 목록(`ranking`)은 `--config`로. `--replications N`(설정의 replication부터 번호), `--threads`(기본 가용 코어), `--period`(표 기간), `--json`·`--csv` 출력.
 - 웹 JSON의 `replications[i].config`를 `--config`로 실행하면 digest가 같다(결정성 확인).
 
 ## 참고 문헌·데이터
@@ -186,7 +191,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 
 ### 디스패칭
 
-- 순위 = `tool.txt` FWLRANK 순: rank_HP(우선순위 높은 순, hot lot이 setup 유발 가능) → rank_RSETUP(필요 setup 시간 짧은 순) → rank_FIFO(대기열 도착 순, DS1·3) 또는 rank_CR(작은 순, DS2·4). DS3·4는 LithoTrack_FE_95·115, Planar 6 TG에 rank_RSETUP 없음. 동률은 lot 번호.
+- 순위 = `tool.txt` FWLRANK 순: rank_HP(우선순위 높은 순, hot lot이 setup 유발 가능) → rank_RSETUP(필요 setup 시간 짧은 순) → rank_FIFO(대기열 도착 순, DS1·3) 또는 rank_CR(작은 순, DS2·4). DS3·4는 LithoTrack_FE_95·115, Planar 6 TG에 rank_RSETUP 없음. 동률은 lot 번호. 설정의 기준 목록(`ranking`)이 있는 TG는 그 목록([운영 전략](#운영-전략)).
 - CR = (납기 − t) / 잔여 공정시간. 잔여 공정시간 = 현재 스텝부터 기대 스텝시간 합(load + 공정 + unload, 샘플링 확률 가중, 반송·리워크 제외). 스텝별 a + b·n 형태 접미합을 사전 계산.
 - 자격 필터: LTL 전용 툴, setup run, super hot 예약, Stopping 보류. CAtE·CoT는 순위 맨 앞 유형 키.
 - rule_LSSU(Implant_128·132·91, setup 그룹 Implant_Gas, MINRUN 7): setup 변경 후 해당 setup으로 7 lot 처리 전 재변경 금지(run 길이는 변경 시 MINRUN, lot 시작마다 1 감소). 미완 run 중엔 hot lot도 setup을 바꾸지 않는 lot만 자격(AutoSched 문서: run 최소 lot 보장), 없으면 대기(가정). 현 setup lot이 더 올 수 없으면 대기 해제(가정).
@@ -201,7 +206,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 
 ### 통계
 
-- 기간: WarmUp(2018, 종료 시 초기화) + 연도별 누적 Period_1–7(`period.txt`, REPORT = yes만 보고, RESET = yes면 종료 시 초기화). 종료 시각에서 기간을 잘라 보고 후 초기화, 이후 완료분은 Drain 보고.
+- 기간: WarmUp(2018, 종료 시 초기화) + 연도별 누적 Period_1–7(`period.txt`, REPORT = yes만 보고, RESET = yes면 종료 시 초기화). 종료 시각에서 기간을 잘라 보고 후 초기화, 이후 완료분은 Drain 보고. 설정 `warm_up` = w이면 WarmUp [0, w)·Period_1 [w, 종료 시각)으로 대체(짧은 실험용, 확장).
 - lot: TH, CT 평균·표준편차·분위수, ONTIME%(완료 ≤ 납기), FF = CT/RPT. 제품 × 유형(PRL·PHL·super hot·ERL·EHL)별.
 - RPT = 빈 fab 기대 CT = Σ 샘플링 가중(스텝시간 + 반송) + 리워크 기대분(루프별 q/(1−q)회 재수행, q = 샘플링 × 리워크 확률). [P1] Table II 대비 −0.1 ~ +1.1%(10제품 확인).
 - WIP 시간가중 평균.
@@ -215,13 +220,16 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 |---|---|---|
 | BASE | P1·P2 | 데이터 순위(HP → RSETUP → FIFO/CR) |
 | QTCR | P2 식 (1) | 순위 HP → RSETUP → QTCR → FIFO/CR. d^Q = C_s + CQT. t ≤ d^Q면 (d^Q − t)/Σ_{k=i..n} p_k, 아니면 (d^Q − t)·Σ_{k=i..n} p_k. 작을수록 우선, 구간 밖 lot = +∞ |
-| QTS | P2 식 (2)–(6) | QTCR 자리에 d_i. TW_k = (FF_k − 1)p_k, TT = Σ_{k=s+1..n−1} FF_k·p_k + TW_n, Ratio_k = FF_k·p_k/TT(k < n), TW_n/TT(k = n), FCQT_k = CQT·Ratio_k, d_i = C_s + Σ_{k=s+1..i} FCQT_k − p_i(i < n), d_n = C_s + CQT. FF_k = 평균 스텝 CT/p_k(스텝 CT = 이전 수행 스텝 종료 ~ 본 스텝 종료, 종료 시각까지 기간, 미측정 1). 설정에 FF가 없으면 같은 설정에서 CQT 규칙·Stopping만 뺀 사전 실행으로 산출(가정) |
+| QTS | P2 식 (2)–(6) | QTCR 자리에 d_i. TW_k = (FF_k − 1)p_k, TT = Σ_{k=s+1..n−1} FF_k·p_k + TW_n, Ratio_k = FF_k·p_k/TT(k < n), TW_n/TT(k = n), FCQT_k = CQT·Ratio_k, d_i = C_s + Σ_{k=s+1..i} FCQT_k − p_i(i < n), d_n = C_s + CQT. FF_k = 평균 스텝 CT/p_k(스텝 CT = 이전 수행 스텝 종료 ~ 본 스텝 종료, 종료 시각까지 기간, 미측정 1). 설정에 FF가 없으면 같은 설정에서 QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 사전 실행으로 산출(가정) |
 | Stopping | P2 §3.2·Table 3 | TG별 임계 ①TG 앞 CQT lot(대기·공정 중) ②① + 구간 안에서 그 TG에 아직 도달하지 않은 CQT lot(이동 중 포함, TG당 lot 1회). 구간의 TG(시작 다음 ~ 종료 스텝) 중 하나라도 도달하면 구간 시작 스텝에서 보류, 임계가 해제되는 사건(도달 → 미도달)에서 재평가. 직전 구간 종료 = 현 구간 시작이면 무시. BASE·QTCR·QTS와 결합. 임계(①/②) LithoTrack_FE_95: none 1000/1000, high 90/130, medium 60/95, small 50/85. FE_115: 1000/1000, 90/220, 70/150, 55/125. 그 외 1000/1000. 임계 > 0. 배치·LSSU TG 임계가 최소 배치·run을 채울 lot까지 보류하면 교착 → 미완료 오류 |
 | EF | P1 §V | 우선순위 EHL 25, PHL 20, ERL 15, PRL 10(전 TG) |
 | CAtE | P1 §V | LithoTrack_FE_95·115만. 생산·엔지니어링 구간 (lp, le) h 교대, t=0 생산 구간부터(가정). DS3 (151.2, 16.8)·(75.6, 8.4)·(21.6, 2.4), DS4 (134.6, 33.4)·(67.2, 16.8)·(19.2, 4.8). 구간 유형 lot만, 없으면 다른 유형 |
 | CoT | P1 §V | LithoTrack_FE_95·115만. 대기 EL ≥ 한계(100·50·25·10)면 그 수만큼 EL 우선. 그 외 PL 우선, PL 없으면 EL(가정) |
+| 기준 목록 | 확장 | TG별 기준 1–6개(`ranking`, 서로 다름, 앞이 우선, 동률은 lot 번호, CAtE·CoT 유형 키 뒤). 기준(작을수록 우선): `priority`·`least_setup`·`fifo`·`critical_ratio`(= rank_HP·RSETUP·FIFO·CR), `due_date`(납기), `shortest_step`(현 스텝 기대 시간), `least_remaining`(잔여 기대 작업), `qtcr`·`qts`(위 식), `qt_deadline`(C_s + CQT), `{"qt_within": h}`(QT 여유 ≤ h인 lot 먼저, 나머지 동률). QT 기준은 구간 밖 lot을 맨 뒤로. 목록 없는 TG = 데이터 순위 + `queue_time` |
+| QT 배치 시작 | 확장 | `batch_start_within` = h: 최소 미만 배치도 후보 lot 하나의 QT 여유가 h 이하가 되면 시작. 보류 시 그 시각에 깨우기 사건 예약 |
 
 - QTCR·QTS의 p_k = CR과 같은 기대 스텝시간.
+- QT 여유 = C_s + CQT − t − 종료 스텝 시작까지의 기대 작업(Σ_{k=i..n−1} p_k, 종료 스텝 대기 중 0). 음수면 이미 늦음.
 - [P2] complex CQT(441 구간)는 추가 구간의 CQT 값이 미공개라 재현 불가, default만 재현.
 
 ## API
@@ -231,6 +239,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 | 기능 | Rust `smt2020` | JS `fab_wasm` | Python `smt2020` |
 |---|---|---|---|
 | 데이터셋 | `Dataset::from_bytes`·`to_bytes`, `asd::{load, load_with_orders, orders}` | `new Dataset(bytes)` | `Dataset(bytes)`, `load_dataset(source)` |
+| 데이터셋 정보 | `Dataset::info()` | `dataset.info()` | `dataset.info()` |
 | 생성(시각 0) | `Simulation::new(Arc<Dataset>, Config)` | `new Simulation(dataset, config)` | `Simulation(dataset, config)` |
 | 실행·일시정지 | `run(until)`, `run_observed(until, 관찰자)` | `run(until?, onProgress?)` | `run(until=None, on_progress=None)` |
 | 상태 | `progress()`, `lots()`, `tools()`, `tool_groups()` | `progress()`, `lots()`, `tools()`, `toolGroups()` | `progress()`, `lots()`, `tools()`, `tool_groups()` |
@@ -245,8 +254,8 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 - 종료 조건: `horizon` 전에 시작하는 lot만 투입하고, 투입 lot이 전부 완료되면 끝난다(`finished`, 이후 `run`은 그대로). 종료 시각 + 365일에 lot이 남으면 실행 실패(이후 `run`도 같은 오류). 그 밖의 조건(시각, WIP, 완료 수 등)은 `until`·관찰자로 일시정지해 판단한다.
 - 상태: 진행·일시정지 중 언제든 읽는다. 아래 [진행·상태·결과](#진행상태결과).
 - `results()`: 끝난 실행의 결과(전에는 오류). `reset(config)`: 같은 데이터셋으로 시각 0부터(설정을 생략하면 같은 설정, 거부되면 그대로 유지).
-- 운영 전략은 설정(`queue_time`, `stopping`, `engineering`, `reserve_super_hot`)으로 정하고 `reset`으로 바꾼다. 실행 중 변경은 없다(대기열 항목이 도착 시 순위 입력을 고정).
-- QTS + `flow_factors` 없음: 같은 설정에서 CQT 규칙·Stopping을 뺀 1차 실행이 FF를 측정한 뒤 본 실행(진행 `pass` 0/2 → 1/2). `until`·결과는 본 실행 기준이고, 설정 검증은 생성 시 함께 한다.
+- 운영 전략은 설정(`queue_time`, `ranking`, `batch_start_within`, `stopping`, `engineering`, `reserve_super_hot`)으로 정하고 `reset`으로 바꾼다. 실행 중 변경은 없다(대기열 항목이 도착 시 순위 입력을 고정).
+- QTS(규칙 또는 `qts` 기준) + `flow_factors` 없음: 같은 설정에서 QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 1차 실행이 FF를 측정한 뒤 본 실행(진행 `pass` 0/2 → 1/2). `until`·결과는 본 실행 기준이고, 설정 검증은 생성 시 함께 한다.
 - 병렬: JS는 Web Worker마다, Python은 스레드마다(실행 중 GIL 해제), Rust는 스레드마다(`Simulation: Send`) `Simulation`을 둔다. 데이터셋은 공유한다.
 
 ### 실행 설정
@@ -256,16 +265,20 @@ JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생�
 | 필드 | 기본값 | 내용 |
 |---|---|---|
 | `horizon` | 필수 | 종료 시각. 이전에 시작하는 lot만 투입하고 이후 Drain |
+| `warm_up` | null | 웜업. 보고 기간을 WarmUp [0, warm_up)·Period_1 [warm_up, horizon)로 대체 |
 | `seed`, `replication` | 1, 0 | 난수 스트림. 같은 값이면 전략이 달라도 공통 난수 |
 | `load` | 1 | 부하 계수(투입 시각 ÷ load, 납기 오프셋 유지) |
 | `reserve_super_hot` | false | super hot lot 다음 툴 예약 |
-| `queue_time` | `"none"` | `"none"`·`"qtcr"`·`"qts"` |
+| `queue_time` | `"none"` | `"none"`·`"qtcr"`·`"qts"`. 기준 목록 없는 TG의 FIFO/CR 앞 |
 | `flow_factors` | null | QTS FF(route × 스텝, null = 미측정 = 1). 없으면 1차 실행으로 산출 |
+| `ranking` | `{}` | TG별 기준 목록: `{"Diffusion_FE_120": [{"qt_within": 7200000}, "priority", "fifo"]}` |
+| `batch_start_within` | null | QT 배치 시작 임계(ms) |
 | `stopping` | null | `{"limits": {"LithoTrack_FE_95": {"front": 50, "total": 85}}, "default": {"front": 1000, "total": 1000}}` |
 | `engineering` | `"base"` | `"base"`·`"engineering_first"`·`{"cate": {"production": ms, "engineering": ms}}`·`{"cot": {"trigger": 100}}` |
 
 ### 진행·상태·결과
 
+- 데이터셋 정보(`info()`): `areas`, `tool_groups[]` {`name`, `area`, `tools`, `batching`, `setup_runs`, `stepper`, `ranks`(데이터 순위 기준)}, `parts[]` {`name`, `family`, `engineering`, `route`}, `routes[]` {`name`, `steps[]` {`name`, `tool_group`}}, `segments[]`(CQT 구간, route·시작 스텝 순 = 구간 index) {`route`, `entry`, `exit`, `limit`, `litho`, `tool_groups`}, `periods[]` {`name`, `start`, `report`, `reset`}. 숫자 참조는 각 목록의 index.
 - 진행(`Progress`, 관찰자에게 1일 1회, `progress()`·`run`의 반환): `pass`·`passes`(QTS 1차 실행이면 0/2·1/2), `now`(그 pass의 시각), `horizon`, `released`·`completed`(투입·완료 lot), `wip`, `finished`.
 - lot(`lots()`, 재공 lot을 id 순으로): `id`(투입 순번, 0부터), `part`, `kind`, `priority`(디스패칭 우선순위, EF 반영), `wafers`, `release`, `due`, `step`·`step_name`·`tool_group`(이동 중이면 향하는, 대기·공정 중이면 그 스텝), `state`(`moving`·`queued`·`processing`), `tool`(공정 중인 툴 id), `cqt_exit`·`cqt_deadline`(진행 중인 CQT 구간의 종료 스텝과 그 스텝의 한도 내 최종 시작 시각).
 - 툴(`tools()`, id = 데이터셋의 툴그룹 순서대로 매긴 번호): `id`, `tool_group`, `state`(`down`·`pm`·`setup`·`process`·`load`·`unload`·`idle`, cascading job이 겹치면 앞선 상태), `setup`(현재 setup), `lots`(공정 중인 lot id, cascading은 job 2개).
@@ -440,7 +453,8 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터셋 파일: postcard + 매직·형식 버전. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
 - 바인딩: 코어 메서드를 그대로 위임하고 값은 serde 스키마로 변환한다(JS: serde-wasm-bindgen JSON 호환 객체, `i64`는 경계에서 f64(2^53 ms까지 정확). 설정은 JSON 값을 거쳐 읽어 미지 필드를 검출(구조체 역직렬화는 알려진 속성만 읽음). Python: pythonize dict·list). 관찰자 반환값 `false`/`False`만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 1일마다 다시 잡아 관찰자·Ctrl-C를 처리한다.
-- 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬, 워커마다 `Simulation`). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 워커의 관찰자는 직전 보고 후 250 ms(벽시계)가 지난 첫 1일 관측에서 일시정지하고, 워커는 진행·`toolGroups()`를 `postMessage`한 뒤 이어 실행한다(일시정지는 결과 불변, 타이머 없음). 메인 스레드는 복제별 상태를 갱신하고 프레임마다 최대 1회(`requestAnimationFrame`) 그린다. 취소는 `worker.terminate()`.
+- 웹 모듈: `main.js`(실행 조율·결과), `views.js`(해시 라우터, `hashchange`만), `setup.js`(시나리오 = 데이터셋·설정·복제 수, 데이터셋 파일 1회 fetch·디코딩해 `info()`, 설정 JSON, 실행 전 `new Simulation`으로 코어 검증), `strategy.js`(전략 편집기, 설정 객체를 직접 고침), `progress.js`(진행·FAB 지도), `results.js`·`charts.js`(결과), `worker.js`(복제 실행), `i18n.js`(`data-i18n` 문구, `data-i18n-attr` 속성), `motion.js`.
+- 웹 실행: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬, 워커마다 `Simulation`). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 워커의 관찰자는 직전 보고 후 250 ms(벽시계)가 지난 첫 1일 관측에서 일시정지하고, 워커는 진행·`toolGroups()`를 `postMessage`한 뒤 이어 실행한다(일시정지는 결과 불변, 타이머 없음). 메인 스레드는 복제별 상태를 갱신하고 프레임마다 최대 1회(`requestAnimationFrame`) 그린다. 취소는 `worker.terminate()`.
 - 애니메이션: anime.js 4.5.0(MIT, `www/vendor/`에 동봉, 외부 CDN 미사용)으로 등장·수치 증가·막대 성장·설명 펼침. `prefers-reduced-motion`이면 생략(최종 화면 동일).
 - 다국어: 언어별 문구 파일(`www/locales/*.js`, `en.js`와 같은 키, `{이름}` 자리 표시, 빠진 키는 영어). 정적 요소는 `data-i18n` 키, 동적 문구는 `t()`, 숫자는 `Intl.NumberFormat`. 상태 문구·결과는 언어 전환 시 다시 그린다. 언어 추가 = 문구 파일 + `www/i18n.js`의 `LANGUAGES`·`MESSAGES` 등록.
 - 빌드: release 프로필 `lto = true`, `codegen-units = 1`, `panic = "abort"`(네이티브 약 7% 단축, 결과 동일).
@@ -457,6 +471,9 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 7. `cli`: convert(.bin)·run·validate, 데이터셋 파일, 측정값·복제 요약, 사건 구동 종료·관측 — 완료
 8. `wasm` API·웹 UI·결정성 확인·성능 측정 — 완료
 9. 재사용 코어: `Simulation`(단계 실행·일시정지·상태 조회·재시작), JS·Python 포장(같은 API), wheel 배포 — 완료
+10. 운영 전략 실험: 툴그룹별 순위 기준(`ranking`, 기준 11종), QT 배치 시작(깨우기 사건), 웜업 설정, 데이터셋 정보(`info()`), 웹 보기 분리(설정·실행·결과·Python)와 전략 편집기·설정 JSON — 완료
+11. 분석 데이터: 구간별·스텝별 CQT 분해, 일별 결과, 기록·재생 — 진행 예정
+12. 분석 보기(드릴다운·시계열·히트맵), 13. 시나리오 비교(쌍대 CI·스윕), 14. 공유·게시 — 진행 예정
 
 ## 로컬 빌드·테스트
 

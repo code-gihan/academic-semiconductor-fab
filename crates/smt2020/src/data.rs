@@ -23,6 +23,17 @@ impl Dataset {
         postcard::to_extend(self, bytes).expect("datasets encode to memory")
     }
 
+    /// The CQT segments in route and step order, as (route, entrance step, its CQT): their
+    /// position is the segment index of the dataset info.
+    pub fn segments(&self) -> impl Iterator<Item = (RouteId, StepIndex, Cqt)> + '_ {
+        self.routes.iter().enumerate().flat_map(|(route, spec)| {
+            spec.steps
+                .iter()
+                .enumerate()
+                .filter_map(move |(step, spec)| spec.cqt.map(|cqt| (route, step, cqt)))
+        })
+    }
+
     /// Decodes a dataset file of this [`FORMAT_VERSION`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, FormatError> {
         let error = |message: String| FormatError(message);

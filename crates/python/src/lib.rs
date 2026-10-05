@@ -37,6 +37,11 @@ impl Dataset {
             .map(|dataset| Self(Arc::new(dataset)))
             .map_err(value_error)
     }
+
+    /// Its areas, tool groups, parts, routes, CQT segments and periods, by name and index.
+    fn info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, &self.0.info())
+    }
 }
 
 /// The dataset `source` names: "ds1" to "ds4" are the bundled datasets, any other source is the

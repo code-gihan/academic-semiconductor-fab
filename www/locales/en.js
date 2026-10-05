@@ -3,34 +3,36 @@
 export default {
   "meta.title": "SMT2020 Fab Simulator",
   "meta.description":
-    "Run the SMT2020 semiconductor fab testbed in your browser: a Rust discrete-event simulator compiled to WebAssembly.",
+    "Run the SMT2020 semiconductor fab testbed in your browser and try operating strategies against critical queue-time violations: a Rust discrete-event simulator compiled to WebAssembly.",
 
   "header.title": "SMT2020 Fab Simulator",
   "header.tagline":
-    "Simulate the four SMT2020 semiconductor fab testbeds and compare operating strategies, right in your browser.",
+    "Simulate the four SMT2020 wafer fab testbeds and try your own operating strategies against critical queue-time violations, right in your browser.",
   "header.language": "Language",
-  "header.python": "Python package",
   "header.source": "Source code",
-  "hint.show": "Explain",
+  "view.label": "Views",
+  "view.setup": "Setup",
+  "view.run": "Run",
+  "view.results": "Results",
+  "view.python": "Python",
   "intro.local":
     "The discrete-event simulator is written in Rust and runs here as WebAssembly, one replication per CPU thread. Nothing is uploaded.",
-  "welcome.heading": "Simulate a wafer fab in three steps",
-  "welcome.dataset": "Choose one of the four SMT2020 datasets.",
-  "welcome.strategy": "Pick the operating strategy and the run settings; ? explains each option.",
-  "welcome.run":
-    "Run: follow every replication and the fab's tool groups live, then compare the results in charts and tables.",
+  "setup.intro":
+    "Choose a dataset and the run settings, define the operating strategy on the right, then run.",
 
   "dataset.heading": "Dataset",
   "dataset.ds1.name": "DS1 · HV/LM",
   "dataset.ds1.description":
-    "High volume, low mix: 2 products, 1,043 tools, periodic releases, FIFO dispatching.",
+    "High volume, low mix: 2 products, 1,043 tools, periodic releases, FIFO dispatching, 66 CQT segments.",
   "dataset.ds2.name": "DS2 · LV/HM",
   "dataset.ds2.description":
-    "Low volume, high mix: 10 products, 913 tools, a release list with a due date per lot, critical ratio dispatching.",
+    "Low volume, high mix: 10 products, 913 tools, a release list with a due date per lot, critical ratio dispatching, 264 CQT segments.",
   "dataset.ds3.name": "DS3 · HV/LM + engineering",
-  "dataset.ds3.description": "DS1 plus engineering lots of 1 product (40 a week): 1,135 tools.",
+  "dataset.ds3.description":
+    "DS1 plus engineering lots of 1 product (40 a week): 1,135 tools, 107 CQT segments.",
   "dataset.ds4.name": "DS4 · LV/HM + engineering",
-  "dataset.ds4.description": "DS2 plus engineering lots of 3 products (80 a week): 1,068 tools.",
+  "dataset.ds4.description":
+    "DS2 plus engineering lots of 3 products (80 a week): 1,068 tools, 372 CQT segments.",
   "dataset.file.name": "Your dataset file",
   "dataset.file.description":
     "A .bin file made with smt2020 convert, for example from other order files of a model.",
@@ -38,40 +40,16 @@ export default {
   "dataset.common":
     "All four: 105 tool groups in 11 areas, 10,000 wafer starts a week (400 production lots of 25 wafers) and an initial WIP.",
 
-  "strategy.heading": "Operating strategy",
-  "strategy.queueTime.label": "CQT dispatching",
-  "strategy.queueTime.none": "None (BASE)",
-  "strategy.queueTime.qtcr": "QTCR: queue time critical ratio",
-  "strategy.queueTime.qts": "QTS: queue time scheduling",
-  "strategy.queueTime.hint":
-    "A critical queue time (CQT) limits the wait between two steps. QTCR serves first the lots whose time left to the limit is short against their remaining work; QTS gives every step a deadline from flow factors measured in a pre-run, so a replication takes about twice as long.",
-  "strategy.stopping.label": "Stopping",
-  "strategy.stopping.none": "Off",
-  "strategy.stopping.high": "High limits (90/130 · 90/220)",
-  "strategy.stopping.medium": "Medium limits (60/95 · 70/150)",
-  "strategy.stopping.small": "Small limits (50/85 · 55/125)",
-  "strategy.stopping.hint":
-    "Holds a lot at the start of a CQT interval while a stepper group of the interval (LithoTrack_FE_95 · FE_115) has too many CQT lots in queue or in process (first limit), or also on their way to it (second limit).",
-  "strategy.engineering.label": "Engineering lots",
-  "strategy.engineering.none": "BASE (no engineering lots)",
-  "strategy.engineering.base": "BASE: priorities of the data",
-  "strategy.engineering.ef": "EF: engineering first",
-  "strategy.engineering.cate":
-    "CAtE {cycle} h: {production} h production, {engineering} h engineering",
-  "strategy.engineering.cateSet":
-    "CAtE {cycle} h ({dataset}): {production} h production, {engineering} h engineering",
-  "strategy.engineering.cot": "CoT {trigger}: engineering first from {trigger} waiting",
-  "strategy.engineering.hint":
-    "How production and engineering lots share the fab (DS3, DS4). EF ranks EHL > PHL > ERL > PRL at every tool group. At the steppers, CAtE alternates production and engineering windows, and CoT serves production first until N engineering lots wait, then those N.",
-  "strategy.superHot.label": "Reserve tools for super hot lots",
-  "strategy.superHot.short": "Super hot reservation",
-  "strategy.superHot.hint":
-    "When a super hot lot starts processing, one tool of its next step waits for it (AutoSched rule_HotLotFIRST). Off in the AutoSched models.",
-
   "settings.heading": "Run settings",
+  "settings.explain": "What the settings mean",
   "settings.horizon.label": "End time (days)",
   "settings.horizon.hint":
-    "Simulated days from 2018-01-01. The first year is warm-up and each further year is reported; lots released before the end time are then completed.",
+    "Simulated days from 2018-01-01. Lots released before the end time are then completed.",
+  "settings.warmUp.label": "Warm-up (days)",
+  "settings.warmUp.placeholder": "dataset: 365",
+  "settings.warmUp.dataset": "dataset (365 days)",
+  "settings.warmUp.hint":
+    "Days whose statistics are discarded. Given, the results report WarmUp and Period_1 (from the warm-up to the end time), so shorter runs measure a steady fab. Empty: the dataset's periods, a one-year warm-up and then a period per year.",
   "settings.replications.label": "Replications",
   "settings.replications.hint":
     "Independent runs with different random numbers, {threads} at a time on this device. Results show their mean and 95% confidence interval.",
@@ -79,8 +57,134 @@ export default {
   "settings.seed.hint":
     "Runs with the same seed and replication number draw the same random numbers, so strategies are compared under equal conditions.",
   "settings.load.label": "Load factor",
-  "settings.load.hint":
-    "Scales the release rate: 1 is the planned 10,000 wafers a week, 0.9 is 90%.",
+  "settings.load.hint": "Scales the release rate: 1 is the planned 10,000 wafers a week, 0.9 is 90%.",
+
+  "strategy.heading": "Operating strategy",
+  "strategy.intro":
+    "Lots in a critical queue-time (CQT) segment must start its last step within a limit after its first step ends. Combine the papers' rules with your own: how each tool group ranks its queue, when batches start, where lots are held, and how engineering lots are served.",
+  "strategy.queueTime.label": "CQT dispatching (papers)",
+  "strategy.queueTime.none": "None (BASE)",
+  "strategy.queueTime.qtcr": "QTCR: queue time critical ratio",
+  "strategy.queueTime.qts": "QTS: queue time scheduling",
+  "strategy.queueTime.hint":
+    "Ranked before FIFO or CR at every tool group without its own ranking below. QTCR serves first the lots whose time left to the limit is short against their remaining work; QTS gives every step a deadline from flow factors measured in a pre-run, so a replication takes about twice as long.",
+  "strategy.stopping.label": "Stopping",
+  "strategy.stopping.high": "[P2] high (90/130 · 90/220)",
+  "strategy.stopping.medium": "[P2] medium (60/95 · 70/150)",
+  "strategy.stopping.small": "[P2] small (50/85 · 55/125)",
+  "strategy.engineering.label": "Engineering lots",
+  "strategy.engineering.cate":
+    "CAtE {cycle} h: {production} h production, {engineering} h engineering",
+  "strategy.engineering.cateSet":
+    "CAtE {cycle} h ({dataset}): {production} h production, {engineering} h engineering",
+  "strategy.engineering.cot": "CoT {trigger}: engineering first from {trigger} waiting",
+  "strategy.engineering.hint":
+    "How production and engineering lots share the fab. EF ranks EHL > PHL > ERL > PRL at every tool group. At the steppers, CAtE alternates production and engineering windows, and CoT serves production first until N engineering lots wait, then those N.",
+  "strategy.superHot.label": "Reserve tools for super hot lots",
+  "strategy.superHot.short": "Super hot reservation",
+  "strategy.superHot.hint":
+    "When a super hot lot starts processing, one tool of its next step waits for it (AutoSched rule_HotLotFIRST). Off in the AutoSched models.",
+
+  "ranking.heading": "Lot ranking per tool group",
+  "ranking.hint":
+    "A tool group serves the lot that ranks first: by the first criterion, ties by the next, then by release order. Build a ranking, tick tool groups and apply it; groups without their own ranking keep the dataset's, with the CQT rule above before FIFO or CR.",
+  "ranking.builder": "Ranking to apply",
+  "ranking.empty": "Add criteria below.",
+  "ranking.add": "Add a criterion…",
+  "ranking.apply": "Apply to {count} ticked",
+  "ranking.inherit": "Dataset ranking for ticked",
+  "ranking.remove": "Remove",
+  "ranking.earlier": "Rank earlier",
+  "ranking.later": "Rank later",
+  "ranking.hours": "Hours",
+  "ranking.help": "What the criteria mean",
+  "ranking.onlyCqt": "Only tool groups in CQT segments",
+  "ranking.area": "Area",
+  "ranking.allAreas": "All areas",
+  "ranking.search": "Search tool groups",
+  "ranking.selectAll": "Tick all shown",
+  "ranking.summary": "{shown} tool groups shown · {custom} with their own ranking",
+  "ranking.load": "Load into the ranking to apply",
+  "ranking.withRule": "{rule} before FIFO/CR",
+  "ranking.custom": "own ranking at {count} tool groups",
+  "ranking.dataset": "dataset",
+  "ranking.col.group": "Tool group",
+  "ranking.col.area": "Area",
+  "ranking.col.tools": "Tools",
+  "ranking.col.segments": "CQT segments",
+  "ranking.col.ranking": "Ranking",
+  "rule.qtcr": "QTCR",
+  "rule.qts": "QTS",
+  "tag.batch": "batch",
+  "tag.setupRuns": "setup runs",
+  "tag.stepper": "stepper",
+
+  "criterion.priority": "Priority",
+  "criterion.least_setup": "Least setup",
+  "criterion.fifo": "FIFO",
+  "criterion.critical_ratio": "Critical ratio",
+  "criterion.due_date": "Earliest due date",
+  "criterion.shortest_step": "Shortest step",
+  "criterion.least_remaining": "Least remaining work",
+  "criterion.qtcr": "QTCR",
+  "criterion.qts": "QTS",
+  "criterion.qt_deadline": "Earliest CQT end",
+  "criterion.qt_within": "CQT slack ≤ {hours} h first",
+  "criterion.qt_within.prefix": "CQT slack ≤",
+  "criterion.qt_within.suffix": "h first",
+  "criterion.priority.hint": "Higher priority first: super hot, hot, then regular lots.",
+  "criterion.least_setup.hint": "The lot needing the shortest setup on the free tool first.",
+  "criterion.fifo.hint": "The lot that arrived in the queue first.",
+  "criterion.critical_ratio.hint":
+    "Time left to the due date over the expected remaining work, smallest first.",
+  "criterion.due_date.hint": "The earliest due date first.",
+  "criterion.shortest_step.hint": "The lot with the shortest expected time at this step first.",
+  "criterion.least_remaining.hint": "The lot with the least expected work left to its last step first.",
+  "criterion.qtcr.hint":
+    "[P2] queue time critical ratio: time left to the CQT limit over the work up to the segment's last step; lots outside CQT segments last.",
+  "criterion.qts.hint":
+    "[P2] queue time scheduling: the latest start of this step that keeps the limit, from measured flow factors; lots outside CQT segments last.",
+  "criterion.qt_deadline.hint":
+    "The earliest end of the CQT segment (its start plus the limit); lots outside CQT segments last.",
+  "criterion.qt_within.hint":
+    "Lots with at most this much CQT slack first, all others alike, so the next criterion decides among them. Slack: the segment's end, less now, less the expected work before its last step starts.",
+
+  "batch.heading": "Early batch start",
+  "batch.hint":
+    "Lots waiting at a batch tool (diffusion furnaces) for batch partners lose CQT slack. With this on, a batch below its minimum size starts once one of its lots has at most this much slack left; the furnace is woken at that time.",
+  "batch.label": "Start below the minimum at a CQT slack of",
+  "batch.unit": "h",
+  "batch.groups": "Batch tool groups: {groups}.",
+  "batch.summary": "at ≤ {hours} h of slack",
+
+  "stopping.hint":
+    "Holds a lot at the start of a CQT segment while a tool group of the segment has too many CQT lots in queue or in process (first limit), or also on their way to it (second limit). On the default segments of DS2 the paper's stepper limits never bind; lower limits do.",
+  "stopping.enable": "Hold lots at CQT segment starts",
+  "stopping.front": "In front",
+  "stopping.total": "With those on the way",
+  "stopping.default": "All other tool groups",
+  "stopping.tableHint":
+    "Limits per tool group of the CQT segments; empty fields keep 1,000/1,000 (no holding). Limits low enough to hold the lots a batch or setup run needs can stall the fab.",
+  "stopping.summary": "limits at {count} tool groups",
+
+  "engineering.absent": "This dataset has no engineering lots.",
+  "engineering.base": "BASE: priorities of the data",
+  "engineering.engineering_first": "EF: engineering first",
+  "engineering.cate": "CAtE: alternating windows at the steppers",
+  "engineering.cot": "CoT: engineering campaigns at the steppers",
+  "engineering.production": "Production window (h)",
+  "engineering.engineering": "Engineering window (h)",
+  "engineering.trigger": "Waiting engineering lots",
+  "engineering.presets": "[P1] values…",
+
+  "json.heading": "Configuration as JSON",
+  "json.hint":
+    "The same configuration runs in Python (smt2020.Simulation) and on the command line (smt2020 run --config); times are in ms. Edit it here and apply it, or copy it.",
+  "json.apply": "Apply",
+  "json.copy": "Copy",
+  "json.copied": "Copied.",
+  "json.applied": "Applied.",
+  "json.notObject": "the configuration must be a JSON object",
 
   "run.start": "Run simulation",
   "run.cancel": "Cancel",
@@ -95,11 +199,13 @@ export default {
   "status.done": "Finished in {time}.",
   "status.cancelled": "Cancelled.",
   "status.error": "The run failed: {message}",
+  "status.invalid": "The configuration is not valid: {message}",
   "error.noFile": "Choose a dataset file first.",
   "error.fetch": "Could not load {file} (HTTP {status}).",
   "error.worker": "A Web Worker failed: {message}",
 
   "progress.heading": "Run",
+  "progress.empty": "No run yet: set up a scenario and press Run simulation.",
   "progress.done": "Replications done: {done}/{count}",
   "progress.day": "day {day} of {days}",
   "progress.drain": "finishing released lots ({wip} left)",
@@ -118,16 +224,17 @@ export default {
   "live.completed": "Lots completed",
   "live.wip": "WIP (lots)",
   "live.hint":
-    "A tile per tool group, by area: its fill is the share of tools busy (setup, load, processing, unload), the red bar the share down or in PM, the number the lots queued. Point at a tile for details; choose a replication above to follow it.",
+    "A tile per tool group, by area: its fill is the share of tools busy (setup, load, processing, unload), the red bar at its top the share down or in PM, the number the lots queued. Point at a tile for details; choose a replication above to follow it.",
   "tip.tools": "{tools} tools · {queue} lots queued",
   "tip.busy": "busy: setup {setup}, process {process}, load {load}, unload {unload}",
   "tip.idle": "idle {idle} · down {down} · PM {pm}",
 
   "results.heading": "Results",
+  "results.empty": "No results yet: they appear here when a run is done.",
   "results.period": "Report period",
   "results.periodOption": "{name} · days {start}–{end}",
   "results.periodHint":
-    "WarmUp: the first year. Period_n: from the second year through year n + 1, cut at the end time. Drain: lots completed after the end time.",
+    "WarmUp: the warm-up (the first year, or the warm-up setting). Period_n: from the warm-up's end through year n + 1, cut at the end time; with a warm-up setting, Period_1 runs to the end time. Drain: lots completed after the end time.",
   "results.downloadJson": "Download JSON",
   "results.downloadCsv": "Download CSV",
   "results.ci":
@@ -224,6 +331,8 @@ export default {
   "python.linux": "Linux (x86-64)",
   "python.macos": "macOS (Intel and Apple silicon)",
   "python.quickstart": "Quick start",
+  "python.config":
+    "A configuration from the Setup view's JSON runs as it is: Python, JavaScript and the page share one simulator and one schema.",
   "python.more": "Every function and option, also for JavaScript and Rust:",
 
   "footer.references": "References",

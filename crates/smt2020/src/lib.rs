@@ -61,10 +61,12 @@ macro_rules! named_enum {
 
 pub mod asd;
 pub mod data;
+pub mod info;
 pub mod report;
 mod rng;
 pub mod sim;
 
 pub use data::Dataset;
 pub use des_core::{DAY, HOUR, MINUTE, SECOND, Time};
-pub use sim::{Config, Progress, Results, Simulation};
+pub use info::DatasetInfo;
+pub use sim::{Config, Criterion, Progress, Results, Simulation};

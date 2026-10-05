@@ -25,6 +25,11 @@ impl Dataset {
             .map(|dataset| Dataset(Arc::new(dataset)))
             .map_err(|error| JsError::new(&error.to_string()))
     }
+
+    /// Its areas, tool groups, parts, routes, CQT segments and periods, by name and index.
+    pub fn info(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.0.info())
+    }
 }
 
 /// One run of a configuration on a dataset from time 0, advanced in steps (`smt2020::Simulation`).
@@ -36,7 +41,7 @@ impl Simulation {
     /// The simulation of `config` on `dataset` at time 0.
     #[wasm_bindgen(constructor)]
     pub fn new(dataset: &Dataset, config: JsValue) -> Result<Simulation, JsValue> {
-        smt2020::Simulation::new(Arc::clone(&dataset.0), config_of(config)?)
+        smt2020::Simulation::new(Arc::clone(&dataset.0), json_of(config)?)
             .map(Simulation)
             .map_err(error)
     }
@@ -50,7 +55,7 @@ impl Simulation {
         let config = if config.is_undefined() || config.is_null() {
             self.0.config().clone()
         } else {
-            config_of(config)?
+            json_of(config)?
         };
         self.0.reset(config).map_err(error)
     }
@@ -136,12 +141,12 @@ fn error(error: sim::Error) -> JsValue {
     JsError::new(&error.to_string()).into()
 }
 
-/// A configuration, read through a JSON value: struct deserialization reads only the known
-/// properties of an object, so an unknown field would pass unnoticed instead of failing as it
-/// does in the other interfaces.
-fn config_of(config: JsValue) -> Result<smt2020::Config, JsValue> {
-    let config: serde_json::Value = from_js(config)?;
-    serde_json::from_value(config).map_err(|error| JsError::new(&error.to_string()).into())
+/// An input, read through a JSON value: struct deserialization reads only the known properties of
+/// an object, so an unknown field would pass unnoticed instead of failing as it does in the other
+/// interfaces.
+fn json_of<T: DeserializeOwned>(value: JsValue) -> Result<T, JsValue> {
+    let value: serde_json::Value = from_js(value)?;
+    serde_json::from_value(value).map_err(|error| JsError::new(&error.to_string()).into())
 }
 
 fn from_js<T: DeserializeOwned>(value: JsValue) -> Result<T, JsValue> {

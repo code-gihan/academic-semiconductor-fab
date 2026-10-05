@@ -18,22 +18,97 @@ class Stopping(TypedDict, total=False):
     limits: dict[str, Limits]
     default: Limits
 
+Criterion = Union[
+    Literal[
+        "priority",
+        "least_setup",
+        "fifo",
+        "critical_ratio",
+        "due_date",
+        "shortest_step",
+        "least_remaining",
+        "qtcr",
+        "qts",
+        "qt_deadline",
+    ],
+    dict[str, float],
+]
+"""A lot ranking criterion, smallest value first; {"qt_within": ms} ranks the lots with at most
+that much queue-time slack first."""
+
 class _ConfigRequired(TypedDict):
     horizon: float
     """Lots planned to start before the horizon (ms) are released; the run then goes on until
     every released lot is complete."""
 
 class Config(_ConfigRequired, total=False):
+    warm_up: Optional[float]
+    """Reporting periods WarmUp [0, warm_up) and Period_1 [warm_up, horizon) instead of the
+    dataset's."""
     seed: int
     replication: int
     load: float
     reserve_super_hot: bool
     queue_time: Literal["none", "qtcr", "qts"]
     flow_factors: Optional[list[list[Optional[float]]]]
+    ranking: dict[str, list[Criterion]]
+    """Criteria per tool group (1 to 6, distinct, most significant first); other groups rank by
+    the dataset's with the queue-time rule before FIFO/CR."""
+    batch_start_within: Optional[float]
+    """A batch below its minimum size also starts once one of its lots has at most this much
+    queue-time slack (ms)."""
     stopping: Optional[Stopping]
     engineering: Union[Literal["base", "engineering_first"], dict[str, Any]]
     """"base", "engineering_first", {"cate": {"production": ms, "engineering": ms}} or
     {"cot": {"trigger": lots}}."""
+
+class ToolGroupInfo(TypedDict):
+    name: str
+    area: int
+    tools: int
+    batching: bool
+    setup_runs: bool
+    stepper: bool
+    ranks: list[Criterion]
+
+class PartInfo(TypedDict):
+    name: str
+    family: str
+    engineering: bool
+    route: int
+
+class StepInfo(TypedDict):
+    name: str
+    tool_group: int
+
+class RouteInfo(TypedDict):
+    name: str
+    steps: list[StepInfo]
+
+class SegmentInfo(TypedDict):
+    route: int
+    entry: int
+    exit: int
+    limit: int
+    litho: bool
+    tool_groups: list[int]
+
+class PeriodInfo(TypedDict):
+    name: str
+    start: int
+    report: bool
+    reset: bool
+
+class DatasetInfo(TypedDict):
+    """Indices refer to the lists: areas, tool_groups, routes; segments are in route and step
+    order."""
+
+    areas: list[str]
+    tool_groups: list[ToolGroupInfo]
+    parts: list[PartInfo]
+    routes: list[RouteInfo]
+    segments: list[SegmentInfo]
+    periods: list[PeriodInfo]
 
 # "pass" is a keyword: the functional form declares it.
 Progress = TypedDict(
@@ -105,6 +180,8 @@ class Dataset:
 
     def __init__(self, bytes: bytes) -> None:
         """Decodes a dataset file (`smt2020 convert` output) of this build's format version."""
+    def info(self) -> DatasetInfo:
+        """Its areas, tool groups, parts, routes, CQT segments and periods, by name and index."""
 
 def load_dataset(source: Union[str, PathLike[str]]) -> Dataset:
     """"ds1" to "ds4" are the bundled datasets; any other source is the path of a dataset file

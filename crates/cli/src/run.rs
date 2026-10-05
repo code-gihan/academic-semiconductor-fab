@@ -28,6 +28,9 @@ pub struct Args {
     /// Horizon in days [default: 730].
     #[arg(long)]
     horizon: Option<f64>,
+    /// Warm-up in days: reporting periods WarmUp and Period_1 instead of the dataset's.
+    #[arg(long)]
+    warm_up: Option<f64>,
     #[arg(long)]
     seed: Option<u64>,
     /// Release rate factor over the dataset plan.
@@ -39,6 +42,9 @@ pub struct Args {
     /// Queue-time rule: none, qtcr or qts.
     #[arg(long)]
     queue_time: Option<String>,
+    /// Hours of queue-time slack at which a batch below its minimum size starts.
+    #[arg(long)]
+    batch_start_within: Option<f64>,
     /// Stopping limits of a tool group, repeatable.
     #[arg(long, value_name = "GROUP=FRONT/TOTAL")]
     stopping: Vec<String>,
@@ -167,6 +173,9 @@ fn config(args: &Args) -> Result<Config, Box<dyn Error>> {
     if let Some(horizon) = args.horizon {
         config.horizon = duration(horizon, DAY)?;
     }
+    if let Some(warm_up) = args.warm_up {
+        config.warm_up = Some(duration(warm_up, DAY)?);
+    }
     if let Some(seed) = args.seed {
         config.seed = seed;
     }
@@ -181,6 +190,9 @@ fn config(args: &Args) -> Result<Config, Box<dyn Error>> {
             "qts" => QueueTimeRule::Qts,
             _ => return Err(format!("unknown queue-time rule {rule}").into()),
         };
+    }
+    if let Some(hours) = args.batch_start_within {
+        config.batch_start_within = Some(duration(hours, HOUR)?);
     }
     if !args.stopping.is_empty() || args.stopping_default.is_some() {
         let mut limits = BTreeMap::new();

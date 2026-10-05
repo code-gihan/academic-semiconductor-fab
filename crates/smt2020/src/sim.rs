@@ -25,7 +25,7 @@ use des_core::{DAY, Outcome, Time};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::data::Dataset;
+use crate::data::{Dataset, Rank};
 use fab::Fab;
 use strategy::Strategy;
 
@@ -35,6 +35,8 @@ pub use stats::{
     StateTimes, ToolGroupReport,
 };
 pub use status::{LotStatus, ToolGroupStatus, ToolStatus};
+pub use strategy::MAX_CRITERIA;
+pub(crate) use strategy::STEPPERS;
 pub use tool::ToolState;
 
 const DEFAULT_SEED: u64 = 1;
@@ -47,6 +49,10 @@ pub struct Config {
     /// horizon, after which the run continues until every released lot is complete.
     #[serde(deserialize_with = "deserialize_time")]
     pub horizon: Time,
+    /// Reporting periods WarmUp [0, warm_up) and Period_1 [warm_up, horizon) instead of the
+    /// dataset's (a one-year warm-up).
+    #[serde(default, deserialize_with = "deserialize_optional_time")]
+    pub warm_up: Option<Time>,
     /// Random number streams per (seed, replication, purpose): runs that differ only in their
     /// strategy share them (common random numbers).
     #[serde(default = "default_seed")]
@@ -60,13 +66,22 @@ pub struct Config {
     /// Super hot lots reserve a tool at their next step even where the dataset says HOTLOT = no.
     #[serde(default)]
     pub reserve_super_hot: bool,
+    /// Ranked before FIFO/CR at the tool groups without their own [`ranking`](Self::ranking).
     #[serde(default)]
     pub queue_time: QueueTimeRule,
     /// QTS flow factors per route and step, as [`Results::step_flow_factors`] of an earlier run.
-    /// Without them, a first pass of this configuration without queue-time rule and stopping
-    /// measures them.
+    /// Without them, the [`first_pass`](Self::first_pass) measures them.
     #[serde(default)]
     pub flow_factors: Option<Vec<Vec<Option<f64>>>>,
+    /// Lot ranking per tool group name: 1 to [`MAX_CRITERIA`] distinct criteria, most
+    /// significant first, then release order. Other groups rank by the dataset's criteria with
+    /// the [`queue_time`](Self::queue_time) rule before FIFO/CR.
+    #[serde(default)]
+    pub ranking: BTreeMap<String, Vec<Criterion>>,
+    /// A batch below its minimum size also starts once one of its lots has at most this much
+    /// queue-time slack left ([`Criterion::QtWithin`]).
+    #[serde(default, deserialize_with = "deserialize_optional_time")]
+    pub batch_start_within: Option<Time>,
     #[serde(default)]
     pub stopping: Option<Stopping>,
     #[serde(default)]
@@ -78,15 +93,56 @@ impl Config {
     pub fn new(horizon: Time) -> Self {
         Self {
             horizon,
+            warm_up: None,
             seed: DEFAULT_SEED,
             replication: 0,
             load: DEFAULT_LOAD,
             reserve_super_hot: false,
             queue_time: QueueTimeRule::None,
             flow_factors: None,
+            ranking: BTreeMap::new(),
+            batch_start_within: None,
             stopping: None,
             engineering: EngineeringRule::Base,
         }
+    }
+
+    /// QTS ranks somewhere: as the queue-time rule or as a criterion.
+    fn uses_qts(&self) -> bool {
+        self.queue_time == QueueTimeRule::Qts
+            || self
+                .ranking
+                .values()
+                .flatten()
+                .any(|&c| c == Criterion::Qts)
+    }
+
+    /// The pass measuring the QTS flow factors that a QTS run without them needs first: this
+    /// configuration without its queue-time controls (rule, criteria, batch starts, stopping);
+    /// a ranking left empty falls back to the dataset's (\[P2\] §3.1, assumed).
+    fn first_pass(&self) -> Option<Self> {
+        if self.flow_factors.is_some() || !self.uses_qts() {
+            return None;
+        }
+        let ranking = self
+            .ranking
+            .iter()
+            .filter_map(|(group, criteria)| {
+                let kept: Vec<Criterion> = criteria
+                    .iter()
+                    .copied()
+                    .filter(|criterion| !criterion.queue_time())
+                    .collect();
+                (!kept.is_empty()).then(|| (group.clone(), kept))
+            })
+            .collect();
+        Some(Self {
+            queue_time: QueueTimeRule::None,
+            ranking,
+            batch_start_within: None,
+            stopping: None,
+            ..self.clone()
+        })
     }
 }
 
@@ -112,6 +168,15 @@ fn deserialize_time<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Time, 
     time(f64::deserialize(deserializer)?).map_err(D::Error::custom)
 }
 
+fn deserialize_optional_time<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Time>, D::Error> {
+    Option::<f64>::deserialize(deserializer)?
+        .map(time)
+        .transpose()
+        .map_err(D::Error::custom)
+}
+
 /// Critical queue time dispatching of \[P2\] §3.1, ranked after least setup and before FIFO/CR.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +187,75 @@ pub enum QueueTimeRule {
     Qtcr,
     /// Queue time slack, eq. (2)–(6), with [`Config::flow_factors`].
     Qts,
+}
+
+/// A lot ranking criterion: the lot with the smaller value goes first. The queue-time criteria
+/// rank the lots outside CQT segments last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Criterion {
+    /// Higher dispatching priority (`rank_HP`).
+    Priority,
+    /// Least setup time needed on the tool (`rank_RSETUP`).
+    LeastSetup,
+    /// Earliest arrival in the queue (`rank_FIFO`).
+    Fifo,
+    /// Smallest critical ratio: time to the due date over the expected remaining work
+    /// (`rank_CR`).
+    CriticalRatio,
+    /// Earliest due date.
+    DueDate,
+    /// Shortest expected duration of the step.
+    ShortestStep,
+    /// Least expected remaining work.
+    LeastRemaining,
+    /// Smallest queue time critical ratio (\[P2\] eq. (1)).
+    Qtcr,
+    /// Earliest latest start of the step (\[P2\] QTS, eq. (2)–(6)).
+    Qts,
+    /// Earliest end of the CQT segment (start + limit).
+    QtDeadline,
+    /// Lots with at most this much queue-time slack first, the others alike. Slack = segment end
+    /// − now − expected work before the exit step starts.
+    QtWithin(#[serde(deserialize_with = "deserialize_time")] Time),
+}
+
+impl Criterion {
+    /// Serialized name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Priority => "priority",
+            Self::LeastSetup => "least_setup",
+            Self::Fifo => "fifo",
+            Self::CriticalRatio => "critical_ratio",
+            Self::DueDate => "due_date",
+            Self::ShortestStep => "shortest_step",
+            Self::LeastRemaining => "least_remaining",
+            Self::Qtcr => "qtcr",
+            Self::Qts => "qts",
+            Self::QtDeadline => "qt_deadline",
+            Self::QtWithin(_) => "qt_within",
+        }
+    }
+
+    /// Ranks by CQT segments.
+    pub fn queue_time(self) -> bool {
+        matches!(
+            self,
+            Self::Qtcr | Self::Qts | Self::QtDeadline | Self::QtWithin(_)
+        )
+    }
+}
+
+impl From<Rank> for Criterion {
+    fn from(rank: Rank) -> Self {
+        match rank {
+            Rank::Priority => Self::Priority,
+            Rank::LeastSetup => Self::LeastSetup,
+            Rank::Fifo => Self::Fifo,
+            Rank::CriticalRatio => Self::CriticalRatio,
+        }
+    }
 }
 
 /// Kanban-type stopping at CQT segment entrances (\[P2\] §3.2). Limits low enough to hold the lots
@@ -215,8 +349,8 @@ const DRAIN_LIMIT: Time = 365 * DAY;
 /// [`tool_groups`](Self::tool_groups) read the fab's state, and [`reset`](Self::reset) starts over;
 /// the finished run has its [`results`](Self::results). Pausing leaves the results unchanged.
 ///
-/// QTS without flow factors runs in two passes: the configuration without queue-time rule and
-/// stopping measures the flow factors (\[P2\] §3.1, assumed), then the configured run takes them.
+/// QTS without flow factors runs in two passes: the [`Config::first_pass`] measures the flow
+/// factors, then the configured run takes them.
 pub struct Simulation {
     data: Arc<Dataset>,
     config: Config,
@@ -230,30 +364,25 @@ pub struct Simulation {
 impl Simulation {
     /// The simulation of `config` on `data` at time 0.
     pub fn new(data: Arc<Dataset>, config: Config) -> Result<Self, Error> {
-        let measure_first =
-            config.queue_time == QueueTimeRule::Qts && config.flow_factors.is_none();
-        let fab = if measure_first {
-            // The configured run's rules are checked now, not after the first pass.
-            let unmeasured: Vec<Vec<Option<f64>>> = data
-                .routes
-                .iter()
-                .map(|route| vec![None; route.steps.len()])
-                .collect();
-            Strategy::new(&data, &config, Some(&unmeasured))?;
-            let first = Config {
-                queue_time: QueueTimeRule::None,
-                stopping: None,
-                ..config.clone()
-            };
-            Fab::new(Arc::clone(&data), &first, None)?
-        } else {
-            Fab::new(Arc::clone(&data), &config, config.flow_factors.as_deref())?
+        let first = config.first_pass();
+        let fab = match &first {
+            Some(first) => {
+                // The configured run's rules are checked now, not after the first pass.
+                let unmeasured: Vec<Vec<Option<f64>>> = data
+                    .routes
+                    .iter()
+                    .map(|route| vec![None; route.steps.len()])
+                    .collect();
+                Strategy::new(&data, &config, Some(&unmeasured))?;
+                Fab::new(Arc::clone(&data), first, None)?
+            }
+            None => Fab::new(Arc::clone(&data), &config, config.flow_factors.as_deref())?,
         };
         Ok(Self {
             data,
             config,
             pass: 0,
-            passes: if measure_first { 2 } else { 1 },
+            passes: if first.is_some() { 2 } else { 1 },
             engine: des_core::Simulation::new(fab),
             failure: None,
         })
@@ -378,7 +507,7 @@ impl Progress {
 mod tests {
     use super::*;
     use crate::data::tiny;
-    use des_core::HOUR;
+    use des_core::{HOUR, MINUTE};
     use std::ops::ControlFlow::{Break, Continue};
 
     fn parse(json: &str) -> Result<Config, serde_json::Error> {
@@ -406,8 +535,10 @@ mod tests {
         assert_eq!(time(-1.5).unwrap(), -2);
         assert!(time(f64::NAN).is_err());
         let config = parse(
-            r#"{"horizon": 1e9, "seed": 7, "replication": 3, "load": 0.9,
+            r#"{"horizon": 1e9, "warm_up": 1e8, "seed": 7, "replication": 3, "load": 0.9,
                 "reserve_super_hot": true, "queue_time": "qtcr",
+                "ranking": {"Etch_1": [{"qt_within": 3600000.4}, "priority", "fifo"]},
+                "batch_start_within": 1800000,
                 "stopping": {"limits": {"LithoTrack_FE_95": {"front": 50, "total": 85}}},
                 "engineering": {"cate": {"production": 544320000.0000001, "engineering": 6.048e7}}}"#,
         )
@@ -416,12 +547,22 @@ mod tests {
             config,
             Config {
                 horizon: 1_000_000_000,
+                warm_up: Some(100_000_000),
                 seed: 7,
                 replication: 3,
                 load: 0.9,
                 reserve_super_hot: true,
                 queue_time: QueueTimeRule::Qtcr,
                 flow_factors: None,
+                ranking: BTreeMap::from([(
+                    "Etch_1".into(),
+                    vec![
+                        Criterion::QtWithin(HOUR),
+                        Criterion::Priority,
+                        Criterion::Fifo
+                    ]
+                )]),
+                batch_start_within: Some(30 * 60_000),
                 stopping: Some(Stopping {
                     limits: BTreeMap::from([(
                         "LithoTrack_FE_95".into(),
@@ -438,6 +579,15 @@ mod tests {
                 },
             }
         );
+        // The serialized form reads back as it is.
+        assert_eq!(
+            parse(&serde_json::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+        assert_eq!(
+            serde_json::to_value(&config.ranking).unwrap(),
+            serde_json::json!({"Etch_1": [{"qt_within": 3_600_000}, "priority", "fifo"]})
+        );
         assert_eq!(
             parse(r#"{"horizon": 1, "engineering": "engineering_first", "queue_time": "qts"}"#)
                 .unwrap()
@@ -447,6 +597,7 @@ mod tests {
         // Misspelled fields and unknown rules are errors, not defaults.
         assert!(parse(r#"{"horizon": 1, "sead": 2}"#).is_err());
         assert!(parse(r#"{"horizon": 1, "queue_time": "qtx"}"#).is_err());
+        assert!(parse(r#"{"horizon": 1, "ranking": {"Etch_1": ["fifoo"]}}"#).is_err());
         assert!(parse(r#"{"seed": 2}"#).is_err());
     }
 
@@ -617,6 +768,131 @@ mod tests {
     }
 
     #[test]
+    fn a_qts_criterion_also_measures_flow_factors_first() {
+        let ranking = |criteria: Vec<Criterion>| BTreeMap::from([("Etch_1".into(), criteria)]);
+        let config = Config {
+            ranking: ranking(vec![Criterion::Qts, Criterion::Fifo]),
+            ..Config::new(2 * DAY)
+        };
+        let mut sim = simulation(config.clone());
+        assert_eq!(sim.progress().passes, 2);
+        sim.run(None).unwrap();
+        // The first pass ranks without the queue-time criteria.
+        let mut first = simulation(Config {
+            ranking: ranking(vec![Criterion::Fifo]),
+            ..Config::new(2 * DAY)
+        });
+        first.run(None).unwrap();
+        let mut given = simulation(Config {
+            flow_factors: Some(first.results().unwrap().step_flow_factors),
+            ..config
+        });
+        assert_eq!(given.progress().passes, 1);
+        given.run(None).unwrap();
+        assert_eq!(sim.results().unwrap(), given.results().unwrap());
+    }
+
+    #[test]
+    fn a_warm_up_replaces_the_reporting_periods() {
+        let mut sim = simulation(Config {
+            warm_up: Some(DAY),
+            ..Config::new(3 * DAY)
+        });
+        sim.run(None).unwrap();
+        let periods: Vec<_> = sim
+            .results()
+            .unwrap()
+            .periods
+            .iter()
+            .map(|period| (period.name.clone(), period.start, period.end))
+            .collect();
+        assert_eq!(
+            periods,
+            [
+                ("WarmUp".into(), 0, DAY),
+                ("Period_1".into(), DAY, 3 * DAY),
+                ("Drain".into(), 3 * DAY, 3 * DAY)
+            ]
+        );
+    }
+
+    /// [`tiny`] with a batch furnace after the etch step and a 2 h CQT from etch to furnace:
+    /// lots of 25 wafers every 10 h, batches of 50 to 100 wafers.
+    fn tiny_batch() -> Dataset {
+        use crate::data::{
+            BatchCriterion, BatchSize, Cqt, Dist, Rank, Rule, Step, ToolGroup, Unit,
+        };
+        let mut data = tiny();
+        data.lots.clear();
+        data.streams[0].interval = 10 * HOUR;
+        data.streams[0].count = 3;
+        data.tool_groups[0].breakdowns.clear();
+        data.tool_groups[0].pms.clear();
+        data.tool_groups.push(ToolGroup {
+            name: "Furnace_1".into(),
+            area: 0,
+            location: 0,
+            tools: 1,
+            load: 0,
+            unload: 0,
+            cascading: false,
+            batching: Some(BatchCriterion::SameRouteStep),
+            rule: Rule::HotLotFirst,
+            ranks: vec![Rank::Fifo],
+            wake_least_setup: false,
+            breakdowns: Vec::new(),
+            pms: Vec::new(),
+        });
+        let etch = &mut data.routes[0].steps[0];
+        etch.setup = None;
+        etch.time = Dist::Constant(10 * MINUTE);
+        etch.cqt = Some(Cqt {
+            until: 1,
+            limit: 2 * HOUR,
+        });
+        data.routes[0].steps.push(Step {
+            name: "2".into(),
+            tool_group: 1,
+            unit: Unit::Batch,
+            time: Dist::Constant(HOUR),
+            cascade_interval: None,
+            batch: Some(BatchSize { min: 50, max: 100 }),
+            setup: None,
+            sampling: 1.0,
+            rework: None,
+            dedicate_to: None,
+            cqt: None,
+        });
+        data
+    }
+
+    #[test]
+    fn batches_start_below_their_minimum_on_queue_time_slack() {
+        let data = Arc::new(tiny_batch());
+        let cqt = |batch_start_within| {
+            let config = Config {
+                batch_start_within,
+                ..Config::new(DAY)
+            };
+            let mut sim = Simulation::new(Arc::clone(&data), config).unwrap();
+            sim.run(None).unwrap();
+            sim.results().unwrap().periods[0].cqt_rest
+        };
+        // The etch ends at 12 min: the first lot waits for the second, 10 h later.
+        let waited = cqt(None);
+        assert_eq!(
+            (waited.completed, waited.violated, waited.violation),
+            (3, 1, 8 * HOUR)
+        );
+        // With 30 min of slack left, the first two lots start alone; the last one never waits.
+        let started = cqt(Some(30 * MINUTE));
+        assert_eq!(
+            (started.completed, started.violated, started.slack),
+            (3, 0, 3 * HOUR)
+        );
+    }
+
+    #[test]
     fn bad_configurations_fail_at_once() {
         assert_eq!(error(Config::new(0)), "the horizon must be positive");
         let flow_factors = Config {
@@ -627,6 +903,33 @@ mod tests {
             error(flow_factors),
             "flow factors apply to the QTS rule only"
         );
+        for warm_up in [0, DAY] {
+            let config = Config {
+                warm_up: Some(warm_up),
+                ..Config::new(DAY)
+            };
+            assert_eq!(
+                error(config),
+                "the warm-up must lie between 0 and the horizon"
+            );
+        }
+        let ranking = |group: &str, criteria: Vec<Criterion>| Config {
+            ranking: BTreeMap::from([(group.into(), criteria)]),
+            ..Config::new(DAY)
+        };
+        assert_eq!(
+            error(ranking("Nope", vec![Criterion::Fifo])),
+            "no tool group Nope"
+        );
+        assert_eq!(
+            error(ranking("Etch_1", Vec::new())),
+            "the ranking of Etch_1 needs 1 to 6 criteria"
+        );
+        let batch = Config {
+            batch_start_within: Some(0),
+            ..Config::new(DAY)
+        };
+        assert_eq!(error(batch), "queue-time thresholds must be positive");
         let cate = Config {
             engineering: EngineeringRule::Cate {
                 production: HOUR,

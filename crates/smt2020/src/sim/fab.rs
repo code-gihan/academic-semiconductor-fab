@@ -10,7 +10,7 @@ use super::dispatch::Key;
 use super::plan::{Plan, releases_before};
 use super::routes::Routes;
 use super::stats::{LotKind, PeriodReport, Results, Stats};
-use super::strategy::{QueueTime, Stopping, Strategy};
+use super::strategy::{Stopping, Strategy};
 use super::tool::{STATES, Tool, Work};
 use super::{Config, DRAIN_LIMIT, Error};
 use crate::data::{
@@ -46,6 +46,8 @@ pub(super) enum Event {
         pm: usize,
     },
     PmDone(ToolId),
+    /// A batch held below its minimum size may start now ([`Config::batch_start_within`]).
+    BatchWake(ToolGroupId),
     /// End of the reporting period with this index.
     PeriodEnd(usize),
     /// [`DRAIN_LIMIT`] after the horizon: the run stops unfinished.
@@ -116,31 +118,46 @@ pub(super) struct Waiting {
     pub serial: u64,
     pub queued_at: Time,
     pub due: Time,
-    /// Expected remaining work from this step (critical ratio).
+    /// Expected remaining work from this step (critical ratio, least remaining).
     pub remaining: f64,
+    /// Expected duration of this step (shortest step).
+    pub step_time: f64,
     pub setup: Option<StepSetup>,
     /// Lot-to-lens dedication: the only tool that may process the lot here.
     pub dedicated: Option<ToolId>,
     /// Batch compatibility key (batch steps).
     pub batch: Option<usize>,
-    pub urgency: Urgency,
+    /// Queue-time inputs of a lot in a CQT segment.
+    pub cqt: Option<WaitingCqt>,
     /// The lot enters a CQT segment here, so stopping limits apply.
     pub entering: bool,
     /// Held by stopping, as of the group's current dispatch.
     pub held: bool,
 }
 
-/// Queue-time urgency inputs of a waiting lot.
+/// Queue-time inputs of a waiting lot in a CQT segment.
 #[derive(Clone, Copy)]
-pub(super) enum Urgency {
-    /// No queue-time rule.
-    None,
-    /// Outside CQT segments: ranks after every constrained lot.
-    Outside,
-    /// QTCR: segment end date and expected work up to the exit step.
-    Qtcr { deadline: Time, work: f64 },
-    /// QTS: latest start of the step.
-    Qts(f64),
+pub(super) struct WaitingCqt {
+    /// End of the segment: the exit step must start by then.
+    pub deadline: Time,
+    /// Expected work from this step through the exit step (QTCR).
+    pub work: f64,
+    /// Expected work from this step until the exit step starts (queue-time slack).
+    pub before_exit: f64,
+    /// QTS latest start of this step; 0 without QTS flow factors (no QTS ranking then).
+    pub latest: f64,
+}
+
+impl WaitingCqt {
+    /// Queue-time slack at `now`: segment end − now − expected work before the exit step.
+    pub(super) fn slack(&self, now: Time) -> f64 {
+        (self.deadline - now) as f64 - self.before_exit
+    }
+
+    /// First time the slack is at most `within`.
+    pub(super) fn within_from(&self, within: Time) -> Time {
+        ((self.deadline - within) as f64 - self.before_exit).ceil() as Time
+    }
 }
 
 #[derive(Default)]
@@ -151,6 +168,10 @@ pub(super) struct Group {
     pub reservation: Option<Reservation>,
     /// CoT: engineering lots still to start in the current campaign.
     pub campaign: u32,
+    /// Earliest start of a batch held by the current dispatch for its queue-time slack alone.
+    pub batch_due: Option<Time>,
+    /// Earliest pending [`Event::BatchWake`].
+    pub wake: Option<Time>,
 }
 
 struct Period {
@@ -209,22 +230,41 @@ impl Fab {
         let plan = Plan::new(&data, config.horizon, config.load)?;
 
         let mut periods = Vec::new();
-        for (index, period) in data.periods.iter().enumerate() {
-            let next = data
-                .periods
-                .get(index + 1)
-                .map_or(Time::MAX, |next| next.start);
-            if period.start >= config.horizon {
-                break;
+        match config.warm_up {
+            None => {
+                for (index, period) in data.periods.iter().enumerate() {
+                    let next = data
+                        .periods
+                        .get(index + 1)
+                        .map_or(Time::MAX, |next| next.start);
+                    if period.start >= config.horizon {
+                        break;
+                    }
+                    let end = next.min(config.horizon);
+                    // The window ending at the horizon always closes; the drain gets its own.
+                    periods.push(Period {
+                        name: period.name.clone(),
+                        end,
+                        report: period.report,
+                        reset: period.reset || end == config.horizon,
+                    });
+                }
             }
-            let end = next.min(config.horizon);
-            // The window ending at the horizon always closes; the drain gets its own.
-            periods.push(Period {
-                name: period.name.clone(),
-                end,
-                report: period.report,
-                reset: period.reset || end == config.horizon,
-            });
+            Some(warm_up) if 0 < warm_up && warm_up < config.horizon => {
+                for (name, end) in [("WarmUp", warm_up), ("Period_1", config.horizon)] {
+                    periods.push(Period {
+                        name: name.into(),
+                        end,
+                        report: true,
+                        reset: true,
+                    });
+                }
+            }
+            Some(_) => {
+                return Err(Error(
+                    "the warm-up must lie between 0 and the horizon".into(),
+                ));
+            }
         }
         if periods
             .last()
@@ -474,18 +514,19 @@ impl Fab {
         let lot = &self.lots[id];
         let step = &self.data.routes[lot.route].steps[lot.step];
         let info = &self.routes.info[lot.route];
-        let urgency = match (&self.strategy.queue_time, &lot.segment) {
-            (QueueTime::None, _) => Urgency::None,
-            (_, None) => Urgency::Outside,
-            (QueueTime::Qtcr, Some(segment)) => Urgency::Qtcr {
-                deadline: segment.entered + segment.limit,
-                work: info.remaining[lot.step].at(lot.wafers)
-                    - info.remaining[segment.exit + 1].at(lot.wafers),
-            },
-            (QueueTime::Qts(flow_factors), Some(segment)) => {
-                Urgency::Qts(self.qts_deadline(lot, segment, flow_factors))
-            }
-        };
+        let remaining = |step: StepIndex| info.remaining[step].at(lot.wafers);
+        let cqt = lot.segment.as_ref().map(|segment| WaitingCqt {
+            deadline: segment.entered + segment.limit,
+            work: remaining(lot.step) - remaining(segment.exit + 1),
+            before_exit: remaining(lot.step) - remaining(segment.exit),
+            latest: self
+                .strategy
+                .flow_factors
+                .as_ref()
+                .map_or(0.0, |flow_factors| {
+                    self.qts_deadline(lot, segment, flow_factors)
+                }),
+        });
         Waiting {
             lot: id,
             route: lot.route,
@@ -496,7 +537,8 @@ impl Fab {
             serial: lot.serial,
             queued_at: now,
             due: lot.due,
-            remaining: info.remaining[lot.step].at(lot.wafers),
+            remaining: remaining(lot.step),
+            step_time: info.step[lot.step].at(lot.wafers),
             setup: step.setup,
             dedicated: lot
                 .dedicated
@@ -504,7 +546,7 @@ impl Fab {
                 .find(|&&(step, _)| step == lot.step)
                 .map(|&(_, tool)| tool),
             batch: self.routes.batch_key[lot.part][lot.step],
-            urgency,
+            cqt,
             // A lot leaving its previous segment here is exempt.
             entering: self.strategy.stopping.is_some()
                 && step.cqt.is_some()
@@ -1045,6 +1087,13 @@ impl Model for Fab {
             Event::Repair { tool, breakdown } => self.repair(tool, breakdown, sched),
             Event::PmDue { tool, pm } => self.pm_due(tool, pm, sched),
             Event::PmDone(tool) => self.pm_done(tool, sched),
+            Event::BatchWake(group) => {
+                // An earlier wake may have replaced this one; dispatching again changes nothing.
+                if self.groups[group].wake == Some(sched.now()) {
+                    self.groups[group].wake = None;
+                }
+                self.dispatch(group, None, sched);
+            }
             Event::PeriodEnd(index) => self.period_end(index, sched),
             // A finished run stops before its deadline.
             Event::Deadline => sched.stop(),

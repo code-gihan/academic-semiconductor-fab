@@ -127,15 +127,18 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 | 필드 | 기본값 | 의미 |
 |---|---|---|
 | horizon | 필수 | 종료 시각(> 0). 이전에 시작하는 lot만 투입, 보고 기간을 여기서 자른다 |
+| warm_up | 없음 | 웜업 w(0 < w < horizon): 보고 기간을 WarmUp·Period_1로 대체(4.2) |
 | seed, replication | 1, 0 | 난수 스트림 선택(10장) |
 | load | 1 | 부하 계수 ℓ(> 0, 유한): 투입 시작·간격 ÷ ℓ(ms 반올림), 납기 오프셋 유지 |
 | reserve_super_hot | false | super hot lot(우선순위 30)이 HOTLOT 값과 무관하게 예약 |
-| queue_time | None | None·Qtcr·Qts |
-| flow_factors | 없음 | QTS FF(route × 스텝, 없음 = 미측정 = 1). QTS 외 규칙과 함께면 오류 |
+| queue_time | None | None·Qtcr·Qts. 기준 목록이 없는 TG에만 적용(8.2) |
+| flow_factors | 없음 | QTS FF(route × 스텝, 없음 = 미측정 = 1). QTS(규칙·기준)가 없으면 오류 |
+| ranking | 빈 목록 | TG 이름 → 기준 목록(1–6개, 서로 다름, 앞이 우선, 8.9) |
+| batch_start_within | 없음 | QT 배치 시작 임계(> 0, 8.10) |
 | stopping | 없음 | Stopping{limits: TG 이름 → Limits{front, total}, default: Limits(기본 1,000/1,000)} |
 | engineering | Base | Base·EngineeringFirst·Cate{production, engineering}·Cot{trigger} |
 
-- 직렬화(serde): 필드 이름 그대로, 열거형 snake_case(`"qtcr"`, `{"cate": {...}}`). 시간 필드(horizon, CAtE 구간)는 ms 수, 소수는 ms 반올림. 미지 필드는 오류.
+- 직렬화(serde): 필드 이름 그대로, 열거형 snake_case(`"qtcr"`, `{"cate": {...}}`, 기준 `"fifo"`·`{"qt_within": ms}`). 시간 필드(horizon, warm_up, CAtE 구간, 임계)는 ms 수, 소수는 ms 반올림. 미지 필드는 오류.
 
 ### 4.2 초기화(`Fab::new`)
 
@@ -143,7 +146,7 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 2. 전략 해석(8.8).
 3. route 사전 계산(7.13).
 4. 투입 계획(7.1).
-5. 보고 기간: `period.txt` 순서대로, 시작 ≥ horizon인 기간 제외. 종료 = min(다음 기간 시작, horizon), 보고 = REPORT, 초기화 = RESET ∨ 종료 = horizon. 마지막 기간 종료 ≠ horizon이면 오류.
+5. 보고 기간: `period.txt` 순서대로, 시작 ≥ horizon인 기간 제외. 종료 = min(다음 기간 시작, horizon), 보고 = REPORT, 초기화 = RESET ∨ 종료 = horizon. 마지막 기간 종료 ≠ horizon이면 오류. warm_up = w이면 대신 WarmUp [0, w)·Period_1 [w, horizon)(둘 다 보고·초기화).
 6. setup 시간표(목표 setup별 (출발 또는 임의, 분포)), 반송표((출발, 도착) → 분포).
 7. 툴 생성: TG 순, TG 내 k번째(k = 1..N). 모두 가용 대기열에 생성 순으로 등재.
 
@@ -158,7 +161,7 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 
 ### 4.4 진행·종료
 
-- `Simulation::new(데이터, 설정)`: 데이터셋(`Arc`, 시뮬레이션 간 공유)으로 `Fab`을 만들고 시각 0에서 시작. QTS이고 FF가 없으면 2 pass: 설정 전체를 먼저 검증(FF 자리는 미측정 값)하고, 1차 pass는 CQT 규칙·Stopping을 뺀 설정(8.3).
+- `Simulation::new(데이터, 설정)`: 데이터셋(`Arc`, 시뮬레이션 간 공유)으로 `Fab`을 만들고 시각 0에서 시작. QTS(규칙 또는 `qts` 기준)이고 FF가 없으면 2 pass: 설정 전체를 먼저 검증(FF 자리는 미측정 값)하고, 1차 pass는 `Config::first_pass`(QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 설정, 빈 기준 목록은 데이터 순위, 8.3).
 - `run_observed(until, 관찰자)`: 현재 pass를 des-core `run_observed(종료 시각, 1 d)`로 진행하고 관측마다 `Progress{pass, passes, now, horizon, released, completed, wip, finished}`를 전달. 종료 시각은 마지막 pass에만 `until`(없으면 무한), 1차 pass는 끝까지 진행해 측정 FF(9.1)로 본 pass를 만든다. `Reached`·`Interrupted`(관찰자 `Break`)는 일시정지, 반환값은 현재 `Progress`. 다시 호출하면 이어서 진행하고, 끝난 실행은 그대로 반환. `run(until)` = 관찰자 없는 `run_observed`.
 - 결정성: 일시정지·상태 조회는 사건 처리 순서와 통계를 바꾸지 않는다(상태 조회는 읽기 전용, 툴 상태는 `state_at(now)` 계산, 시간 집계 갱신 없음) → 한 번에 실행한 결과와 같다.
 - 완료: horizon 기간 종료 처리 후(투입 종료) WIP = 0이 되는 사건(마지막 lot 완료, horizon 시점에 이미 0이면 그 기간 종료)에서 Drain 창 보고, 완료 시각 기록, `stop`. 이후 사건은 처리하지 않는다.
@@ -169,7 +172,7 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 
 - `Results`: `periods`(보고 기간 + Drain), `released`·`completed`(투입·완료 lot 수, 정상 종료 시 같음), `end`(완료 시각), `events`(완료까지 처리한 모델 사건 수), `step_flow_factors`(9.1). 부품·TG·영역은 이름으로 기록.
 - `Results::digest()`: postcard 인코딩의 FNV-1a 64비트 해시(16진). 같으면 결과가 비트 단위로 같다(네이티브·wasm 대조).
-- `Error`: horizon ≤ 0, 부하 계수 ≤ 0·비유한, 부하 계수로 투입 간격 0, lot 유형이 없는 (부품, 우선순위), 목록형 투입이 종료 시각 전에 끝남, 종료 시각을 덮는 보고 기간 없음, 전략 설정 오류(8.8), 종료 + 365 d 미완료, 끝나기 전 `results()`, 시각이 아닌 수(`time`: 유한, |ms| < 2^63, ms 반올림).
+- `Error`: horizon ≤ 0, 웜업 범위 밖, 부하 계수 ≤ 0·비유한, 부하 계수로 투입 간격 0, lot 유형이 없는 (부품, 우선순위), 목록형 투입이 종료 시각 전에 끝남, 종료 시각을 덮는 보고 기간 없음, 전략 설정 오류(8.8), 종료 + 365 d 미완료, 끝나기 전 `results()`, 시각이 아닌 수(`time`: 유한, |ms| < 2^63, ms 반올림).
 
 ### 4.6 상태 조회·바인딩
 
@@ -177,7 +180,8 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 - `lots()`: 살아 있는 lot을 투입 순번(`id`) 순으로. 현재 스텝(이동 중이면 향하는 스텝)의 인덱스·이름·TG, 상태(moving·queued·processing), 공정 중인 툴(툴 job에서 역산), 진행 중인 CQT 구간의 종료 스텝과 기한(진입 시각 + 한도).
 - `tools()`: 툴 순번(TG 순, TG 내 위치 순) 순으로 TG, `state_at(now)`의 상태(6.4의 상태 판정), 현재 setup 이름, job의 lot id.
 - `tool_groups()`: TG 순으로 이름, 영역, 툴 수, 대기 lot 수, 상태별 툴 수.
-- JS(`fab-wasm`)·Python(`smt2020-python`)은 위 메서드를 그대로 위임하고 값을 serde 스키마로 변환한다. 설정은 미지 필드를 오류로 읽는다(JS는 JSON 값을 거침: serde-wasm-bindgen의 구조체 역직렬화가 알려진 속성만 읽기 때문). 관찰자: `false`(JS)·`False`(Python)만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 관측마다 다시 잡아 관찰자 호출·신호(Ctrl-C) 확인.
+- `Dataset::info()`(`info.rs`): 영역, TG(이름, 영역 index, 툴 수, 배치·LSSU·스테퍼 여부, 데이터 순위 기준), 부품(이름, 패밀리, E 여부, route index), route(스텝 이름·TG index), CQT 구간(route·시작·종료 스텝 index, 한도, litho, 구간 TG = 시작 다음 ~ 종료 스텝의 서로 다른 TG), 보고 기간. 구간 순서 = route 순 → 시작 스텝 순(`Dataset::segments`), 이 위치가 구간 index.
+- JS(`fab-wasm`)·Python(`smt2020-python`)은 위 메서드를 그대로 위임하고 값을 serde 스키마로 변환한다. 입력은 미지 필드를 오류로 읽는다(JS는 JSON 값을 거침: serde-wasm-bindgen의 구조체 역직렬화가 알려진 속성만 읽기 때문). 관찰자: `false`(JS)·`False`(Python)만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 관측마다 다시 잡아 관찰자 호출·신호(Ctrl-C) 확인.
 
 ## 5. 모델 상태
 
@@ -213,10 +217,11 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 
 ### 5.3 TG
 
-- queue: 대기 lot 항목(도착 순 `Vec`). 도착 시 고정되는 순위 입력을 담아 디스패칭이 lot·route 자료 대신 항목을 순회한다: lot, route·스텝, 유형, 우선순위, wafer, serial, 도착 시각, 납기, 잔여 작업(CR 분모), 스텝 setup, LTL 전용 툴, 배치 호환 키, CQT 긴급도 입력(QTCR 기한·종료까지 기대 작업, QTS 최종 시작 시각), 구간 진입 여부(Stopping 적용), 보류 표시.
+- queue: 대기 lot 항목(도착 순 `Vec`). 도착 시 고정되는 순위 입력을 담아 디스패칭이 lot·route 자료 대신 항목을 순회한다: lot, route·스텝, 유형, 우선순위, wafer, serial, 도착 시각, 납기, 잔여 작업(CR 분모), 스텝 기대 시간, 스텝 setup, LTL 전용 툴, 배치 호환 키, CQT 입력(구간 안 lot만: 구간 마감, 종료 스텝 종료·시작까지 기대 작업, QTS 최종 시작 시각), 구간 진입 여부(Stopping 적용), 보류 표시.
 - ready: 가용 툴 대기열(먼저 가용해진 순).
 - reservation: super hot 예약(lot, 예약 스텝, 유지 툴).
 - campaign: CoT 잔여 EL 수.
+- batch_due, wake: QT 배치 시작(8.10)에서 디스패칭 중 보류한 배치의 가장 이른 시작 시각, 예약된 가장 이른 `BatchWake` 시각.
 
 그 외: Stopping 집계 front·upstream(TG별)과 사건 중 변경 TG 기록(8.4), 보류 TG 목록, 투입 진행(스트림 회차, 목록 위치, 부품별 잔여 투입 수), 통계(9장).
 
@@ -232,6 +237,7 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 | `Repair{툴, 고장}` | 고장 시작 시(TTR) | 고장 종료 |
 | `PmDue{툴, PM}` | init(시간형 첫 회), 처리 시 다음 회(interval) | PM 요청 |
 | `PmDone(툴)` | PM 시작 시(소요) | PM 종료 |
+| `BatchWake(TG)` | 디스패칭 끝에 보류 배치의 QT 시작 시각이 예약된 시각보다 이르면(8.10) | 예약 기록 해제(같은 시각일 때), 디스패칭 |
 | `PeriodEnd(i)` | init | 기간 보고·초기화, horizon이면 투입 종료 |
 | `Deadline` | init(horizon + 365 d) | 실행 정지(완료 전이면 미완료 오류) |
 
@@ -356,7 +362,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 
 ### 7.3 디스패칭 시점·툴 순서
 
-- 호출(사건 구동): lot 도착(도착 lot 지정), 툴 변화 처리 후 툴이 ready일 때, Stopping 임계 해제(8.4). 대기열이 비었거나 ready 툴이 없으면 종료.
+- 호출(사건 구동): lot 도착(도착 lot 지정), 툴 변화 처리 후 툴이 ready일 때, Stopping 임계 해제(8.4), `BatchWake`(8.10). 대기열이 비었거나 ready 툴이 없으면 종료.
 - Stopping 보류 표시: 호출 시작 시 대기열 항목마다 1회 판정(8.4). job 시작은 Stopping 집계를 바꾸지 않으므로 호출 동안 유효. 보류가 있으면 TG를 보류 TG 목록에 추가.
 - 툴 순서: 가용 대기열 순(먼저 가용해진 툴 먼저, 가정). wake_LeastSetupTime TG에 lot이 도착한 경우 그 lot의 wake setup 시간(7.9) 오름차순, 동률은 대기열 순.
 - 각 툴은 ready이고 선택이 성공하는 동안 반복 시작(cascading 툴은 한 호출에서 2 job까지). 대기열이 비면 종료.
@@ -370,11 +376,12 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 
 ### 7.5 순위 키
 
-- 사전식 비교(작을수록 우선, f64 전순서), 구성:
+- 사전식 비교(작을수록 우선, f64 전순서, 길이 8 = 유형 키 + 기준 ≤ 6 + serial), 구성:
   1. CAtE·CoT 유형 키(스테퍼 TG만): 선호 유형 0, 그 외 1.
-  2. TG FWLRANK 순: rank_HP → −우선순위, rank_RSETUP → 순위 setup 시간(7.9), rank_FIFO·rank_CR → (QTCR·QTS면 긴급도 먼저) 대기열 도착 시각 또는 CR.
+  2. TG 기준 목록(8.8 해석) 순으로 기준 값(8.9). 데이터 순위의 rank_HP·rank_RSETUP·rank_FIFO·rank_CR = priority·least_setup·fifo·critical_ratio.
   3. serial.
 - CR = (납기 − now) / 잔여 작업(현 스텝부터, 7.13).
+- 키 계산은 대기 lot마다 호출되므로 선택 루프에 인라인한다(호출이면 실행 시간의 약 3분의 1, DS2·DS4 측정).
 
 ### 7.6 setup 필요 판정
 
@@ -385,7 +392,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 
 1. 후보를 키 순 정렬.
 2. 후보 순으로 아직 시도하지 않은 배치 호환 키의 첫 lot이 배치를 연다. 그 lot부터 순위 순으로 같은 키 lot을 wafer 합 ≤ BATCHMX인 한 추가(넘는 lot은 건너뛰고 계속).
-3. wafer 합 ≥ BATCHMN이거나 같은 키 lot이 더 올 수 없으면(7.8) 시작. 아니면 다음 키 시도. 모두 실패하면 대기.
+3. wafer 합 ≥ BATCHMN이거나, QT 배치 시작 시각(8.10)이 지났거나, 같은 키 lot이 더 올 수 없으면(7.8) 시작. 아니면 다음 키 시도. 모두 실패하면 대기(QT 배치 시작이면 깨우기 예약, 8.10).
 - 호환 키: SameRouteStep = (route, 스텝), SameFamilyStepName = (TG, 패밀리, 스텝 이름). 생산·E lot 혼합 가능.
 - 배치 = job 1개, 공정 시간 배치당 p, 배치 lot 모두 같은 종료.
 
@@ -431,16 +438,16 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 
 ### 8.2 QTCR([P2] 식 (1))
 
-- 긴급도를 FIFO·CR 직전에 삽입. 열린 구간 없는 lot = +∞.
-- d^Q = 구간 시작 + 한도, W = R_현스텝(n) − R_{종료+1}(n)(현 스텝~종료 스텝 기대 시간). now ≤ d^Q면 (d^Q − now)/W, 아니면 (d^Q − now)·W.
+- 기준 `qtcr`. `queue_time` = Qtcr이면 기준 목록이 없는 TG의 FIFO·CR 직전에 삽입. 열린 구간 없는 lot = +∞.
+- d^Q = 구간 시작 + 한도, W = R_현스텝(w) − R_{종료+1}(w)(현 스텝~종료 스텝 기대 시간, w = wafer 수). now ≤ d^Q면 (d^Q − now)/W, 아니면 (d^Q − now)·W.
 
 ### 8.3 QTS([P2] 식 (2)–(6))
 
-- 긴급도 = 현 스텝 최종 시작 시각 d_i(대기열 도착 시 계산). 열린 구간 없는 lot = +∞.
-- p_k = 샘플링_k·e_k(n), FF_k = 입력 스텝 FF(측정 안 된 스텝 = 1, 유한·음수 아님 검증).
+- 기준 `qts` = 현 스텝 최종 시작 시각 d_i(대기열 도착 시 계산). `queue_time` = Qts이면 기준 목록이 없는 TG의 FIFO·CR 직전에 삽입. 열린 구간 없는 lot = +∞.
+- p_k = 샘플링_k·e_k(w), FF_k = 입력 스텝 FF(측정 안 된 스텝 = 1, 유한·음수 아님 검증).
 - TT = Σ_{k=시작+1}^{종료−1} FF_k·p_k + (FF_종료 − 1)·p_종료.
 - 현 스텝 i < 종료: d_i = 구간 시작 + 한도·Σ_{k=시작+1}^{i} FF_k·p_k / TT − p_i(TT ≤ 0이면 비율 0). i ≥ 종료: d_i = 구간 시작 + 한도.
-- FF 입력: `Config::flow_factors`(이전 실행의 `Results::step_flow_factors`, 9.1). 없으면 같은 설정에서 CQT 규칙·Stopping만 뺀 1차 pass의 스텝 FF(4.4, 가정: [P2]는 "long simulation runs"로만 기술).
+- FF 입력: `Config::flow_factors`(이전 실행의 `Results::step_flow_factors`, 9.1). 없으면 `first_pass`(QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 같은 설정) 1차 pass의 스텝 FF(4.4, 가정: [P2]는 "long simulation runs"로만 기술).
 
 ### 8.4 Stopping([P2] §3.2)
 
@@ -463,12 +470,39 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 
 스테퍼 TG만. 캠페인 중 EL 우선, 그 외 PL 우선, PL이 없으면 EL(가정, 6.8).
 
-### 8.8 전략 검증 규칙
+### 8.8 전략 해석·검증 규칙(`strategy.rs`)
 
+- TG별 기준 목록: `ranking`에 있으면 그 목록, 없으면 데이터 순위(FWLRANK)를 기준으로 바꾸고 `queue_time`(Qtcr → `qtcr`, Qts → `qts`)을 FIFO·CR 직전에 삽입(데이터 순위는 중복·FIFO+CR 공존이 없어(3.3) 최대 4개).
+- 목록: TG 이름 존재, 1–6개, 같은 종류 중복 금지(`qt_within`은 임계가 달라도 1개), 임계 > 0. `batch_start_within` > 0.
 - CAtE 두 구간 > 0, CoT trigger > 0.
 - 스테퍼 TG 이름은 CAtE·CoT에서만 필수(없으면 CQT litho 분류에서 제외).
-- QTS FF 크기 = route × 스텝 수, 값은 유한·음수 아님. FF는 QTS에만.
+- QTS FF 크기 = route × 스텝 수, 값은 유한·음수 아님. FF는 QTS(규칙 또는 기준)가 있을 때만.
 - Stopping 임계 > 0, TG 이름 존재.
+
+### 8.9 순위 기준(확장)
+
+| 기준 | 값(작을수록 우선) |
+|---|---|
+| priority | −우선순위(EF 반영) |
+| least_setup | 순위 setup 시간(7.9) |
+| fifo | 대기열 도착 시각 |
+| critical_ratio | CR(7.5) |
+| due_date | 납기 |
+| shortest_step | 현 스텝 기대 시간 e_i(w)(load + 공정 + unload, 7.13) |
+| least_remaining | 잔여 작업 R_i(w) |
+| qtcr | QTCR(8.2), 구간 밖 +∞ |
+| qts | QTS d_i(8.3), 구간 밖 +∞ |
+| qt_deadline | 구간 마감(시작 + 한도), 구간 밖 +∞ |
+| qt_within(h) | QT 여유 ≤ h면 0, 아니면(구간 밖 포함) 1 |
+
+- QT 여유 = 구간 마감 − now − (R_i(w) − R_종료(w))(종료 스텝 시작 전까지의 기대 작업, 종료 스텝 대기 중이면 0). 음수면 이미 늦음.
+- 기준 값은 키 계산 시점(now)의 값이고, 시간만으로 바뀌는 값(CR, QTCR, QT 여유)은 디스패칭 시점에 평가된다.
+
+### 8.10 QT 배치 시작(확장)
+
+- `batch_start_within` = h: 배치 후보(7.7 2단계에서 채운 lot) 중 하나라도 QT 여유 ≤ h이면, 즉 now ≥ min(⌈구간 마감 − h − 종료 스텝 시작 전 기대 작업⌉)이면 BATCHMN 미만도 시작.
+- 시작하지 못한 배치 키의 그 시각 중 최솟값을 TG의 `batch_due`에 기록하고, 디스패칭 끝에 예약된 `BatchWake`보다 이르면 `BatchWake(TG)`를 그 시각에 예약(사건 구동, 폴링 없음). 늦게 남은 예약은 디스패칭만 다시 하므로 결과에 영향 없음. 중첩 디스패칭(job 시작 → 예약 해제 → 다른 TG 디스패칭)은 TG별 기록이라 섞이지 않는다.
+- 설정하지 않으면 깨우기 사건이 없어 기존 결과와 같다.
 
 ## 9. 통계·보고
 
@@ -543,15 +577,18 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 | `des-core` 통합(1) | 단일 서버 FIFO 출발 시각 = Lindley 재귀 d_k = max(a_k, d_{k−1}) + s, 사건 소진 종료 |
 | `asd::table`(4) | UTF-16LE·UTF-8 디코딩, 셀·주석·행 번호, 값·분포·날짜 변환, 달력 유효성 |
 | `data`(3) | 데이터셋 파일 왕복, 바이트 고정(버전 1), 거부(매직·잘림·버전·잔여·손상) |
-| `sim`(6) | 설정 직렬화(기본값·ms 반올림·이름·미지 필드 오류), 1일 관측·완료 후 정지, 일시정지 중 lot·툴·TG 상태와 재개 결과 = 한 번에 실행한 결과, reset(거부 시 유지·같은 설정 = 같은 결과·다른 seed), QTS 1차 pass·`until`은 본 실행 기준·측정 FF = 준 FF, 설정 오류(1차 pass 전에 검출) |
+| `sim`(9) | 설정 직렬화(기본값·ms 반올림·이름·기준·왕복·미지 필드 오류), 1일 관측·완료 후 정지, 일시정지 중 lot·툴·TG 상태와 재개 결과 = 한 번에 실행한 결과, reset(거부 시 유지·같은 설정 = 같은 결과·다른 seed), QTS 1차 pass·`until`은 본 실행 기준·측정 FF = 준 FF, `qts` 기준만으로도 1차 pass, 웜업 기간, QT 배치 시작(미설정: 10 h 대기 위반, 30 min: 최소 미만 시작·위반 0·여유 합 3 h), 설정 오류(1차 pass 전에 검출) |
+| `sim::dispatch`(2) | 기준 11종의 순서(동률 serial, 구간 밖 lot 마지막, QT 여유 임계), QTCR 식 |
+| `sim::strategy`(2) | 데이터 순위 + QT 규칙 삽입, 기준 목록 검증 |
+| `info`(1) | 데이터셋 정보 이름·index |
 | `sim::tool`(3) | cascading 시간(25 wafer·후속 lot), 슬롯2 점유 대기, 상태 집계·일시정지 |
 | `report`(5) | 측정값 결합·비율, Student t 구간, t 분위수, CSV 이름·인용, 이름 = 직렬화 형태 |
 | `rng`(2) | 스트림 재현·독립, 표본 범위 |
 | CLI `reference`(1) | `.rep` 셀(수·시간) 해석 |
 | 페이지 데이터셋(2) | `www/data/ds1–4.bin`을 현재 빌드로 디코딩, 재인코딩 바이트 동일. DS1 5일차 상태: 한 번에 실행 = 1일 7시간·관찰자 3일·5일로 나눠 실행(진행·lot·툴·TG 동일) |
-| JS API(Node, 6) | `crates/wasm/tests/api.test.mjs`, DS1 10 d: 완료, 일시정지 중 상태 정합성(lot 수 = WIP, 대기 수, 공정 lot ↔ 툴, TG 상태 합 = 툴 수)과 재개 digest, 관찰자 예외 = 일시정지, reset, 요약·CSV, 입력 오류(미지 필드·미지 TG·NaN 시각·데이터셋) |
-| Python API(unittest, 7) | `crates/python/tests`, JS와 같은 항목 + 스레드 병렬 복제(digest) |
-| 실데이터(ignored, 10) | DS1–4 로드 값 검증(order 이름, 비활성 주기형 투입, 데이터셋 파일 왕복 포함), 페이지 데이터셋 = 원천 변환, DS1–4 2년 계획 전량 완료, DS4 180 d: BASE(QTS FF 산출) 후 QTCR + Stopping 스테퍼 5/10 + EF, QTS + CAtE(19.2, 4.8 h), CoT 10 전량 완료, FF 없는 QTS = BASE FF를 준 QTS(digest) |
+| JS API(Node, 8) | `crates/wasm/tests/api.test.mjs`, DS1 10 d: 완료, 일시정지 중 상태 정합성(lot 수 = WIP, 대기 수, 공정 lot ↔ 툴, TG 상태 합 = 툴 수)과 재개 digest, 관찰자 예외 = 일시정지, reset, 데이터셋 정보(106 TG·66 구간, 구간 index 정합, 스테퍼), 기준 목록·QT 배치 시작·웜업 설정, 요약·CSV, 입력 오류(미지 필드·미지 TG·NaN 시각·데이터셋·미지 기준·웜업) |
+| Python API(unittest, 9) | `crates/python/tests`, JS와 같은 항목 + 스레드 병렬 복제(digest) |
+| 느린 검사·실데이터(ignored, 11) | 페이지 데이터셋 DS1–4 60 d × 논문 규칙 7종(BASE·QTCR·QTS·스테퍼 Stopping·EF·CAtE·CoT) digest 고정(리팩터링 회귀 검사), DS1–4 로드 값 검증(order 이름, 비활성 주기형 투입, 데이터셋 파일 왕복 포함), 페이지 데이터셋 = 원천 변환, DS1–4 2년 계획 전량 완료, DS4 180 d: BASE(QTS FF 산출) 후 QTCR + Stopping 스테퍼 5/10 + EF, QTS + CAtE(19.2, 4.8 h), CoT 10 전량 완료, FF 없는 QTS = BASE FF를 준 QTS(digest) |
 
 ```bash
 cargo test
@@ -569,5 +606,6 @@ python -m unittest discover -s crates/python/tests
 
 ## 14. 가정·한계
 
+- 논문 밖 확장(설정해야 동작): TG별 기준 목록과 기준 5종(due_date·shortest_step·least_remaining·qt_deadline·qt_within, 8.8·8.9), QT 배치 시작(8.10), 웜업 대체(4.2).
 - 가정 목록: 공정 시간 job당 1회 추출. 툴 초기 setup 없음, 미정의 setup 0. setup·load·unload 병렬(cascading). 배치 최소 면제(더 올 lot 없음). rank_RSETUP·wake setup 시간 정의. LSSU 대기·해제. 툴 선택 유휴 최장 우선. super hot 예약 TG당 1건·유지 툴 이전. 공정 중 고장 시 중단 후 재개, 다음 TTF는 수리 종료부터. wafer형 PM 카운터는 PM 시작 시 0. PM은 진행 job 완료 후 시작, 대기 중 신규 착수 금지, 같은 PM 재도래 병합. 고장·PM 비중첩. 상태 우선순위. CAtE t = 0 생산 구간. CoT PL 없으면 EL. Stopping 집계 정의, 임계 해제 시 보류 TG 디스패칭 순서(보류 시작 순). QTS FF 사전 실행 설정. 영역 측정 = 툴 시간 가중.
 - 한계: AutoSched 난수(CMRG)와 경로 불일치 → 복제 평균으로 비교. [P2] complex CQT(441 구간)는 추가 구간 한도 미공개로 재현 불가. Stopping 임계를 배치·LSSU TG에 낮게 주면 교착 가능. 반송은 시간만 모델링(AMHS 자원 없음). 초기 WIP CT는 t = 0부터.

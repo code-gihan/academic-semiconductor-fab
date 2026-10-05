@@ -2,72 +2,51 @@
 export default {
   "meta.title": "SMT2020 FAB 시뮬레이터",
   "meta.description":
-    "SMT2020 반도체 FAB 테스트베드를 브라우저에서 실행합니다. Rust 이산 사건 시뮬레이터를 WebAssembly로 컴파일했습니다.",
+    "SMT2020 반도체 FAB 테스트베드를 브라우저에서 실행하고 CQT(큐타임) 위반을 줄이는 운영 전략을 시험합니다. Rust 이산 사건 시뮬레이터를 WebAssembly로 컴파일했습니다.",
 
   "header.title": "SMT2020 FAB 시뮬레이터",
   "header.tagline":
-    "SMT2020 반도체 FAB 테스트베드 4종을 시뮬레이션하고 운영 전략을 브라우저에서 바로 비교합니다.",
+    "SMT2020 웨이퍼 FAB 테스트베드 4종을 시뮬레이션하고, CQT(큐타임) 위반을 줄이는 운영 전략을 브라우저에서 직접 시험합니다.",
   "header.language": "언어",
-  "header.python": "Python 패키지",
   "header.source": "소스 코드",
-  "hint.show": "설명",
+  "view.label": "화면",
+  "view.setup": "설정",
+  "view.run": "실행",
+  "view.results": "결과",
+  "view.python": "Python",
   "intro.local":
     "Rust로 작성한 이산 사건 시뮬레이터가 이 브라우저에서 WebAssembly로 실행되며, 복제 1회에 CPU 스레드 1개를 씁니다. 아무것도 업로드하지 않습니다.",
-  "welcome.heading": "세 단계로 웨이퍼 FAB 시뮬레이션",
-  "welcome.dataset": "SMT2020 데이터셋 4종 중 하나를 고릅니다.",
-  "welcome.strategy": "운영 전략과 실행 설정을 고릅니다. ?를 누르면 항목 설명이 나옵니다.",
-  "welcome.run":
-    "실행: 복제별 진행과 FAB 툴그룹 상태를 실시간으로 보고, 결과를 차트와 표로 비교합니다.",
+  "setup.intro": "데이터셋과 실행 설정을 고르고, 오른쪽에서 운영 전략을 정한 뒤 실행합니다.",
 
   "dataset.heading": "데이터셋",
   "dataset.ds1.name": "DS1 · HV/LM",
-  "dataset.ds1.description": "고물량·소품종: 제품 2종, 툴 1,043대, 주기 투입, FIFO 디스패칭.",
+  "dataset.ds1.description":
+    "고물량·소품종: 제품 2종, 툴 1,043대, 주기 투입, FIFO 디스패칭, CQT 구간 66개.",
   "dataset.ds2.name": "DS2 · LV/HM",
   "dataset.ds2.description":
-    "저물량·다품종: 제품 10종, 툴 913대, lot별 납기가 있는 투입 목록, CR(critical ratio) 디스패칭.",
+    "저물량·다품종: 제품 10종, 툴 913대, lot별 납기가 있는 투입 목록, CR(critical ratio) 디스패칭, CQT 구간 264개.",
   "dataset.ds3.name": "DS3 · HV/LM + 엔지니어링",
-  "dataset.ds3.description": "DS1에 제품 1종의 엔지니어링 lot(주 40개)을 더함, 툴 1,135대.",
+  "dataset.ds3.description":
+    "DS1에 제품 1종의 엔지니어링 lot(주 40개)을 더함, 툴 1,135대, CQT 구간 107개.",
   "dataset.ds4.name": "DS4 · LV/HM + 엔지니어링",
-  "dataset.ds4.description": "DS2에 제품 3종의 엔지니어링 lot(주 80개)을 더함, 툴 1,068대.",
+  "dataset.ds4.description":
+    "DS2에 제품 3종의 엔지니어링 lot(주 80개)을 더함, 툴 1,068대, CQT 구간 372개.",
   "dataset.file.name": "데이터셋 파일",
   "dataset.file.description": "smt2020 convert로 만든 .bin 파일(예: 모델의 다른 order 파일로 변환).",
   "dataset.file.label": "데이터셋 파일(.bin)",
   "dataset.common":
     "4종 공통: 툴그룹 105개(영역 11개), 주당 웨이퍼 10,000장 투입(25장짜리 생산 lot 400개), 초기 WIP.",
 
-  "strategy.heading": "운영 전략",
-  "strategy.queueTime.label": "CQT 디스패칭",
-  "strategy.queueTime.none": "없음 (BASE)",
-  "strategy.queueTime.qtcr": "QTCR: 대기 시간 임계 비율",
-  "strategy.queueTime.qts": "QTS: 대기 시간 스케줄링",
-  "strategy.queueTime.hint":
-    "CQT(critical queue time)는 두 스텝 사이의 허용 대기 시간입니다. QTCR은 남은 작업에 비해 한도까지 남은 시간이 짧은 lot을 먼저 처리하고, QTS는 사전 실행에서 잰 흐름 계수로 스텝마다 기한을 정하므로 복제 1회가 약 2배 걸립니다.",
-  "strategy.stopping.label": "Stopping",
-  "strategy.stopping.none": "끔",
-  "strategy.stopping.high": "high 한도 (90/130 · 90/220)",
-  "strategy.stopping.medium": "medium 한도 (60/95 · 70/150)",
-  "strategy.stopping.small": "small 한도 (50/85 · 55/125)",
-  "strategy.stopping.hint":
-    "CQT 구간의 스테퍼 툴그룹(LithoTrack_FE_95 · FE_115)에 대기·공정 중인 CQT lot(앞 한도), 또는 그리로 이동 중인 lot까지 더한 CQT lot(뒤 한도)이 너무 많으면 구간 시작에서 lot을 보류합니다.",
-  "strategy.engineering.label": "엔지니어링 lot",
-  "strategy.engineering.none": "BASE (엔지니어링 lot 없음)",
-  "strategy.engineering.base": "BASE: 데이터의 우선순위",
-  "strategy.engineering.ef": "EF: 엔지니어링 우선",
-  "strategy.engineering.cate": "CAtE {cycle} h: 생산 {production} h, 엔지니어링 {engineering} h",
-  "strategy.engineering.cateSet":
-    "CAtE {cycle} h ({dataset}): 생산 {production} h, 엔지니어링 {engineering} h",
-  "strategy.engineering.cot": "CoT {trigger}: 엔지니어링 lot {trigger}개 대기부터 우선",
-  "strategy.engineering.hint":
-    "생산 lot과 엔지니어링 lot이 FAB을 나눠 쓰는 방식입니다(DS3, DS4). EF는 모든 툴그룹에서 EHL > PHL > ERL > PRL 순으로 처리합니다. 스테퍼에서 CAtE는 생산·엔지니어링 구간을 번갈아 두고, CoT는 엔지니어링 lot이 N개 대기할 때까지 생산을 먼저 처리한 뒤 그 N개를 처리합니다.",
-  "strategy.superHot.label": "super hot lot 툴 예약",
-  "strategy.superHot.short": "super hot 예약",
-  "strategy.superHot.hint":
-    "super hot lot이 공정을 시작하면 다음 스텝의 툴 1대가 그 lot을 기다립니다(AutoSched rule_HotLotFIRST). AutoSched 모델에서는 꺼져 있습니다.",
-
   "settings.heading": "실행 설정",
+  "settings.explain": "설정 항목 설명",
   "settings.horizon.label": "종료 시각 (일)",
   "settings.horizon.hint":
-    "2018-01-01부터 모의할 일수입니다. 첫해는 웜업이고 이후 해마다 보고하며, 종료 시각 전에 투입한 lot은 끝까지 완료합니다.",
+    "2018-01-01부터 모의할 일수입니다. 종료 시각 전에 투입한 lot은 끝까지 완료합니다.",
+  "settings.warmUp.label": "웜업 (일)",
+  "settings.warmUp.placeholder": "데이터셋: 365",
+  "settings.warmUp.dataset": "데이터셋 (365일)",
+  "settings.warmUp.hint":
+    "통계에서 버리는 초기 일수입니다. 입력하면 결과가 WarmUp과 Period_1(웜업 끝 ~ 종료 시각)로 나뉘어, 짧은 실행으로도 안정된 FAB을 잽니다. 비우면 데이터셋 기간(웜업 1년, 이후 해마다 1기간)을 씁니다.",
   "settings.replications.label": "복제 수",
   "settings.replications.hint":
     "난수를 달리한 독립 실행으로, 이 기기에서 {threads}개씩 동시에 실행합니다. 결과는 평균과 95% 신뢰구간으로 보여 줍니다.",
@@ -76,6 +55,130 @@ export default {
     "seed와 복제 번호가 같은 실행은 같은 난수를 써서, 전략을 같은 조건에서 비교합니다.",
   "settings.load.label": "부하 계수",
   "settings.load.hint": "투입 속도 배율입니다. 1은 계획 투입량(주당 웨이퍼 10,000장), 0.9는 90%입니다.",
+
+  "strategy.heading": "운영 전략",
+  "strategy.intro":
+    "CQT(critical queue time) 구간에 들어간 lot은 첫 스텝이 끝난 뒤 한도 시간 안에 마지막 스텝을 시작해야 합니다. 논문의 규칙과 직접 만든 규칙을 조합합니다: 툴그룹별 대기열 순위, 배치 시작 시점, lot 보류 위치, 엔지니어링 lot 처리 방식.",
+  "strategy.queueTime.label": "CQT 디스패칭 (논문)",
+  "strategy.queueTime.none": "없음 (BASE)",
+  "strategy.queueTime.qtcr": "QTCR: 대기 시간 임계 비율",
+  "strategy.queueTime.qts": "QTS: 대기 시간 스케줄링",
+  "strategy.queueTime.hint":
+    "아래에서 자체 순위를 주지 않은 툴그룹마다 FIFO·CR 앞에 들어갑니다. QTCR은 남은 작업에 비해 한도까지 남은 시간이 짧은 lot을 먼저 처리하고, QTS는 사전 실행에서 잰 흐름 계수로 스텝마다 기한을 정하므로 복제 1회가 약 2배 걸립니다.",
+  "strategy.stopping.label": "Stopping",
+  "strategy.stopping.high": "[P2] high (90/130 · 90/220)",
+  "strategy.stopping.medium": "[P2] medium (60/95 · 70/150)",
+  "strategy.stopping.small": "[P2] small (50/85 · 55/125)",
+  "strategy.engineering.label": "엔지니어링 lot",
+  "strategy.engineering.cate": "CAtE {cycle} h: 생산 {production} h, 엔지니어링 {engineering} h",
+  "strategy.engineering.cateSet":
+    "CAtE {cycle} h ({dataset}): 생산 {production} h, 엔지니어링 {engineering} h",
+  "strategy.engineering.cot": "CoT {trigger}: 엔지니어링 lot {trigger}개 대기부터 우선",
+  "strategy.engineering.hint":
+    "생산 lot과 엔지니어링 lot이 FAB을 나눠 쓰는 방식입니다. EF는 모든 툴그룹에서 EHL > PHL > ERL > PRL 순으로 처리합니다. 스테퍼에서 CAtE는 생산·엔지니어링 구간을 번갈아 두고, CoT는 엔지니어링 lot이 N개 대기할 때까지 생산을 먼저 처리한 뒤 그 N개를 처리합니다.",
+  "strategy.superHot.label": "super hot lot 툴 예약",
+  "strategy.superHot.short": "super hot 예약",
+  "strategy.superHot.hint":
+    "super hot lot이 공정을 시작하면 다음 스텝의 툴 1대가 그 lot을 기다립니다(AutoSched rule_HotLotFIRST). AutoSched 모델에서는 꺼져 있습니다.",
+
+  "ranking.heading": "툴그룹별 lot 순위",
+  "ranking.hint":
+    "툴그룹은 순위가 가장 앞선 lot을 처리합니다: 첫 기준, 같으면 다음 기준, 그다음 투입 순서. 순위를 만들고 툴그룹을 체크해 적용합니다. 자체 순위가 없는 툴그룹은 데이터셋 순위를 쓰고, 위의 CQT 규칙이 FIFO·CR 앞에 들어갑니다.",
+  "ranking.builder": "적용할 순위",
+  "ranking.empty": "아래에서 기준을 추가합니다.",
+  "ranking.add": "기준 추가…",
+  "ranking.apply": "체크한 {count}개에 적용",
+  "ranking.inherit": "체크한 툴그룹은 데이터셋 순위로",
+  "ranking.remove": "삭제",
+  "ranking.earlier": "앞으로",
+  "ranking.later": "뒤로",
+  "ranking.hours": "시간",
+  "ranking.help": "기준 설명",
+  "ranking.onlyCqt": "CQT 구간의 툴그룹만",
+  "ranking.area": "영역",
+  "ranking.allAreas": "전체 영역",
+  "ranking.search": "툴그룹 검색",
+  "ranking.selectAll": "보이는 툴그룹 모두 체크",
+  "ranking.summary": "툴그룹 {shown}개 표시 · 자체 순위 {custom}개",
+  "ranking.load": "적용할 순위로 불러오기",
+  "ranking.withRule": "FIFO/CR 앞에 {rule}",
+  "ranking.custom": "툴그룹 {count}개 자체 순위",
+  "ranking.dataset": "데이터셋",
+  "ranking.col.group": "툴그룹",
+  "ranking.col.area": "영역",
+  "ranking.col.tools": "툴",
+  "ranking.col.segments": "CQT 구간",
+  "ranking.col.ranking": "순위",
+  "rule.qtcr": "QTCR",
+  "rule.qts": "QTS",
+  "tag.batch": "배치",
+  "tag.setupRuns": "setup run",
+  "tag.stepper": "스테퍼",
+
+  "criterion.priority": "우선순위",
+  "criterion.least_setup": "최소 setup",
+  "criterion.fifo": "FIFO",
+  "criterion.critical_ratio": "CR",
+  "criterion.due_date": "납기 빠른 순",
+  "criterion.shortest_step": "짧은 스텝 먼저",
+  "criterion.least_remaining": "잔여 작업 적은 순",
+  "criterion.qtcr": "QTCR",
+  "criterion.qts": "QTS",
+  "criterion.qt_deadline": "CQT 마감 빠른 순",
+  "criterion.qt_within": "CQT 여유 {hours} h 이하 먼저",
+  "criterion.qt_within.prefix": "CQT 여유",
+  "criterion.qt_within.suffix": "h 이하 먼저",
+  "criterion.priority.hint": "우선순위가 높은 lot부터: super hot, hot, 일반 순.",
+  "criterion.least_setup.hint": "빈 툴에서 setup 시간이 가장 짧은 lot부터.",
+  "criterion.fifo.hint": "대기열에 먼저 도착한 lot부터.",
+  "criterion.critical_ratio.hint": "납기까지 남은 시간 ÷ 남은 기대 작업이 작은 lot부터.",
+  "criterion.due_date.hint": "납기가 빠른 lot부터.",
+  "criterion.shortest_step.hint": "이 스텝의 기대 시간이 짧은 lot부터.",
+  "criterion.least_remaining.hint": "마지막 스텝까지 남은 기대 작업이 적은 lot부터.",
+  "criterion.qtcr.hint":
+    "[P2] 대기 시간 임계 비율: CQT 한도까지 남은 시간 ÷ 구간 마지막 스텝까지의 작업. CQT 구간 밖 lot은 맨 뒤.",
+  "criterion.qts.hint":
+    "[P2] 대기 시간 스케줄링: 잰 흐름 계수로 정한, 한도를 지키는 이 스텝의 최종 시작 시각. CQT 구간 밖 lot은 맨 뒤.",
+  "criterion.qt_deadline.hint": "CQT 구간 마감(시작 + 한도)이 빠른 lot부터. CQT 구간 밖 lot은 맨 뒤.",
+  "criterion.qt_within.hint":
+    "CQT 여유가 이 시간 이하인 lot을 먼저 두고, 나머지는 같게 보아 다음 기준이 정합니다. 여유 = 구간 마감 − 현재 − 마지막 스텝 시작 전까지의 기대 작업.",
+
+  "batch.heading": "배치 조기 시작",
+  "batch.hint":
+    "배치 툴(확산로)에서 배치 짝을 기다리는 lot은 CQT 여유를 잃습니다. 켜면 최소 크기에 못 미친 배치도 그 lot 중 하나의 여유가 이 값 이하가 될 때 시작하며, 그 시각에 확산로를 다시 깨웁니다.",
+  "batch.label": "최소 크기 미만이어도 시작할 CQT 여유",
+  "batch.unit": "h",
+  "batch.groups": "배치 툴그룹: {groups}.",
+  "batch.summary": "여유 {hours} h 이하에서",
+
+  "stopping.hint":
+    "CQT 구간의 툴그룹에 대기·공정 중인 CQT lot(앞 한도), 또는 그리로 이동 중인 lot까지 더한 CQT lot(뒤 한도)이 너무 많으면 구간 시작에서 lot을 보류합니다. DS2 기본 구간에서는 논문의 스테퍼 한도가 걸리지 않고, 더 낮은 한도라야 작동합니다.",
+  "stopping.enable": "CQT 구간 시작에서 lot 보류",
+  "stopping.front": "앞",
+  "stopping.total": "이동 중 포함",
+  "stopping.default": "그 밖의 툴그룹",
+  "stopping.tableHint":
+    "CQT 구간 툴그룹별 한도입니다. 빈칸은 1,000/1,000(보류 없음)입니다. 배치나 setup run에 필요한 lot까지 보류할 만큼 낮으면 FAB이 멈출 수 있습니다.",
+  "stopping.summary": "툴그룹 {count}개 한도",
+
+  "engineering.absent": "이 데이터셋에는 엔지니어링 lot이 없습니다.",
+  "engineering.base": "BASE: 데이터의 우선순위",
+  "engineering.engineering_first": "EF: 엔지니어링 우선",
+  "engineering.cate": "CAtE: 스테퍼에서 구간 교대",
+  "engineering.cot": "CoT: 스테퍼에서 엔지니어링 캠페인",
+  "engineering.production": "생산 구간 (h)",
+  "engineering.engineering": "엔지니어링 구간 (h)",
+  "engineering.trigger": "대기 엔지니어링 lot 수",
+  "engineering.presets": "[P1] 값…",
+
+  "json.heading": "설정 JSON",
+  "json.hint":
+    "같은 설정을 Python(smt2020.Simulation)과 명령줄(smt2020 run --config)에서 그대로 실행합니다. 시간 단위는 ms입니다. 여기서 고쳐 적용하거나 복사합니다.",
+  "json.apply": "적용",
+  "json.copy": "복사",
+  "json.copied": "복사했습니다.",
+  "json.applied": "적용했습니다.",
+  "json.notObject": "설정은 JSON 객체여야 합니다",
 
   "run.start": "시뮬레이션 실행",
   "run.cancel": "취소",
@@ -90,11 +193,13 @@ export default {
   "status.done": "{time} 만에 끝났습니다.",
   "status.cancelled": "취소했습니다.",
   "status.error": "실행하지 못했습니다: {message}",
+  "status.invalid": "설정이 올바르지 않습니다: {message}",
   "error.noFile": "데이터셋 파일을 먼저 선택하세요.",
   "error.fetch": "{file}을(를) 불러오지 못했습니다(HTTP {status}).",
   "error.worker": "Web Worker 오류: {message}",
 
   "progress.heading": "실행",
+  "progress.empty": "아직 실행하지 않았습니다. 설정에서 시나리오를 정하고 시뮬레이션을 실행하세요.",
   "progress.done": "완료 복제 {done}/{count}",
   "progress.day": "{day}/{days}일",
   "progress.drain": "투입한 lot 마무리 중({wip}개 남음)",
@@ -113,16 +218,17 @@ export default {
   "live.completed": "완료 lot",
   "live.wip": "WIP (lot)",
   "live.hint":
-    "타일 하나가 툴그룹 하나이고 영역별로 묶었습니다. 채움은 가동 중인 툴 비율(setup·load·공정·unload), 빨간 막대는 고장·PM 중인 툴 비율, 숫자는 대기 lot 수입니다. 타일에 포인터를 올리면 자세히 보이고, 위에서 복제를 고르면 그 복제를 따라갑니다.",
+    "타일 하나가 툴그룹 하나이고 영역별로 묶었습니다. 채움은 가동 중인 툴 비율(setup·load·공정·unload), 위쪽 빨간 막대는 고장·PM 중인 툴 비율, 숫자는 대기 lot 수입니다. 타일에 포인터를 올리면 자세히 보이고, 위에서 복제를 고르면 그 복제를 따라갑니다.",
   "tip.tools": "툴 {tools}대 · 대기 lot {queue}개",
   "tip.busy": "가동: setup {setup}, 공정 {process}, load {load}, unload {unload}",
   "tip.idle": "유휴 {idle} · 고장 {down} · PM {pm}",
 
   "results.heading": "결과",
+  "results.empty": "아직 결과가 없습니다. 실행이 끝나면 여기에 나옵니다.",
   "results.period": "보고 기간",
   "results.periodOption": "{name} · {start}–{end}일",
   "results.periodHint":
-    "WarmUp: 첫해. Period_n: 둘째 해부터 n + 1번째 해까지 누적(종료 시각에서 끊음). Drain: 종료 시각 뒤에 완료한 lot.",
+    "WarmUp: 웜업(첫해 또는 웜업 설정). Period_n: 웜업 끝부터 n + 1번째 해까지 누적(종료 시각에서 끊음). 웜업을 설정하면 Period_1이 종료 시각까지입니다. Drain: 종료 시각 뒤에 완료한 lot.",
   "results.downloadJson": "JSON 내려받기",
   "results.downloadCsv": "CSV 내려받기",
   "results.ci": "값은 복제 평균이며, ± 뒤는 95% 신뢰구간의 반폭(Student t)입니다.",
@@ -218,6 +324,8 @@ export default {
   "python.linux": "Linux (x86-64)",
   "python.macos": "macOS (Intel, Apple silicon)",
   "python.quickstart": "빠른 시작",
+  "python.config":
+    "설정 화면의 JSON을 그대로 실행합니다: Python, JavaScript, 이 페이지가 같은 시뮬레이터와 같은 스키마를 씁니다.",
   "python.more": "모든 함수와 옵션(JavaScript·Rust 포함):",
 
   "footer.references": "참고 문헌",

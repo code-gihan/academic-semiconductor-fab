@@ -15,7 +15,7 @@ use smt2020::data::{
     ReleaseStream, Rule, ToolGroup, Unit,
 };
 use smt2020::sim::{Config, EngineeringRule, Limits, QueueTimeRule, Results, Simulation, Stopping};
-use smt2020::{DAY, HOUR, MINUTE, SECOND};
+use smt2020::{DAY, HOUR, MINUTE, SECOND, Time};
 
 fn model_dir(dataset: &str, model: &str) -> PathBuf {
     [
@@ -476,6 +476,128 @@ fn dataset_4_plan_completes() {
     plan_completes("dataset 4", "LVHM_E_Model");
 }
 
+/// Stepper limits low enough to hold lots in the default CQT segments ([P2] Table 3 shape).
+fn stepper_stopping() -> Stopping {
+    let limits = Limits {
+        front: 5,
+        total: 10,
+    };
+    Stopping {
+        limits: BTreeMap::from([
+            ("LithoTrack_FE_95".into(), limits),
+            ("LithoTrack_FE_115".into(), limits),
+        ]),
+        default: Limits::default(),
+    }
+}
+
+const CATE: EngineeringRule = EngineeringRule::Cate {
+    production: 19 * HOUR + 12 * MINUTE,
+    engineering: 4 * HOUR + 48 * MINUTE,
+};
+
+/// The papers' rules one at a time over `horizon`: BASE, QTCR, QTS, stepper stopping, EF, CAtE
+/// and CoT.
+fn paper_strategies(horizon: Time) -> [(&'static str, Config); 7] {
+    let base = Config::new(horizon);
+    [
+        ("base", base.clone()),
+        (
+            "qtcr",
+            Config {
+                queue_time: QueueTimeRule::Qtcr,
+                ..base.clone()
+            },
+        ),
+        (
+            "qts",
+            Config {
+                queue_time: QueueTimeRule::Qts,
+                ..base.clone()
+            },
+        ),
+        (
+            "stopping",
+            Config {
+                stopping: Some(stepper_stopping()),
+                ..base.clone()
+            },
+        ),
+        (
+            "ef",
+            Config {
+                engineering: EngineeringRule::EngineeringFirst,
+                ..base.clone()
+            },
+        ),
+        (
+            "cate",
+            Config {
+                engineering: CATE,
+                ..base.clone()
+            },
+        ),
+        (
+            "cot",
+            Config {
+                engineering: EngineeringRule::Cot { trigger: 10 },
+                ..base
+            },
+        ),
+    ]
+}
+
+/// The papers' rules on the page's datasets over 60 days. A refactoring keeps these digests; a
+/// deliberate change of the results updates them.
+#[test]
+#[ignore = "slow in debug builds: cargo test -p smt2020 --release -- --ignored"]
+fn strategy_digests_are_stable() {
+    let expected = [
+        [
+            "eb414c42d7a55c99",
+            "54a64d4430337f88",
+            "ed89a91770b83906",
+            "5f9677fc0343f1a7",
+            "eb414c42d7a55c99",
+            "eb414c42d7a55c99",
+            "eb414c42d7a55c99",
+        ],
+        [
+            "c6b03d8265bf3d28",
+            "c99c336b91d6cf8f",
+            "bbbc42369d007826",
+            "90ecc3e1251cf1c8",
+            "c6b03d8265bf3d28",
+            "c6b03d8265bf3d28",
+            "c6b03d8265bf3d28",
+        ],
+        [
+            "448e21232bd66786",
+            "e686ed82c928294e",
+            "61c59a13b17aaec1",
+            "1b3c33239172ae07",
+            "780c69a120fb62d8",
+            "ce8a47a8ae2c4f72",
+            "5c02cf6c69a435ce",
+        ],
+        [
+            "228c0b6ad1987af8",
+            "46c15aca3fc34e5a",
+            "d5ffa1fa9da29d8e",
+            "e9913420af2dd8d0",
+            "8c08d967b0f414a7",
+            "8da5ed37403ca5fc",
+            "9d67a91baaf43838",
+        ],
+    ];
+    for (n, digests) in (1..).zip(expected) {
+        let ds = Arc::new(Dataset::from_bytes(&page_dataset(n)).unwrap());
+        for ((name, config), digest) in paper_strategies(60 * DAY).into_iter().zip(digests) {
+            assert_eq!(complete(&ds, &config).digest(), digest, "ds{n} {name}");
+        }
+    }
+}
+
 /// Every strategy on the dataset with CQT segments and engineering lots.
 #[test]
 #[ignore = "needs the SMT2020 data in data/raw"]
@@ -483,32 +605,17 @@ fn strategies_complete() {
     let ds = Arc::new(load("dataset 4", "LVHM_E_Model"));
     let base = Config::new(180 * DAY);
     let flow_factors = complete(&ds, &base).step_flow_factors;
-    // Stepper limits low enough to hold lots in the default CQT segments ([P2] Table 3 shape).
-    let limits = Limits {
-        front: 5,
-        total: 10,
-    };
-    let stopping = Stopping {
-        limits: BTreeMap::from([
-            ("LithoTrack_FE_95".into(), limits),
-            ("LithoTrack_FE_115".into(), limits),
-        ]),
-        default: Limits::default(),
-    };
     let strategies = [
         Config {
             queue_time: QueueTimeRule::Qtcr,
-            stopping: Some(stopping),
+            stopping: Some(stepper_stopping()),
             engineering: EngineeringRule::EngineeringFirst,
             ..base.clone()
         },
         Config {
             queue_time: QueueTimeRule::Qts,
             flow_factors: Some(flow_factors.clone()),
-            engineering: EngineeringRule::Cate {
-                production: 19 * HOUR + 12 * MINUTE,
-                engineering: 4 * HOUR + 48 * MINUTE,
-            },
+            engineering: CATE,
             ..base.clone()
         },
         Config {

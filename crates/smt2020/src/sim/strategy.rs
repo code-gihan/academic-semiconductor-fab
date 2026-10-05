@@ -1,20 +1,19 @@
-//! Operating strategies of the papers resolved against a dataset.
+//! Operating strategies resolved against a dataset: the papers' rules and the configured lot
+//! rankings.
+
+use std::mem::discriminant;
 
 use des_core::Time;
 
 use super::stats::LotKind;
-use super::{Config, EngineeringRule, Error, Limits, QueueTimeRule};
-use crate::data::{Dataset, ToolGroupId};
+use super::{Config, Criterion, EngineeringRule, Error, Limits, QueueTimeRule};
+use crate::data::{Dataset, Rank, ToolGroupId};
 
 /// Stepper tool groups of the CAtE/CoT ([P1] §V) and complex-CQT ([P2] §4.1) experiments.
-const STEPPERS: [&str; 2] = ["LithoTrack_FE_95", "LithoTrack_FE_115"];
+pub(crate) const STEPPERS: [&str; 2] = ["LithoTrack_FE_95", "LithoTrack_FE_115"];
 
-pub(super) enum QueueTime {
-    None,
-    Qtcr,
-    /// Flow factors per route and step; never measured counts as 1.
-    Qts(Vec<Vec<f64>>),
-}
+/// Most criteria of a configured ranking.
+pub const MAX_CRITERIA: usize = 6;
 
 /// Stopping limits and the constrained-lot counts they apply to, per tool group.
 pub(super) struct Stopping {
@@ -61,7 +60,11 @@ impl Stopping {
 
 pub(super) struct Strategy {
     pub steppers: Vec<bool>,
-    pub queue_time: QueueTime,
+    /// Ranking criteria per tool group, most significant first; release order breaks ties.
+    pub ranking: Vec<Vec<Criterion>>,
+    /// QTS flow factors per route and step (never measured counts as 1), when QTS ranks.
+    pub flow_factors: Option<Vec<Vec<f64>>>,
+    pub batch_start_within: Option<Time>,
     pub stopping: Option<Stopping>,
     engineering: Engineering,
 }
@@ -116,42 +119,53 @@ impl Strategy {
                 Err(_) => {}
             }
         }
-        if config.flow_factors.is_some() && config.queue_time != QueueTimeRule::Qts {
+        let mut ranking: Vec<Vec<Criterion>> = data
+            .tool_groups
+            .iter()
+            .map(|group| dataset_ranking(&group.ranks, config.queue_time))
+            .collect();
+        for (name, criteria) in &config.ranking {
+            check_ranking(name, criteria)?;
+            ranking[group_id(name)?] = criteria.clone();
+        }
+        if config.batch_start_within.is_some_and(|within| within <= 0) {
+            return Err(Error("queue-time thresholds must be positive".into()));
+        }
+        let uses_qts = config.uses_qts();
+        if config.flow_factors.is_some() && !uses_qts {
             return Err(Error("flow factors apply to the QTS rule only".into()));
         }
-        let queue_time = match config.queue_time {
-            QueueTimeRule::None => QueueTime::None,
-            QueueTimeRule::Qtcr => QueueTime::Qtcr,
-            QueueTimeRule::Qts => {
-                let flow_factors = flow_factors.expect("QTS runs with flow factors");
-                let fits = flow_factors.len() == data.routes.len()
-                    && flow_factors
-                        .iter()
-                        .zip(&data.routes)
-                        .all(|(ff, route)| ff.len() == route.steps.len());
-                if !fits {
-                    return Err(Error(
-                        "QTS flow factors need one value per route step".into(),
-                    ));
-                }
-                let mut resolved = Vec::with_capacity(flow_factors.len());
-                for route in flow_factors {
-                    let mut steps = Vec::with_capacity(route.len());
-                    for &ff in route {
-                        match ff {
-                            None => steps.push(1.0),
-                            Some(ff) if ff.is_finite() && ff >= 0.0 => steps.push(ff),
-                            Some(ff) => {
-                                return Err(Error(format!(
-                                    "QTS flow factor {ff} is not finite and non-negative"
-                                )));
-                            }
+        let flow_factors = if uses_qts {
+            let flow_factors = flow_factors.expect("QTS runs with flow factors");
+            let fits = flow_factors.len() == data.routes.len()
+                && flow_factors
+                    .iter()
+                    .zip(&data.routes)
+                    .all(|(ff, route)| ff.len() == route.steps.len());
+            if !fits {
+                return Err(Error(
+                    "QTS flow factors need one value per route step".into(),
+                ));
+            }
+            let mut resolved = Vec::with_capacity(flow_factors.len());
+            for route in flow_factors {
+                let mut steps = Vec::with_capacity(route.len());
+                for &ff in route {
+                    match ff {
+                        None => steps.push(1.0),
+                        Some(ff) if ff.is_finite() && ff >= 0.0 => steps.push(ff),
+                        Some(ff) => {
+                            return Err(Error(format!(
+                                "QTS flow factor {ff} is not finite and non-negative"
+                            )));
                         }
                     }
-                    resolved.push(steps);
                 }
-                QueueTime::Qts(resolved)
+                resolved.push(steps);
             }
+            Some(resolved)
+        } else {
+            None
         };
         let stopping = match &config.stopping {
             None => None,
@@ -181,7 +195,9 @@ impl Strategy {
         };
         Ok(Self {
             steppers,
-            queue_time,
+            ranking,
+            flow_factors,
+            batch_start_within: config.batch_start_within,
             stopping,
             engineering,
         })
@@ -220,5 +236,91 @@ impl Strategy {
             Engineering::Cot(trigger) => Some(trigger),
             _ => None,
         }
+    }
+}
+
+/// A tool group's dataset ranks with the queue-time rule right before FIFO/CR ([P2] §3.1).
+fn dataset_ranking(ranks: &[Rank], rule: QueueTimeRule) -> Vec<Criterion> {
+    let mut criteria = Vec::with_capacity(ranks.len() + 1);
+    for &rank in ranks {
+        if matches!(rank, Rank::Fifo | Rank::CriticalRatio) {
+            match rule {
+                QueueTimeRule::None => {}
+                QueueTimeRule::Qtcr => criteria.push(Criterion::Qtcr),
+                QueueTimeRule::Qts => criteria.push(Criterion::Qts),
+            }
+        }
+        criteria.push(rank.into());
+    }
+    criteria
+}
+
+/// A configured ranking: 1 to [`MAX_CRITERIA`] distinct criteria, positive thresholds.
+fn check_ranking(group: &str, criteria: &[Criterion]) -> Result<(), Error> {
+    if criteria.is_empty() || criteria.len() > MAX_CRITERIA {
+        return Err(Error(format!(
+            "the ranking of {group} needs 1 to {MAX_CRITERIA} criteria"
+        )));
+    }
+    for (index, criterion) in criteria.iter().enumerate() {
+        if criteria[..index]
+            .iter()
+            .any(|earlier| discriminant(earlier) == discriminant(criterion))
+        {
+            return Err(Error(format!(
+                "the ranking of {group} repeats {}",
+                criterion.name()
+            )));
+        }
+        if matches!(criterion, Criterion::QtWithin(within) if *within <= 0) {
+            return Err(Error("queue-time thresholds must be positive".into()));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dataset_ranks_take_the_queue_time_rule_before_fifo_and_cr() {
+        use Criterion as C;
+        let ranks = [Rank::Priority, Rank::LeastSetup, Rank::Fifo];
+        assert_eq!(
+            dataset_ranking(&ranks, QueueTimeRule::None),
+            [C::Priority, C::LeastSetup, C::Fifo]
+        );
+        assert_eq!(
+            dataset_ranking(&ranks, QueueTimeRule::Qtcr),
+            [C::Priority, C::LeastSetup, C::Qtcr, C::Fifo]
+        );
+        assert_eq!(
+            dataset_ranking(&[Rank::CriticalRatio], QueueTimeRule::Qts),
+            [C::Qts, C::CriticalRatio]
+        );
+    }
+
+    #[test]
+    fn configured_rankings_are_checked() {
+        let error = |criteria: &[Criterion]| check_ranking("G", criteria).unwrap_err().to_string();
+        assert_eq!(error(&[]), "the ranking of G needs 1 to 6 criteria");
+        assert_eq!(
+            error(&[Criterion::Fifo; MAX_CRITERIA + 1]),
+            "the ranking of G needs 1 to 6 criteria"
+        );
+        assert_eq!(
+            error(&[
+                Criterion::QtWithin(1),
+                Criterion::Fifo,
+                Criterion::QtWithin(2)
+            ]),
+            "the ranking of G repeats qt_within"
+        );
+        assert_eq!(
+            error(&[Criterion::QtWithin(0)]),
+            "queue-time thresholds must be positive"
+        );
+        assert!(check_ranking("G", &[Criterion::QtWithin(1), Criterion::Qts]).is_ok());
     }
 }

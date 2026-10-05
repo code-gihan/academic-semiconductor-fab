@@ -1,21 +1,24 @@
 //! Lot selection: which ready tool picks first, which lots it may take, their ranking and batch
 //! formation. Dispatching runs on events only (arrival, job end, repair, PM end, reservation
-//! release, stopping limit release) and reads the queue entries fixed on arrival.
+//! release, stopping limit release, batch wake) and reads the queue entries fixed on arrival.
 
 use std::cmp::Ordering;
 use std::mem;
 
 use des_core::{Scheduler, Time};
 
-use super::fab::{Event, Fab, LotId, LotState, ToolId, Urgency, Waiting};
-use crate::data::{Dist, PartId, Rank, Rule, SetupId, StepIndex, StepSetup, ToolGroupId};
+use super::Criterion;
+use super::fab::{Event, Fab, LotId, LotState, ToolId, Waiting};
+use super::strategy::MAX_CRITERIA;
+use crate::data::{Dist, PartId, Rule, SetupId, StepIndex, StepSetup, ToolGroupId};
 
-/// Ranking key compared lexicographically, smallest first.
-pub(super) type Key = [f64; 7];
+/// Ranking key compared lexicographically, smallest first: the CAtE/CoT class, the criteria and
+/// the release order.
+pub(super) type Key = [f64; MAX_CRITERIA + 2];
 
-/// What the keys of one selection share: the group's ranks, the tool's setup and the instant.
+/// What the keys of one selection share: the group's criteria, the tool's setup and the instant.
 struct Ranking<'a> {
-    ranks: &'a [Rank],
+    criteria: &'a [Criterion],
     /// CAtE/CoT on the steppers: whether engineering lots are preferred.
     prefer_engineering: Option<bool>,
     setup: Option<SetupId>,
@@ -72,6 +75,14 @@ impl Fab {
             }
         }
         self.order = order;
+        // A held batch may start by queue-time slack alone: dispatch again then.
+        let state = &mut self.groups[group];
+        if let Some(due) = state.batch_due.take()
+            && state.wake.is_none_or(|pending| due < pending)
+        {
+            state.wake = Some(due);
+            sched.schedule_at(due, Event::BatchWake(group));
+        }
     }
 
     /// Stopping ([P2] §3.2): marks the lots about to enter a CQT segment while a limit of a tool
@@ -126,9 +137,8 @@ impl Fab {
                         .setup
                         .is_some_and(|setup| current != Some(setup.setup)))
         };
-        let spec = &self.data.tool_groups[group];
         let ranking = Ranking {
-            ranks: &spec.ranks,
+            criteria: &self.strategy.ranking[group],
             prefer_engineering: self.strategy.prefer_engineering(
                 group,
                 now,
@@ -137,7 +147,7 @@ impl Fab {
             setup: current,
             now,
         };
-        if spec.batching.is_some() {
+        if self.data.tool_groups[group].batching.is_some() {
             let mut candidates = mem::take(&mut self.candidates);
             candidates.clear();
             for (index, waiting) in self.groups[group].queue.iter().enumerate() {
@@ -145,7 +155,7 @@ impl Fab {
                     candidates.push((self.key(waiting, &ranking), index));
                 }
             }
-            let found = self.form_batch(group, &mut candidates);
+            let found = self.form_batch(group, &mut candidates, now);
             self.candidates = candidates;
             return found;
         }
@@ -188,11 +198,13 @@ impl Fab {
         })
     }
 
-    /// Lexicographic key: CAtE/CoT class preference, then the group's ranks with the queue-time
-    /// urgency right before FIFO/CR, then release order.
+    /// Lexicographic key: CAtE/CoT class preference, the group's criteria, release order. The
+    /// queue-time criteria rank lots outside CQT segments last. Inlined into the selection loops,
+    /// which call it for every queued lot: as a call it took a third of the run time (DS2, DS4).
+    #[inline(always)]
     fn key(&self, waiting: &Waiting, ranking: &Ranking) -> Key {
         let now = ranking.now;
-        let mut key = [0.0; 7];
+        let mut key = [0.0; MAX_CRITERIA + 2];
         let mut len = 0;
         let mut push = |value: f64| {
             key[len] = value;
@@ -205,36 +217,52 @@ impl Fab {
                 1.0
             });
         }
-        for &rank in ranking.ranks {
-            match rank {
-                Rank::Priority => push(-f64::from(waiting.priority)),
-                Rank::LeastSetup => push(self.ranked_setup_time(waiting.setup, ranking.setup)),
-                Rank::Fifo | Rank::CriticalRatio => {
-                    match waiting.urgency {
-                        Urgency::None => {}
-                        Urgency::Outside => push(f64::INFINITY),
-                        Urgency::Qtcr { deadline, work } => push(qtcr(deadline, work, now)),
-                        Urgency::Qts(deadline) => push(deadline),
-                    }
-                    push(match rank {
-                        Rank::Fifo => waiting.queued_at as f64,
-                        // Time to the due date over the expected remaining work.
-                        _ => (waiting.due - now) as f64 / waiting.remaining,
-                    });
+        let cqt = waiting.cqt.as_ref();
+        for &criterion in ranking.criteria {
+            push(match criterion {
+                Criterion::Priority => -f64::from(waiting.priority),
+                Criterion::LeastSetup => self.ranked_setup_time(waiting.setup, ranking.setup),
+                Criterion::Fifo => waiting.queued_at as f64,
+                // Time to the due date over the expected remaining work.
+                Criterion::CriticalRatio => (waiting.due - now) as f64 / waiting.remaining,
+                Criterion::DueDate => waiting.due as f64,
+                Criterion::ShortestStep => waiting.step_time,
+                Criterion::LeastRemaining => waiting.remaining,
+                Criterion::Qtcr => {
+                    cqt.map_or(f64::INFINITY, |cqt| qtcr(cqt.deadline, cqt.work, now))
                 }
-            }
+                Criterion::Qts => cqt.map_or(f64::INFINITY, |cqt| cqt.latest),
+                Criterion::QtDeadline => cqt.map_or(f64::INFINITY, |cqt| cqt.deadline as f64),
+                Criterion::QtWithin(within) => {
+                    if cqt.is_some_and(|cqt| cqt.slack(now) <= within as f64) {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                }
+            });
         }
         push(waiting.serial as f64);
         key
     }
 
     /// [P2] §4.1: the best-ranked lot opens a batch filled with compatible lots in rank order up to
-    /// the maximum. It starts at the minimum, or below it once no compatible lot can still come;
-    /// otherwise the next-ranked lot of another batch kind opens one.
-    fn form_batch(&mut self, group: ToolGroupId, candidates: &mut [(Key, usize)]) -> bool {
+    /// the maximum. It starts at the minimum, or below it once no compatible lot can still come or
+    /// one of its lots has used up its queue-time slack down to `batch_start_within`; otherwise the
+    /// next-ranked lot of another batch kind opens one.
+    fn form_batch(
+        &mut self,
+        group: ToolGroupId,
+        candidates: &mut [(Key, usize)],
+        now: Time,
+    ) -> bool {
         candidates.sort_by(|a, b| compare(&a.0, &b.0));
         let queue = &self.groups[group].queue;
+        let within = self.strategy.batch_start_within;
         let mut tried = Vec::new();
+        let mut started = false;
+        // When a batch held here may start by queue-time slack alone.
+        let mut due = Time::MAX;
         for first in 0..candidates.len() {
             let head = &queue[candidates[first].1];
             let key = head.batch.expect("batch step");
@@ -247,18 +275,32 @@ impl Fab {
                 .expect("batch size");
             self.selected.clear();
             let mut wafers = 0;
+            // When the slack of one of the batch's lots first reaches the threshold.
+            let mut urgent_from = Time::MAX;
             for &(_, index) in &candidates[first..] {
                 let waiting = &queue[index];
                 if waiting.batch == Some(key) && wafers + waiting.wafers <= size.max {
                     self.selected.push(waiting.lot);
                     wafers += waiting.wafers;
+                    if let (Some(within), Some(cqt)) = (within, &waiting.cqt) {
+                        urgent_from = urgent_from.min(cqt.within_from(within));
+                    }
                 }
             }
-            if wafers >= size.min || !self.can_still_come(&self.routes.batch_members[key]) {
-                return true;
+            if wafers >= size.min
+                || urgent_from <= now
+                || !self.can_still_come(&self.routes.batch_members[key])
+            {
+                started = true;
+                break;
             }
+            due = due.min(urgent_from);
         }
-        false
+        if due < Time::MAX {
+            let held = &mut self.groups[group].batch_due;
+            *held = Some(held.map_or(due, |held| held.min(due)));
+        }
+        started
     }
 
     /// A lot can still reach one of these (part, step) pairs: the part has releases left, or a lot
@@ -291,5 +333,135 @@ fn qtcr(deadline: Time, work: f64, now: Time) -> f64 {
         slack / work
     } else {
         slack * work
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use des_core::{DAY, HOUR};
+
+    use super::*;
+    use crate::data::tiny;
+    use crate::sim::fab::WaitingCqt;
+    use crate::sim::{Config, LotKind};
+
+    /// Lot `serial` queued at 0 with priority 10, due in 9 days, 10 h of remaining work and a 1 h
+    /// step, outside CQT segments.
+    fn waiting(serial: u64) -> Waiting {
+        Waiting {
+            lot: serial as usize,
+            route: 0,
+            step: 0,
+            kind: LotKind::Prl,
+            priority: 10,
+            wafers: 25,
+            serial,
+            queued_at: 0,
+            due: 9 * DAY,
+            remaining: (10 * HOUR) as f64,
+            step_time: HOUR as f64,
+            setup: None,
+            dedicated: None,
+            batch: None,
+            cqt: None,
+            entering: false,
+            held: false,
+        }
+    }
+
+    /// In a CQT segment ending at `deadline`, with `work` hours to the exit step's end and
+    /// `before_exit` hours to its start.
+    fn segment(deadline: Time, work: f64, before_exit: f64) -> Option<WaitingCqt> {
+        Some(WaitingCqt {
+            deadline,
+            work: work * HOUR as f64,
+            before_exit: before_exit * HOUR as f64,
+            latest: (deadline - 2 * HOUR) as f64,
+        })
+    }
+
+    /// Serials of `queue` in ranking order under `criteria` at `now`, on a tool without setup.
+    fn order(criteria: &[Criterion], queue: &[Waiting], now: Time) -> Vec<u64> {
+        let fab = Fab::new(Arc::new(tiny()), &Config::new(DAY), None).unwrap();
+        let ranking = Ranking {
+            criteria,
+            prefer_engineering: None,
+            setup: None,
+            now,
+        };
+        let mut keys: Vec<_> = queue
+            .iter()
+            .map(|waiting| (fab.key(waiting, &ranking), waiting.serial))
+            .collect();
+        keys.sort_by(|a, b| compare(&a.0, &b.0));
+        keys.into_iter().map(|(_, serial)| serial).collect()
+    }
+
+    #[test]
+    fn criteria_rank_the_smallest_value_first() {
+        use Criterion as C;
+        let now = 3 * HOUR;
+        let queue = [
+            Waiting {
+                priority: 20,
+                queued_at: 2 * HOUR,
+                due: 3 * DAY,
+                remaining: (20 * HOUR) as f64,
+                cqt: segment(5 * HOUR, 4.0, 0.0),
+                ..waiting(0)
+            },
+            Waiting {
+                queued_at: HOUR,
+                due: 4 * DAY,
+                step_time: (2 * HOUR) as f64,
+                setup: Some(StepSetup {
+                    setup: 0,
+                    always: false,
+                    time: None,
+                }),
+                cqt: segment(4 * HOUR, 1.0, 2.5),
+                ..waiting(1)
+            },
+            Waiting {
+                queued_at: 3 * HOUR,
+                remaining: (5 * HOUR) as f64,
+                step_time: (HOUR / 2) as f64,
+                ..waiting(2)
+            },
+        ];
+        // Ties go by release order.
+        assert_eq!(order(&[C::Priority], &queue, now), [0, 1, 2]);
+        assert_eq!(order(&[C::Fifo], &queue, now), [1, 0, 2]);
+        assert_eq!(order(&[C::LeastSetup], &queue, now), [0, 2, 1]);
+        // Due date over remaining work: 3 d / 20 h, 4 d / 10 h, 9 d / 5 h.
+        assert_eq!(order(&[C::CriticalRatio], &queue, now), [0, 1, 2]);
+        assert_eq!(order(&[C::DueDate], &queue, now), [0, 1, 2]);
+        assert_eq!(order(&[C::ShortestStep], &queue, now), [2, 0, 1]);
+        assert_eq!(order(&[C::LeastRemaining], &queue, now), [2, 1, 0]);
+        // Lots outside CQT segments go last. QTCR: 2 h / 4 h before 1 h / 1 h.
+        assert_eq!(order(&[C::Qtcr], &queue, now), [0, 1, 2]);
+        assert_eq!(order(&[C::Qts, C::Fifo], &queue, now), [1, 0, 2]);
+        assert_eq!(order(&[C::QtDeadline], &queue, now), [1, 0, 2]);
+        // Slack: 5 h − 3 h = 2 h; 4 h − 3 h − 2.5 h = −1.5 h.
+        assert_eq!(
+            order(&[C::QtWithin(HOUR), C::Priority], &queue, now),
+            [1, 0, 2]
+        );
+        assert_eq!(
+            order(&[C::QtWithin(2 * HOUR), C::Fifo], &queue, now),
+            [1, 0, 2]
+        );
+        assert_eq!(
+            order(&[C::QtWithin(2 * HOUR), C::Priority], &queue, now),
+            [0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn qtcr_multiplies_the_slack_once_past_the_end() {
+        assert_eq!(qtcr(5, 2.0, 1), 2.0);
+        assert_eq!(qtcr(1, 2.0, 5), -8.0);
     }
 }

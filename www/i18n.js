@@ -1,6 +1,7 @@
-// Page text in the chosen language. Static elements name their text with a data-i18n key; scripts
-// call t(). English is the default; a chosen language is kept in localStorage. Every locale file
-// has the keys of locales/en.js, and a key missing from one falls back to English.
+// Page text in the chosen language. Static elements name their text with a data-i18n key and their
+// attributes with data-i18n-attr ("attribute:key", several separated by ";"); scripts call t().
+// English is the default; a chosen language is kept in localStorage. Every locale file has the
+// keys of locales/en.js, and a key missing from one falls back to English.
 import en from "./locales/en.js";
 import ko from "./locales/ko.js";
 
@@ -45,6 +46,12 @@ function apply(code) {
   document.querySelector('meta[name="description"]').content = t("meta.description");
   for (const element of document.querySelectorAll("[data-i18n]")) {
     element.textContent = t(element.dataset.i18n);
+  }
+  for (const element of document.querySelectorAll("[data-i18n-attr]")) {
+    for (const pair of element.dataset.i18nAttr.split(";")) {
+      const [attribute, key] = pair.split(":");
+      element.setAttribute(attribute, t(key));
+    }
   }
 }
 

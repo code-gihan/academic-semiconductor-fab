@@ -154,7 +154,7 @@ export function showResults(run, period, animated) {
     memory: formatNumber(memory / 1e6, 0),
   });
   if (animated) {
-    reveal($("results").querySelectorAll(".kpi, .chart"));
+    reveal($("results-body").querySelectorAll(".kpi, .chart"));
     grow($("charts").querySelectorAll(".bar-fill, .bar-ci"));
   }
 }

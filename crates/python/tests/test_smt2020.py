@@ -94,6 +94,31 @@ class SimulationTest(unittest.TestCase):
         self.assertEqual(digests[0], smt2020.digest(self.results))
         self.assertNotEqual(digests[0], digests[1])
 
+    def test_the_dataset_info_names_and_indexes_the_dataset(self):
+        info = self.dataset.info()
+        self.assertEqual((len(info["tool_groups"]), len(info["segments"])), (106, 66))
+        for segment in info["segments"]:
+            steps = info["routes"][segment["route"]]["steps"]
+            self.assertTrue(segment["entry"] < segment["exit"] < len(steps))
+            self.assertIn(steps[segment["exit"]]["tool_group"], segment["tool_groups"])
+        self.assertEqual(
+            sorted(group["name"] for group in info["tool_groups"] if group["stepper"]),
+            ["LithoTrack_FE_115", "LithoTrack_FE_95"],
+        )
+        self.assertEqual([period["name"] for period in info["periods"][:2]], ["WarmUp", "Period_1"])
+
+    def test_rankings_batch_starts_and_a_warm_up_configure_a_run(self):
+        info = self.dataset.info()
+        segment = info["segments"][0]
+        exit = info["routes"][segment["route"]]["steps"][segment["exit"]]["tool_group"]
+        ranking = {info["tool_groups"][exit]["name"]: [{"qt_within": HOUR}, "priority", "fifo"]}
+        strategy = {**self.config, "warm_up": 2 * DAY, "batch_start_within": HOUR, "ranking": ranking}
+        simulation = smt2020.Simulation(self.dataset, strategy)
+        self.assertEqual(simulation.config()["ranking"], ranking)
+        simulation.run()
+        periods = [period["name"] for period in simulation.results()["periods"]]
+        self.assertEqual(periods, ["WarmUp", "Period_1", "Drain"])
+
     def test_summaries_and_csv(self):
         summaries = smt2020.summarize([self.results, self.results])
         completed = next(
@@ -122,6 +147,11 @@ class SimulationTest(unittest.TestCase):
             smt2020.Dataset(b"not a dataset")
         with self.assertRaises(OSError):
             smt2020.load_dataset("no/such/file.bin")
+        for criteria in (["fifoo"], ["fifo"]):
+            with self.assertRaises(ValueError):
+                smt2020.Simulation(self.dataset, {"horizon": DAY, "ranking": {"Nope": criteria}})
+        with self.assertRaises(ValueError):
+            smt2020.Simulation(self.dataset, {"horizon": DAY, "warm_up": DAY})
 
 
 if __name__ == "__main__":
