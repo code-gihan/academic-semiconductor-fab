@@ -9,12 +9,12 @@ use super::dispatch::Key;
 use super::plan::{Plan, releases_before};
 use super::routes::Routes;
 use super::stats::{LotKind, PeriodReport, Results, Stats};
-use super::strategy::Strategy;
+use super::strategy::{QueueTime, Stopping, Strategy};
 use super::tool::{STATES, Tool, Work};
-use super::{Config, Error};
+use super::{Config, DRAIN_LIMIT, Error};
 use crate::data::{
     Dataset, Dist, LocationId, LotRelease, PartId, PmTrigger, RouteId, Rule, SetupId, StepIndex,
-    ToolGroupId, Unit,
+    StepSetup, ToolGroupId, Unit,
 };
 use crate::rng::{Purpose, Streams};
 
@@ -47,6 +47,8 @@ pub(super) enum Event {
     PmDone(ToolId),
     /// End of the reporting period with this index.
     PeriodEnd(usize),
+    /// [`DRAIN_LIMIT`] after the horizon: the run stops unfinished.
+    Deadline,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -78,7 +80,6 @@ pub(super) struct Lot {
     pub serial: u64,
     pub step: StepIndex,
     pub state: LotState,
-    pub queued_at: Time,
     /// End of the previous processed step (release for the first).
     pub last_done: Time,
     pub location: Option<LocationId>,
@@ -97,9 +98,48 @@ pub(super) struct Reservation {
     pub tool: Option<ToolId>,
 }
 
+/// A lot queued at a tool group with everything its ranking reads, fixed on arrival: dispatching
+/// scans these entries instead of lots and route data.
+pub(super) struct Waiting {
+    pub lot: LotId,
+    pub route: RouteId,
+    pub step: StepIndex,
+    pub kind: LotKind,
+    pub priority: u32,
+    pub wafers: u32,
+    pub serial: u64,
+    pub queued_at: Time,
+    pub due: Time,
+    /// Expected remaining work from this step (critical ratio).
+    pub remaining: f64,
+    pub setup: Option<StepSetup>,
+    /// Lot-to-lens dedication: the only tool that may process the lot here.
+    pub dedicated: Option<ToolId>,
+    /// Batch compatibility key (batch steps).
+    pub batch: Option<usize>,
+    pub urgency: Urgency,
+    /// The lot enters a CQT segment here, so stopping limits apply.
+    pub entering: bool,
+    /// Held by stopping, as of the group's current dispatch.
+    pub held: bool,
+}
+
+/// Queue-time urgency inputs of a waiting lot.
+#[derive(Clone, Copy)]
+pub(super) enum Urgency {
+    /// No queue-time rule.
+    None,
+    /// Outside CQT segments: ranks after every constrained lot.
+    Outside,
+    /// QTCR: segment end date and expected work up to the exit step.
+    Qtcr { deadline: Time, work: f64 },
+    /// QTS: latest start of the step.
+    Qts(f64),
+}
+
 #[derive(Default)]
 pub(super) struct Group {
-    pub queue: Vec<LotId>,
+    pub queue: Vec<Waiting>,
     /// Available tools, longest available first.
     pub ready: VecDeque<ToolId>,
     pub reservation: Option<Reservation>,
@@ -134,28 +174,31 @@ pub(super) struct Fab<'a> {
     transports: Vec<Option<Dist>>,
     stats: Stats,
     reports: Vec<PeriodReport>,
-    step_flow_factors: Vec<Vec<f64>>,
+    step_flow_factors: Vec<Vec<Option<f64>>>,
     released: u64,
     completed: u64,
     wip: usize,
     /// Releases continue until the horizon.
     releasing: bool,
     finished: Option<Time>,
-    /// Groups with lots held by stopping, dispatched again after a constrained lot moves on.
+    /// Groups with lots held by stopping, dispatched again when a stopping limit is released.
     pub stopped: Vec<ToolGroupId>,
-    segment_moved: bool,
-    /// Scratch buffers of dispatching.
+    /// Scratch buffers of dispatching; candidates index the group queue.
     pub selected: Vec<LotId>,
-    pub candidates: Vec<(Key, LotId)>,
+    pub candidates: Vec<(Key, usize)>,
     pub order: Vec<ToolId>,
 }
 
 impl<'a> Fab<'a> {
-    pub(super) fn new(data: &'a Dataset, config: &Config) -> Result<Self, Error> {
+    pub(super) fn new(
+        data: &'a Dataset,
+        config: &Config,
+        flow_factors: Option<&[Vec<Option<f64>>]>,
+    ) -> Result<Self, Error> {
         if config.horizon <= 0 {
             return Err(Error("the horizon must be positive".into()));
         }
-        let strategy = Strategy::new(data, config)?;
+        let strategy = Strategy::new(data, config, flow_factors)?;
         let routes = Routes::new(data, &strategy.steppers);
         let plan = Plan::new(data, config.horizon, config.load)?;
 
@@ -231,7 +274,6 @@ impl<'a> Fab<'a> {
             releasing: true,
             finished: None,
             stopped: Vec::new(),
-            segment_moved: false,
             selected: Vec::new(),
             candidates: Vec::new(),
             order: Vec::new(),
@@ -324,7 +366,6 @@ impl<'a> Fab<'a> {
             serial: self.serial,
             step: spec.step.unwrap_or(0),
             state: LotState::Moving,
-            queued_at: now,
             last_done: now,
             location: None,
             dedicated: Vec::new(),
@@ -391,12 +432,11 @@ impl<'a> Fab<'a> {
 
     fn arrive(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
         self.count_segment(id, -1);
-        let lot = &mut self.lots[id];
-        lot.state = LotState::Queued;
-        lot.queued_at = sched.now();
+        self.lots[id].state = LotState::Queued;
         self.count_segment(id, 1);
         let group = self.group_of(id);
-        self.groups[group].queue.push(id);
+        let waiting = self.waiting(id, sched.now());
+        self.groups[group].queue.push(waiting);
         if let Some(reservation) = &self.groups[group].reservation
             && reservation.lot == id
             && let Some(tool) = reservation.tool
@@ -407,6 +447,73 @@ impl<'a> Fab<'a> {
             return;
         }
         self.dispatch(group, Some(id), sched);
+    }
+
+    /// Queue entry of a lot arriving at its step now.
+    fn waiting(&self, id: LotId, now: Time) -> Waiting {
+        let lot = &self.lots[id];
+        let step = &self.data.routes[lot.route].steps[lot.step];
+        let info = &self.routes.info[lot.route];
+        let urgency = match (&self.strategy.queue_time, &lot.segment) {
+            (QueueTime::None, _) => Urgency::None,
+            (_, None) => Urgency::Outside,
+            (QueueTime::Qtcr, Some(segment)) => Urgency::Qtcr {
+                deadline: segment.entered + segment.limit,
+                work: info.remaining[lot.step].at(lot.wafers)
+                    - info.remaining[segment.exit + 1].at(lot.wafers),
+            },
+            (QueueTime::Qts(flow_factors), Some(segment)) => {
+                Urgency::Qts(self.qts_deadline(lot, segment, flow_factors))
+            }
+        };
+        Waiting {
+            lot: id,
+            route: lot.route,
+            step: lot.step,
+            kind: lot.kind,
+            priority: lot.priority,
+            wafers: lot.wafers,
+            serial: lot.serial,
+            queued_at: now,
+            due: lot.due,
+            remaining: info.remaining[lot.step].at(lot.wafers),
+            setup: step.setup,
+            dedicated: lot
+                .dedicated
+                .iter()
+                .find(|&&(step, _)| step == lot.step)
+                .map(|&(_, tool)| tool),
+            batch: self.routes.batch_key[lot.part][lot.step],
+            urgency,
+            // A lot leaving its previous segment here is exempt.
+            entering: self.strategy.stopping.is_some()
+                && step.cqt.is_some()
+                && lot
+                    .segment
+                    .as_ref()
+                    .is_none_or(|segment| segment.exit != lot.step),
+            held: false,
+        }
+    }
+
+    /// [P2] eq. (2)–(6): latest start of the lot's current step in its segment, with p_k the
+    /// sampling-weighted expected step durations.
+    fn qts_deadline(&self, lot: &Lot, segment: &Segment, flow_factors: &[Vec<f64>]) -> f64 {
+        let deadline = (segment.entered + segment.limit) as f64;
+        if lot.step >= segment.exit {
+            return deadline;
+        }
+        let info = &self.routes.info[lot.route];
+        let steps = &self.data.routes[lot.route].steps;
+        let p = |k: usize| steps[k].sampling * info.step[k].at(lot.wafers);
+        let ff = |k: usize| flow_factors[lot.route][k];
+        let span = (segment.entry + 1..segment.exit)
+            .map(|k| ff(k) * p(k))
+            .sum::<f64>()
+            + (ff(segment.exit) - 1.0) * p(segment.exit);
+        let allocated: f64 = (segment.entry + 1..=lot.step).map(|k| ff(k) * p(k)).sum();
+        let share = if span > 0.0 { allocated / span } else { 0.0 };
+        segment.entered as f64 + segment.limit as f64 * share - p(lot.step)
     }
 
     fn complete(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
@@ -427,7 +534,7 @@ impl<'a> Fab<'a> {
         self.wip -= 1;
         self.completed += 1;
         if !self.releasing && self.wip == 0 {
-            self.finish(now);
+            self.finish(sched);
         }
     }
 
@@ -443,7 +550,9 @@ impl<'a> Fab<'a> {
         let step = &data.routes[route].steps[step_index];
         let group_id = step.tool_group;
         let group = &data.tool_groups[group_id];
-        self.groups[group_id].queue.retain(|id| !lots.contains(id));
+        self.groups[group_id]
+            .queue
+            .retain(|waiting| !lots.contains(&waiting.lot));
 
         self.tools[tool_id].account(now);
         let current = self.tools[tool_id].setup;
@@ -549,11 +658,6 @@ impl<'a> Fab<'a> {
         self.selected = lots;
         self.selected.clear();
         self.tool_changed(tool_id, sched);
-        if mem::take(&mut self.segment_moved) {
-            for group in mem::take(&mut self.stopped) {
-                self.dispatch(group, None, sched);
-            }
-        }
     }
 
     fn finish_step(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
@@ -561,7 +665,6 @@ impl<'a> Fab<'a> {
         let now = sched.now();
         self.count_segment(id, -1);
         let lot = &mut self.lots[id];
-        self.segment_moved |= lot.segment.is_some();
         let step = &data.routes[lot.route].steps[lot.step];
         let info = &self.routes.info[lot.route];
         self.stats.step(
@@ -811,7 +914,7 @@ impl<'a> Fab<'a> {
         let steps = &self.data.routes[lot.route].steps;
         let at = (lot.state != LotState::Moving).then(|| steps[lot.step].tool_group);
         if let Some(group) = at {
-            stopping.front[group] += delta;
+            stopping.count(group, true, delta);
         }
         let ahead = &steps[lot.step..=segment.exit];
         for (index, step) in ahead.iter().enumerate() {
@@ -821,7 +924,7 @@ impl<'a> Fab<'a> {
                     .iter()
                     .all(|earlier| earlier.tool_group != group)
             {
-                stopping.upstream[group] += delta;
+                stopping.count(group, false, delta);
             }
         }
     }
@@ -838,13 +941,16 @@ impl<'a> Fab<'a> {
         }
         self.snapshot(name, now, report, reset);
         if !self.releasing && self.wip == 0 {
-            self.finish(now);
+            self.finish(sched);
         }
     }
 
-    fn finish(&mut self, now: Time) {
+    /// The last lot is complete: reports the drain and ends the run.
+    fn finish(&mut self, sched: &mut Scheduler<Event>) {
+        let now = sched.now();
         self.snapshot("Drain".into(), now, true, false);
         self.finished = Some(now);
+        sched.stop();
     }
 
     /// Closes the statistics window at `now`: reports it (REPORT = yes) and restarts it
@@ -908,6 +1014,7 @@ impl Model for Fab<'_> {
         for (index, period) in self.periods.iter().enumerate() {
             sched.schedule_at(period.end, Event::PeriodEnd(index));
         }
+        sched.schedule_at(self.horizon + DRAIN_LIMIT, Event::Deadline);
     }
 
     fn handle(&mut self, event: Event, sched: &mut Scheduler<Event>) {
@@ -921,6 +1028,19 @@ impl Model for Fab<'_> {
             Event::PmDue { tool, pm } => self.pm_due(tool, pm, sched),
             Event::PmDone(tool) => self.pm_done(tool, sched),
             Event::PeriodEnd(index) => self.period_end(index, sched),
+            // A finished run stops before its deadline.
+            Event::Deadline => sched.stop(),
+        }
+        // A stopping limit released by the event lets the groups holding lots dispatch again.
+        if self
+            .strategy
+            .stopping
+            .as_mut()
+            .is_some_and(Stopping::released)
+        {
+            for group in mem::take(&mut self.stopped) {
+                self.dispatch(group, None, sched);
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use des_core::{DAY, MINUTE, Model, Scheduler, Simulation, Time};
+use des_core::{MINUTE, Model, Outcome, Scheduler, Simulation, Time};
 
 enum Event {
     Arrival(usize),
@@ -67,7 +67,7 @@ fn departures_match_lindley_recursion() {
         in_service: None,
         departures: Vec::new(),
     });
-    sim.run_until(DAY);
+    assert_eq!(sim.run(), Outcome::Exhausted);
 
     let mut last_departure = 0;
     let expected: Vec<(usize, Time)> = arrivals
@@ -80,5 +80,5 @@ fn departures_match_lindley_recursion() {
         .collect();
     assert_eq!(sim.model().departures, expected);
     assert_eq!(sim.events_processed(), 2 * arrivals.len() as u64);
-    assert_eq!(sim.now(), DAY);
+    assert_eq!(sim.now(), last_departure);
 }

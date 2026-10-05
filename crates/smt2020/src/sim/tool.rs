@@ -8,7 +8,7 @@ use crate::data::{Pm, PmTrigger, SetupId, ToolGroupId};
 
 /// Tool state. Where jobs of a cascading tool overlap, the earlier variant counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum State {
+pub(super) enum State {
     Down,
     Pm,
     Setup,

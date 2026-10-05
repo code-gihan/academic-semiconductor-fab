@@ -1,16 +1,66 @@
 # academic-semiconductor-fab
 
-SMT2020 반도체 FAB 테스트베드(데이터셋 4종)를 정적 웹 페이지에서 사용자가 직접 실행하는 시뮬레이터. DES 엔진·이벤트 큐·루프·모델·운영 전략을 모두 Rust로 구현해 wasm으로 컴파일하고, 서버나 상용 시뮬레이터(AutoSched AP) 없이 클라이언트 브라우저에서 연산한다.
+SMT2020 반도체 FAB 테스트베드(데이터셋 4종)를 정적 웹 페이지에서 사용자가 직접 실행하는 시뮬레이터. DES 엔진·이벤트 큐·루프·모델·운영 전략을 모두 Rust로 구현해 wasm으로 컴파일하고, 서버나 상용 시뮬레이터(AutoSched AP) 없이 클라이언트 브라우저에서 연산한다. 같은 라이브러리를 네이티브 CLI로도 실행한다.
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: DES 코어(`des-core`), SMT2020 데이터 모델·`.asd` 로더·시뮬레이션 모델·통계·운영 전략(`smt2020`), wasm 배포 골격 구현(진행 단계는 [구현 단계](#구현-단계)). 이하 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
+현재: 구현 단계 1–8 완료([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
+
+## Quick Start
+
+### 웹 페이지
+
+1. 데이터셋, 종료 시각(일), 복제 수, seed, 부하 계수, 운영 전략(CQT 디스패칭, [P2] Table 3 Stopping, [P1] 엔지니어링 lot 전략, super hot 예약)을 고르고 실행한다.
+2. 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 진행률은 워커 메시지(1일 단위 관측)로 갱신하고, 취소는 워커를 종료한다.
+3. 결과: 보고 기간별 lot 유형·제품 지표, FF 분위수, CQT 위반, 영역·툴그룹 상태 비율(복제 평균 ± 95% 신뢰구간), 복제별 digest. JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
+
+배포본에는 데이터셋 파일(`data/ds1–4.bin`)이 없다([참고 문헌·데이터](#참고-문헌데이터)). 원천 데이터로 `smt2020 convert`가 만든 `.bin`을 '로컬 파일'로 선택한다.
+
+### JavaScript
+
+```js
+// module worker: run()은 실행이 끝날 때까지 스레드를 점유한다.
+import init, { Dataset, run, summarize, csv, digest } from "./pkg/fab_wasm.js";
+
+await init();
+const dataset = new Dataset(new Uint8Array(await (await fetch("data/ds2.bin")).arrayBuffer()));
+const DAY = 86_400_000; // 시간 단위 ms
+const results = run(
+  dataset,
+  { horizon: 730 * DAY, replication: 0, queue_time: "qtcr" }, // horizon 외 필드는 기본값
+  (progress) => postMessage(progress), // 1일마다 호출, false를 반환하면 취소
+);
+const summaries = summarize([results]); // 측정값별 평균·95% 신뢰구간(복제 결과 배열)
+const table = csv(summaries); // CSV 문자열
+const fingerprint = digest(results); // 같으면 결과가 비트 단위로 같다
+```
+
+- 복제는 `replication`만 다르게 워커마다 실행하고 결과 배열을 `summarize`·`csv`에 넘긴다(`www/main.js`·`www/worker.js`).
+- Node.js: `initSync({ module: readFileSync("www/pkg/fab_wasm_bg.wasm") })` 후 같은 API.
+
+### CLI
+
+```bash
+cargo build --release -p smt2020-cli
+target/release/smt2020 convert "data/raw/AutoSched/dataset 2/LVHM_Model/LVHM_Model.asd" www/data/ds2.bin
+target/release/smt2020 run www/data/ds2.bin --replications 10 --queue-time qtcr --json ds2.json --csv ds2.csv
+target/release/smt2020 run www/data/ds2.bin --config config.json
+target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
+```
+
+- `run`: 데이터셋 파일 또는 `.asd` 디렉터리. 설정은 `--config`(JSON, [실행 설정](#실행-설정)) 위에 옵션을 덮어쓴다: `--horizon` 일, `--seed`, `--load`, `--reserve-super-hot`, `--queue-time none|qtcr|qts`, `--stopping TG=FRONT/TOTAL`(반복), `--stopping-default FRONT/TOTAL`, `--engineering base|engineering_first|cate:생산h/엔지니어링h|cot:N`. `--replications N`(설정의 replication부터 번호), `--threads`(기본 가용 코어), `--period`(표 기간), `--json`·`--csv` 출력.
+- 웹 JSON의 `replications[i].config`를 `--config`로 실행하면 digest가 같다(결정성 확인).
+
+### Python
+
+미구현. PyO3·maturin 바인딩은 같은 API(`Dataset.from_bytes`, `run`, `summarize`, `csv`)와 직렬화 스키마(dict)를 그대로 노출하는 형태로 추가한다(`sim::run_observed`의 관찰자로 진행률 전달·Ctrl-C 취소).
 
 ## 참고 문헌·데이터
 
 - [P1] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, "SMT2020—A Semiconductor Manufacturing Testbed," *IEEE Trans. Semicond. Manuf.*, 33(4), 522–531, 2020. doi:10.1109/TSM.2020.3001933
 - [P2] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, "Integrating Critical Queue Time Constraints into SMT2020 Simulation Models," *Proc. WSC 2020*, 1813–1824. doi:10.1109/WSC48552.2020.9383889
-- 데이터: SMT2020 Testbed Release 1.0(2020-03), http://p2schedgen.fernuni-hagen.de/index.php?id=simulation&L=1 — `AutoSched/`(AutoSched AP 모델·실행 결과), `General Data/`(xlsx 일반 형식·명세). 출처 [P1] 표기. 변환 데이터 공개 전 재배포 조건 확인.
+- 데이터: SMT2020 Testbed Release 1.0(2020-03), https://p2schedgen.fernuni-hagen.de/downloads/simulation (논문의 `index.php?id=simulation` 주소는 이전됨) — `AutoSched/`(AutoSched AP 모델·실행 결과), `General Data/`(xlsx 일반 형식·명세). 출처 [P1] 표기.
+- 재배포: 배포 페이지에 이용 조건 문구가 없어 미확인. 변환 데이터(`www/data/*.bin`)는 커밋·배포하지 않는다(`.gitignore`). 조건 확인 후 `.gitignore`에서 `/www/data`를 빼고 커밋하면 페이지가 기본 데이터셋으로 실행된다.
 
 ## 데이터셋
 
@@ -41,7 +91,7 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 
 사용 파일(`options.def`의 `~` 접두 = 비활성, 제외): `options.def`(SIM_START, ORDER_FILES, SEQ_ADDS_SETUP_DELAYS=N), `part.txt`, `tool.txt`, `route_*.txt`, 활성 ORDER_FILES(`order.txt`·`order_high_SL_92PCTL.txt`·`E_order*.txt`·`WIP.txt`), `setup.txt`, `setupgrp.txt`, `downcal.txt`, `pmcal.txt`, `attach.txt`, `fromto.txt`, `period.txt`. IGNORE 열은 주석.
 
-비활성 대체 입력: DS2 `order_medium_SL_50PCTL.txt`·`order_low_SL_25PCTL.txt`(납기만 다름), DS2·4 `order.txt`(주기형, 고정 납기), DS4 `E_order.txt`(납기만 다름). 기본 변환은 활성 파일, 납기 시나리오 비교 시 convert 인자로 지정.
+비활성 대체 입력: DS2 `order_medium_SL_50PCTL.txt`·`order_low_SL_25PCTL.txt`(납기만 다름), DS2·4 `order.txt`(주기형, 고정 납기), DS4 `E_order.txt`(납기만 다름). 기본 변환은 활성 파일, 대체 입력은 `convert --orders 파일…`로 지정(초기 WIP를 쓰려면 `WIP.txt`도 지정).
 
 ## 모델 명세
 
@@ -62,7 +112,7 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 - 목록형: lot별 START·DUE·PRIOR·PIECES.
 - 초기 WIP: `WIP.txt` lot을 t=0에 CURSTEP 대기열에 투입. START = t0이므로 웜업 이후 통계만 유효.
 - 부하 계수 ℓ(운영 곡선): 투입 시각 t → t/ℓ, 납기 오프셋 유지. 목록형은 목록이 종료 시각까지 이어지는지 검증(마지막 투입 + 평균 간격 ≥ 종료 시각).
-- 종료 시각 전에 시작하는 lot만 투입하고, 이후 WIP가 0이 될 때까지 진행(Drain). 종료 + 365 d에도 남으면 오류.
+- 종료 시각 전에 시작하는 lot만 투입하고, 이후 WIP가 0이 될 때까지 진행(Drain). 마지막 lot 완료 사건에서 실행을 멈추고, 종료 + 365 d 기한 사건까지 남으면 오류.
 
 ### 스텝 처리
 
@@ -111,8 +161,8 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 |---|---|---|
 | BASE | P1·P2 | 데이터 순위(HP → RSETUP → FIFO/CR) |
 | QTCR | P2 식 (1) | 순위 HP → RSETUP → QTCR → FIFO/CR. d^Q = C_s + CQT. t ≤ d^Q면 (d^Q − t)/Σ_{k=i..n} p_k, 아니면 (d^Q − t)·Σ_{k=i..n} p_k. 작을수록 우선, 구간 밖 lot = +∞ |
-| QTS | P2 식 (2)–(6) | QTCR 자리에 d_i. TW_k = (FF_k − 1)p_k, TT = Σ_{k=s+1..n−1} FF_k·p_k + TW_n, Ratio_k = FF_k·p_k/TT(k < n), TW_n/TT(k = n), FCQT_k = CQT·Ratio_k, d_i = C_s + Σ_{k=s+1..i} FCQT_k − p_i(i < n), d_n = C_s + CQT. FF_k = 평균 스텝 CT/p_k(스텝 CT = 이전 수행 스텝 종료 ~ 본 스텝 종료, 사전 BASE 실행의 종료 시각까지 기간, 미측정 1) |
-| Stopping | P2 §3.2·Table 3 | TG별 임계 ①TG 앞 CQT lot(대기·공정 중) ②① + 구간 안에서 그 TG에 아직 도달하지 않은 CQT lot(이동 중 포함, TG당 lot 1회). 구간의 TG(시작 다음 ~ 종료 스텝) 중 하나라도 도달하면 구간 시작 스텝에서 보류, CQT lot이 스텝을 마칠 때 재평가. 직전 구간 종료 = 현 구간 시작이면 무시. BASE·QTCR·QTS와 결합. 임계(①/②) LithoTrack_FE_95: none 1000/1000, high 90/130, medium 60/95, small 50/85. FE_115: 1000/1000, 90/220, 70/150, 55/125. 그 외 1000/1000. 임계 > 0. 배치·LSSU TG 임계가 최소 배치·run을 채울 lot까지 보류하면 교착 → 미완료 오류 |
+| QTS | P2 식 (2)–(6) | QTCR 자리에 d_i. TW_k = (FF_k − 1)p_k, TT = Σ_{k=s+1..n−1} FF_k·p_k + TW_n, Ratio_k = FF_k·p_k/TT(k < n), TW_n/TT(k = n), FCQT_k = CQT·Ratio_k, d_i = C_s + Σ_{k=s+1..i} FCQT_k − p_i(i < n), d_n = C_s + CQT. FF_k = 평균 스텝 CT/p_k(스텝 CT = 이전 수행 스텝 종료 ~ 본 스텝 종료, 종료 시각까지 기간, 미측정 1). 설정에 FF가 없으면 같은 설정에서 CQT 규칙·Stopping만 뺀 사전 실행으로 산출(가정) |
+| Stopping | P2 §3.2·Table 3 | TG별 임계 ①TG 앞 CQT lot(대기·공정 중) ②① + 구간 안에서 그 TG에 아직 도달하지 않은 CQT lot(이동 중 포함, TG당 lot 1회). 구간의 TG(시작 다음 ~ 종료 스텝) 중 하나라도 도달하면 구간 시작 스텝에서 보류, 임계가 해제되는 사건(도달 → 미도달)에서 재평가. 직전 구간 종료 = 현 구간 시작이면 무시. BASE·QTCR·QTS와 결합. 임계(①/②) LithoTrack_FE_95: none 1000/1000, high 90/130, medium 60/95, small 50/85. FE_115: 1000/1000, 90/220, 70/150, 55/125. 그 외 1000/1000. 임계 > 0. 배치·LSSU TG 임계가 최소 배치·run을 채울 lot까지 보류하면 교착 → 미완료 오류 |
 | EF | P1 §V | 우선순위 EHL 25, PHL 20, ERL 15, PRL 10(전 TG) |
 | CAtE | P1 §V | LithoTrack_FE_95·115만. 생산·엔지니어링 구간 (lp, le) h 교대, t=0 생산 구간부터(가정). DS3 (151.2, 16.8)·(75.6, 8.4)·(21.6, 2.4), DS4 (134.6, 33.4)·(67.2, 16.8)·(19.2, 4.8). 구간 유형 lot만, 없으면 다른 유형 |
 | CoT | P1 §V | LithoTrack_FE_95·115만. 대기 EL ≥ 한계(100·50·25·10)면 그 수만큼 EL 우선. 그 외 PL 우선, PL 없으면 EL(가정) |
@@ -120,95 +170,205 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 - QTCR·QTS의 p_k = CR과 같은 기대 스텝시간.
 - [P2] complex CQT(441 구간)는 추가 구간의 CQT 값이 미공개라 재현 불가, default만 재현.
 
+## API
+
+Rust 라이브러리 `smt2020`이 핵심 API를 제공하고, CLI와 wasm(JS)은 같은 함수·직렬화 스키마를 그대로 노출한다. 시간 단위는 ms(`Time = i64`).
+
+| 인터페이스 | API |
+|---|---|
+| Rust `smt2020` | `Dataset::from_bytes`·`to_bytes`, `asd::{load, load_with_orders, orders}`, `run(&Dataset, &Config)`, `sim::run_observed(…, 관찰자)`, `Results::digest`, `report::{metrics, summarize, csv}` |
+| JS `fab_wasm` | `new Dataset(bytes)`, `run(dataset, config, onProgress?)`, `summarize(results[])`, `csv(summaries)`, `digest(results)` |
+| CLI `smt2020` | `convert`, `run`, `validate` |
+
+### 실행 설정
+
+JSON·JS 객체·Rust `Config` 공통. `horizon` 외 필드는 생략하면 기본값, 미지 필드는 오류, 시간 필드는 ms 수(소수는 ms 반올림).
+
+| 필드 | 기본값 | 내용 |
+|---|---|---|
+| `horizon` | 필수 | 종료 시각. 이전에 시작하는 lot만 투입하고 이후 Drain |
+| `seed`, `replication` | 1, 0 | 난수 스트림. 같은 값이면 전략이 달라도 공통 난수 |
+| `load` | 1 | 부하 계수(투입 시각 ÷ load, 납기 오프셋 유지) |
+| `reserve_super_hot` | false | super hot lot 다음 툴 예약 |
+| `queue_time` | `"none"` | `"none"`·`"qtcr"`·`"qts"` |
+| `flow_factors` | null | QTS FF(route × 스텝, null = 미측정 = 1). 없으면 사전 실행으로 산출 |
+| `stopping` | null | `{"limits": {"LithoTrack_FE_95": {"front": 50, "total": 85}}, "default": {"front": 1000, "total": 1000}}` |
+| `engineering` | `"base"` | `"base"`·`"engineering_first"`·`{"cate": {"production": ms, "engineering": ms}}`·`{"cot": {"trigger": 100}}` |
+
+### 진행·결과
+
+- 진행(`Progress`, 1일 1회 관측 사건): `pass`·`passes`(QTS FF 사전 실행이면 0/2·1/2), `now`, `horizon`, `wip`. 관찰자가 `false`(Rust `Break`)를 반환하면 취소.
+- 결과(`Results`): `periods[]`(보고 기간, 마지막은 Drain: `name`, `start`, `end`, `lots[]` {`part`, `kind`(PRL·PHL·SHL·ERL·EHL), `started`, `completed`, `on_time`, `cycle_time_mean`·`cycle_time_std`(ms, 완료 없으면 null), `flow_factor_mean`}, `flow_factors[]` {`kind`, `percentiles`(0·5·25·50·75·95·100%)}, `wip`, `tool_groups[]` {`name`, `area`, `tools`, `time` {`down`, `pm`, `setup`, `process`, `load`, `unload`, `idle`}(ms)}, `cqt_litho`·`cqt_rest` {`completed`, `violated`, `violated_1h`·`2h`·`4h`, `violation`·`slack`(ms)}), `released`, `completed`, `end`, `events`, `step_flow_factors`(QTS `flow_factors` 입력).
+- digest: 결과 postcard 인코딩의 FNV-1a 64비트 해시. 같으면 결과가 비트 단위로 같다.
+- 측정값(`summarize`·`csv`): 범위 fab·kind·lot·tool_group·area·cqt별 측정(`ct_mean_d`, `on_time_pct`, `ff_p50`, `util_pct`, `vl_pct`, `avl_h` 등, 접미사 = 단위)의 n·평균·표본 표준편차·95% CI 반폭(Student t). 목록·정의는 [SIMULATION.md](SIMULATION.md) 9.3. CSV 열 `period,scope,item,kind,measure,n,mean,std,ci95`.
+- CLI·웹 JSON: `{data, threads, replications: [{config, digest, seconds, results}], summary}`(CLI는 `peak_heap_bytes`, 웹은 복제별 `memory_bytes` 추가).
+
+### 데이터셋 파일
+
+`SMT2020\0`(8 B) + 형식 버전(u32 LE, 현재 1) + postcard(`Dataset`). 다른 형식 버전은 오류이며 `convert`로 다시 만든다. 크기: DS1 0.07 MB, DS2 2.98 MB, DS3 0.37 MB, DS4 3.61 MB(변환 1초 미만), 압축 없음.
+
 ## 실험·검증
 
 | 실험 | 데이터 | 조건 | 비교 대상 |
 |---|---|---|---|
-| 기준 실행 | DS1–4 | 1,460 d(2018–2021), 웜업 1년, AutoSched 1회 | `.rep` Period_3 누적: part·order(LOTCOMPS, CYCLEAVG·STD, ONTIME%), stnfam·stngrp(DOWN·PM·SETUP·PROC·UTIL %), perf(WIPLOTAVG) |
-| 운영 곡선 | DS1·2 | 8년(웜업 1년), 1회, 부하 50–100%(용량 10,200·10,250 WSPW) | [P1] Fig. 2·3(일반 lot FF 분위수): 10,000 WSPW에서 중앙값 1.85·1.95, 5–95% 1.73–2.01·1.79–2.13, 최대 2.37·2.46. Table III·IV(영역 가용도·SDT 비중·평균/최대 가동률) |
-| 엔지니어링 전략 | DS3·4 | 2년(웜업 1년), 20회. BASE, EF, CAtE 3종, CoT 4종 | [P1] Fig. 4·5(유형별 ACT), 부록 Table AII-1–4(유형별 TH·ACT·%ONTIME) |
-| CQT | DS2 | 2년(웜업 1년), 10회, 초기 WIP. BASE·QTCR·QTS(+Stopping) | [P2] Table 4·5(default) |
+| 기준 실행 | DS1–4 | 1,460 d(2018–2021), 웜업 1년, seed 1 복제 3회 / AutoSched 1회 | `.rep` 마지막 기간(Period_3 = 2019–2021 누적): perf(LOTCOMPS, WIPLOTAVG), order(CYCLEAVG·STD, ONTIME%), stnfam(DOWN·PM·SETUP·PROC·UTIL %), stngrp(영역 가용도·UTIL %) |
+| 운영 곡선 | DS1·2 | 8년(2,920 d, 웜업 1년), 1회, 부하 50–100%(용량 10,200·10,250 WSPW) | [P1] Fig. 2·3(일반 lot FF 분위수): 10,000 WSPW에서 중앙값 1.85·1.95, 5–95% 1.73–2.01·1.79–2.13, 최대 2.37·2.46 |
+| 엔지니어링 전략 | DS3·4 | 2년(웜업 1년), 20회. BASE, EF, CAtE 3종, CoT 4종 | [P1] Fig. 4·5(유형별 ACT) |
+| CQT | DS2 | 2년(웜업 1년), 10회, 초기 WIP. BASE·QTCR·QTS(+Stopping) | [P2] Table 5(default) |
 
 - AutoSched XTHEOR는 내부 이론 CT 기준이라 FF와 직접 비교하지 않음(CT·TH·ONTIME·가동률로 비교).
-- 난수 생성기가 달라(AutoSched CMRG) 경로 일치는 불가. 복제 평균과 95% 신뢰구간으로 비교한다.
+- 난수 생성기가 달라(AutoSched CMRG) 경로 일치는 불가. 복제 평균과 95% 신뢰구간으로 비교한다. 전략 비교는 같은 seed·복제 번호(공통 난수).
+- 명령(`B=target/release/smt2020`):
+
+```bash
+for m in "dataset 1/HVLM_Model" "dataset 2/LVHM_Model" "dataset 3/HVLM_E_Model" "dataset 4/LVHM_E_Model"; do
+  $B validate "data/raw/AutoSched/$m" --csv "validate-${m%%/*}.csv"
+done
+for e in base engineering_first cate:151.2/16.8 cate:75.6/8.4 cate:21.6/2.4 cot:100 cot:50 cot:25 cot:10; do
+  $B run www/data/ds3.bin --replications 20 --engineering $e --csv "ds3-${e//[:\/]/_}.csv"
+done   # DS4: cate:134.6/33.4 cate:67.2/16.8 cate:19.2/4.8
+for q in none qtcr qts; do
+  $B run www/data/ds2.bin --replications 10 --queue-time $q --csv "ds2-$q.csv"
+  $B run www/data/ds2.bin --replications 10 --queue-time $q --stopping LithoTrack_FE_95=50/85 --stopping LithoTrack_FE_115=55/125 --csv "ds2-$q-small.csv"
+  $B run www/data/ds2.bin --replications 10 --queue-time $q --stopping LithoTrack_FE_95=5/10 --stopping LithoTrack_FE_115=5/10 --csv "ds2-$q-5_10.csv"
+done
+$B convert "data/raw/AutoSched/dataset 2/LVHM_Model/LVHM_Model.asd" data/ds2-periodic.bin --orders order.txt WIP.txt
+for L in 50 60 70 80 85 90 92 95 97.5 98 99 100; do   # 부하 L% = 계수 L·1.02(DS1), L·1.025(DS2) / 100
+  $B run www/data/ds1.bin --horizon 2920 --load $(python -c "print($L*102/10000)") --csv "oc-ds1-$L.csv"
+  $B run data/ds2-periodic.bin --horizon 2920 --load $(python -c "print($L*1025/100000)") --csv "oc-ds2-$L.csv"
+done
+```
 
 ### 검증 결과
 
-기준 실행 대비(1,460 d, Period_3 누적 = 2019–2021). 본 모델 seed 1 복제 3회 평균 / AutoSched 1회:
+`validate` 출력(1,460 d, Period_3 누적 = 2019–2021). 본 모델 seed 1 복제 3회 평균 / AutoSched 1회:
 
 | | DS1 | DS2 | DS3 | DS4 |
 |---|---|---|---|---|
-| CT PRL | +3.5% | +0.2%(제품별 −0.6 ~ +0.8) | +4.1% | +1.0%(−0.2 ~ +1.8) |
-| CT ERL | – | – | +4.3% | +0.4% |
-| CT PHL·EHL | +3.5% | +4.0% | +3.9%·+4.1% | +5.2%·+5.0% |
+| 완료 lot | 62,572 / 62,647 | 62,606 / 62,369 | 68,757 / 68,856 | 75,103 / 75,160 |
+| CT PRL | +3.5%(제품별 +3.3 ~ +3.6) | +0.3%(−0.6 ~ +0.8) | +4.1%(+4.0 ~ +4.2) | +0.9%(−0.2 ~ +1.8) |
+| CT ERL | – | – | +4.3% | +0.5% |
+| CT PHL·EHL | +3.6% | +3.9% | +4.0%·+4.2% | +5.2%·+5.0% |
 | CT super hot | +3.4% | +4.0% | +4.3% | +5.6% |
 | 평균 WIP(lot) | 2,345 / 2,265 | 2,148 / 2,140 | 2,520 / 2,420 | 2,761 / 2,734 |
 | SETUP% LithoTrack_FE_95·115 | 10.3·5.9 / 10.8·6.2 | 11.6·5.9 / 11.8·6.0 | 14.3·7.7 / 14.7·7.9 | 19.6·10.0 / 19.7·10.1 |
 | SETUP% Implant_128 | 17.1 / 15.5 | 17.3 / 16.6 | 19.6 / 17.4 | 20.7 / 17.9 |
-| UTIL% Planar_BE_75 | 72.6 / 69.8 | 73.1 / 71.5 | 74.3 / 70.4 | 74.1 / 69.8 |
+| UTIL% Planar_BE_75 | 72.6 / 69.8 | 73.1 / 71.5 | 74.4 / 70.4 | 74.1 / 69.8 |
 
 - 계획 lot 전량 완료(1,460 d: 85,767·85,671·94,360·102,931 lot).
-- PM%는 기준 대비 TG 평균 −0.05%p(TG별 최대 ±0.44%p, DS1·3 확인), 영역 가용도는 [P1] Table III·IV와 ±0.2%p, lot CT 표준편차 차는 제품별 DS1·2·4 ≤ 0.17 d, DS3 ≤ 0.38 d. 복제 간 PRL CT 변동 약 ±2%.
-- 잔여 편차(AutoSched 내부 동작 미문서):
+- TG 상태 비율 차(106 TG 평균 %p, DS1–4): DOWN −0.03 ~ 0.00, PM −0.04 ~ −0.02(최대 |차| 0.45), SETUP +0.02 ~ +0.42, PROC −0.32 ~ −0.07, UTIL −0.09 ~ +0.11. 영역 가용도 차 ≤ 0.24%p(stngrp). order별 CT 표준편차 차 ≤ 0.13·0.36·0.38·0.35 d. 복제 간 PRL CT 변동 약 ±2%.
+- 잔여 편차(AutoSched 내부 동작 미문서, 근거 없는 보정 없음):
   - hot lot CT +3.4 ~ +5.6%.
-  - HV/LM(DS1·3) PRL CT +3.5 ~ +4.1%. 고정 납기라 DS3 ONTIME% 하락(PRL 49–85% / 92%).
-  - 대형 cascading TG 가동률 과다(Planar_BE_75 +1.6 ~ +4.3%p, DS1 TF_BE_40 +1.1%p, cascading TG 전체 +0.5%p). 유휴 툴 우선 배정으로 cascading이 기준보다 적은 것으로 추정(job을 막 시작한 툴 우선 배정 시 전체 −1.4%p로 반대 편차).
-  - LSSU Implant SETUP% +0.7 ~ +2.8%p.
-  - CR 데이터셋 part_6·9 ONTIME% 99.6–99.9 / 기준 71–82%([P2] Table 4도 71%).
-- CQT(DS2, 730 d의 2019년, 1회 / [P2] Table 5 default 10회 평균):
+  - HV/LM(DS1·3) PRL CT +3.5 ~ +4.1%. 고정 납기라 DS1·3 ONTIME% 하락(PRL 59–75% / 89–92%, 복제 간 편차 큼).
+  - 대형 cascading TG 가동률 과다(Planar_BE_75 +1.6 ~ +4.3%p, 영역 Planar +1.0 ~ +3.2%p). 유휴 툴 우선 배정으로 cascading이 기준보다 적은 것으로 추정(job을 막 시작한 툴 우선 배정 시 전체 −1.4%p로 반대 편차).
+  - LSSU Implant(128·132·91) SETUP% +0.7 ~ +2.8%p. route STIME setup의 Implant_90·119 PROC% −2.3 ~ −4.2%p(UTIL −2.9 ~ +0.1%p).
+  - E lot 보정 setup이 있는 Planar(DS3·4) SETUP% 과다·PROC% 과소(DS4 Planar_FE_77 13.7 / 5.9, PROC 49.6 / 55.8): cascading 겹침 구간 SETUP > PROC 집계(가정) 영향으로 추정.
+  - CR 데이터셋 part_6·9 ONTIME% 99.7–99.8 / 기준 71–82%([P2] Table 4도 71%).
 
-  | | PRL ACT(d) | %VL Total | %VL Litho | %VL Rest | AVL(h) |
-  |---|---|---|---|---|---|
-  | BASE | 37.6 / 37.7 | 14.8 / 17.5 | 10.9 / 18.6 | 15.1 / 17.4 | 1.71 / 1.92 |
-  | QTCR | 37.6 / 37.5 | 9.7 / 9.4 | 2.0 / 1.2 | 10.4 / 10.6 | 0.71 / 0.71 |
-  | QTS | 38.2 / 37.7 | 10.0 / 9.3 | 2.0 / 1.1 | 10.7 / 10.5 | 0.79 / 0.73 |
+### 엔지니어링 전략
 
-- Stopping(DS2, 같은 조건): [P2] Table 3 임계(small 50/85·55/125)는 default 구간에서 미발동(QTCR+small = QTCR, [P2]는 complex 설정에 적용). 스테퍼 5/10이면 Total %VL BASE 14.8 → 10.2%(litho 10.9 → 3.2), QTCR 9.7 → 7.2%이나 PRL ACT 37.6 → 92.5·81.8 d(용량 낭비, [P2] §2.1), 전 lot 완료.
-- 엔지니어링 전략(730 d의 2019년, 1회, ACT d ERL / PRL):
+DS3·4, 2년, 20회, Period_1(2019) ACT(d). 본 모델 평균 / [P1] Fig. 4·5 판독값(±0.5 d). 95% CI 반폭은 ERL·EHL ≤ 1.2 d, PRL ≤ 0.6 d, PHL ≤ 0.1 d.
 
-  | | BASE | EF | CAtE(lp, le 최장) | CoT 100 | CoT 10 |
-  |---|---|---|---|---|---|
-  | DS3 | 47.8 / 40.2 | 30.3 / 42.3 | 68.9 / 40.4 | 57.8 / 38.9 | 47.8 / 40.9 |
-  | DS4 | 49.3 / 39.2 | 33.3 / 46.9 | 49.8 / 39.2 | 49.8 / 39.2 | 49.5 / 39.4 |
+| 전략 | DS3 PRL | DS3 ERL | DS3 EHL | DS4 PRL | DS4 ERL | DS4 EHL |
+|---|---|---|---|---|---|---|
+| BASE | 39.8 / 38.5 | 47.3 / 45.8 | 29.7 / 28.5 | 39.3 / 39.0 | 49.4 / 49.2 | 31.3 / 30.0 |
+| EF | 42.7 / 40.0 | 30.3 / 29.2 | 29.7 / 28.4 | 47.7 / 40.0 | 33.3 / 31.2 | 31.8 / 29.8 |
+| CAtE 168 h | 39.9 / 38.6 | 64.5 / 64.0 | 37.2 / 36.3 | 39.3 / 38.9 | 50.0 / 49.8 | 33.7 / 32.4 |
+| CAtE 84 h | 39.9 / 38.7 | 61.6 / 60.6 | 37.3 / 36.0 | 39.3 / 39.0 | 49.9 / 49.7 | 34.0 / 32.8 |
+| CAtE 24 h | 39.5 / 38.3 | 53.3 / 52.0 | 34.9 / 33.7 | 39.4 / 39.0 | 49.7 / 49.4 | 34.5 / 33.2 |
+| CoT 100 | 39.6 / 39.3 | 58.9 / 67.4 | 35.3 / 42.6 | 39.2 / 39.6 | 49.8 / 50.7 | 33.5 / 36.1 |
+| CoT 50 | 39.5 / 38.8 | 52.8 / 55.4 | 33.5 / 36.0 | 39.3 / 39.2 | 49.6 / 49.6 | 32.9 / 33.0 |
+| CoT 25 | 39.6 / 38.6 | 49.0 / 49.1 | 32.0 / 32.2 | 39.4 / 39.2 | 49.5 / 49.4 | 32.2 / 31.4 |
+| CoT 10 | 39.8 / 38.4 | 46.8 / 45.4 | 30.7 / 30.0 | 39.5 / 39.1 | 49.6 / 49.3 | 31.7 / 30.5 |
 
-  [P1] §V 경향과 일치: EF는 EL 최선·PL 최악, 긴 생산 구간·큰 트리거는 EL 악화, CR(DS4)에서는 전략 간 차이 축소. [P1]이 DS3에서 보고한 PL 악화는 CoT 100에서 재현되지 않음.
+- PHL: DS3 26.0 ~ 26.1 / 약 25, DS4 25.2 ~ 26.1 / 약 24(기준 실행 hot lot 편차와 같은 수준).
+- [P1] §V 경향과 일치: EF는 EL 최선·PL 최악, 긴 생산 구간·큰 트리거는 EL 악화, CR(DS4)에서는 전략 간 차이 축소.
+- 차이: DS3 CoT 100의 EL ACT가 [P1]보다 낮음(ERL 58.9 / 67.4), [P1]의 DS3 CoT 100 PL 악화는 재현되지 않음(PRL 39.6 / BASE 39.8). DS4 EF의 PRL ACT가 [P1]보다 높음(47.7 / 40.0, PRL ONTIME 0%): EL 우선이 스테퍼 보정 setup을 늘리는 것으로 추정.
+
+### CQT
+
+DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None 시나리오). 95% CI 반폭: ACT ≤ 0.3 d, %VL ≤ 0.7%p, AVL ≤ 0.08 h.
+
+| 규칙 | PRL ACT(d) | PRL ONTIME(%) | %VL Total·Litho·Rest | %VL1h·2h·4h Total | AVL(h) Total | AONT(h) Total |
+|---|---|---|---|---|---|---|
+| BASE | 37.9 / 37.7 | 99.3 / 92.7 | 15.3·12.5·15.5 / 17.5·18.6·17.4 | 13.6·12.3·10.3 / 15.6·14.1·11.7 | 1.78 / 1.92 | 2.36 / 2.31 |
+| QTCR | 37.7 / 37.5 | 94.7 / 93.4 | 9.4·2.1·10.0 / 9.4·1.2·10.6 | 7.8·6.6·4.9 / 7.7·6.5·4.8 | 0.73 / 0.71 | 2.54 / 2.56 |
+| QTS | 37.9 / 37.7 | 93.3 / 91.3 | 9.5·2.0·10.1 / 9.3·1.1·10.5 | 7.9·6.7·5.1 / 7.7·6.5·4.9 | 0.75 / 0.73 | 2.54 / 2.56 |
+
+- ONTIME 차는 part_6·9(기준 실행 잔여 편차) 영향.
+- Stopping: [P2] Table 3 small(50/85·55/125)은 default 구간에서 발동하지 않는다(BASE·QTCR·QTS 모두 Stopping 없는 실행과 digest 동일, [P2]는 complex 설정에 적용). 스테퍼 5/10이면 %VL Total BASE 15.3 → 10.2%(Litho 12.5 → 3.5), QTCR 9.4 → 7.2%이나 PRL ACT 37.9 → 92.1 d, QTCR 37.7 → 83.4 d(용량 낭비, [P2] §2.1), 전 lot 완료.
+
+### 운영 곡선
+
+8년(2,920 d), 1회, Period_7(2019–2025 누적) 일반 lot(PRL) FF 분위수 P0·P5·P25·P50·P75·P95·P100. 부하 = 투입 / 용량(10,200·10,250 WSPW), 계획 10,000 WSPW = DS1 98%·DS2 97.6%. DS2는 목록형 투입이 2025-12-31에 끝나 용량 근처 8년을 덮지 못하므로 비활성 주기형 `order.txt`(고정 납기 오프셋) + `WIP.txt`로 실행(가정).
+
+| 부하(%) | DS1 | DS2 |
+|---|---|---|
+| 50 | 1.02·1.09·1.13·1.16·1.19·1.26·1.65 | 1.04·1.29·1.40·1.47·1.55·1.69·2.26 |
+| 60 | 1.03·1.10·1.14·1.17·1.21·1.28·1.62 | 1.07·1.29·1.38·1.44·1.50·1.62·2.13 |
+| 70 | 1.06·1.13·1.17·1.21·1.26·1.33·1.64 | 1.10·1.32·1.39·1.45·1.51·1.60·2.04 |
+| 80 | 1.08·1.19·1.25·1.30·1.35·1.43·1.79 | 1.14·1.37·1.45·1.52·1.59·1.70·2.08 |
+| 85 | 1.13·1.24·1.31·1.36·1.41·1.49·1.82 | 1.23·1.41·1.52·1.60·1.68·1.81·2.11 |
+| 90 | 1.13·1.34·1.41·1.48·1.54·1.63·2.00 | 1.31·1.51·1.64·1.72·1.80·1.93·2.18 |
+| 92 | 1.21·1.38·1.47·1.54·1.60·1.69·2.06 | 1.37·1.59·1.72·1.80·1.88·2.01·2.16 |
+| 95 | 1.34·1.50·1.59·1.66·1.72·1.81·2.20 | 1.47·1.70·1.82·1.89·1.96·2.06·2.52 |
+| 97.5 | 1.47·1.68·1.78·1.86·1.92·2.02·2.38 | 1.63·1.87·1.96·2.01·2.06·2.11·2.25 |
+| 98 | 1.51·1.74·1.85·1.93·2.00·2.10·2.48 | 1.59·1.90·1.98·2.03·2.07·2.11·2.27 |
+| 99 | 1.68·1.87·1.98·2.06·2.13·2.22·2.59 | 1.80·1.96·2.04·2.07·2.10·2.13·2.39 |
+| 100 | 1.90·2.10·2.21·2.28·2.35·2.44·2.87 | 1.93·2.00·2.06·2.09·2.11·2.16·2.49 |
+
+- 10,000 WSPW(DS1 98%·DS2 97.5%) / [P1] 본문: 중앙값 1.93·2.01 / 1.85·1.95, P5–P95 1.74–2.10·1.87–2.11 / 1.73–2.01·1.79–2.13, 최대 2.48·2.25 / 2.37·2.46.
+- DS1은 부하 전 구간에서 [P1] Fig. 2와 같은 형태(100%: P50 2.28 / 약 2.25, P100 2.87 / 약 2.76), 98% 부근은 기준 실행의 HV/LM CT 편차(+3.5%)만큼 높다.
+- DS2는 50–70%에서 상위 분위수(P95·P100)가 부하와 함께 감소하는 [P1] Fig. 3의 현상(저부하 배치 대기)을 재현한다. 용량 근처 분포는 [P1]보다 낮고 좁다(100%: P50 2.09 / 약 2.44). 납기 형태의 영향: 97.5%에서 목록형 투입(lot별 납기 z~U[0.8, 1.2])은 중앙값 2.01 동일, P5–P95 1.62–2.41로 [P1]보다 넓다.
 
 ## 성능 측정
 
-- 지표: 이벤트/초, 복제 1회 벽시계 시간, 최대 메모리. 네이티브(`cli`)와 wasm(브라우저)을 같은 코드·입력으로 비교.
+같은 PC(Intel i7-10700, 8코어 16스레드), 단일 스레드·복제 1회, 1,460 d(Drain 포함), seed 1·복제 0. 네이티브는 `smt2020 run --threads 1`(최대 메모리 = CLI 계수 할당자의 최대 힙), wasm은 웹 페이지(Chromium 152, Web Worker 1개, 최대 메모리 = 워커 wasm 선형 메모리).
+
+| | DS1 | DS2 | DS3 | DS4 |
+|---|---|---|---|---|
+| 사건 | 70.5 M | 60.8 M | 79.3 M | 77.3 M |
+| 네이티브: 시간·사건/s | 25.4 s · 2.78 M | 23.5 s · 2.59 M | 29.7 s · 2.67 M | 33.0 s · 2.34 M |
+| wasm: 시간·사건/s | 30.6 s · 2.30 M | 30.5 s · 1.99 M | 37.8 s · 2.10 M | 43.0 s · 1.80 M |
+| wasm / 네이티브 시간 | 1.20 | 1.30 | 1.27 | 1.30 |
+| 최대 메모리 네이티브 / wasm | 7.9 / 8 MB | 32.7 / 24 MB | 11.4 / 10 MB | 34.4 / 26 MB |
+| 결과 digest(네이티브 = wasm) | a6a4ebb859444917 | 3812b426031492da | 902437158169298d | ad6cd4f70849b303 |
+
+- 결정성: 네 데이터셋 모두 네이티브·wasm 결과가 비트 단위로 같다(digest 일치, Node.js에서도 동일).
+- 2년(730 d, 웹 기본값) 네이티브: 12.6·12.1·14.9·16.8 s. 병렬: DS3 2년 20회 16스레드 57 s.
+- 이전 구현 대비(같은 1,460 d): 34.5·32.7·40.7·47.5 s → 25.4·23.5·29.7·33.0 s(26–31% 단축, 결과 동일). 대기열 항목(도착 시 순위 입력 고정), 선택당 공통 입력 1회 계산, LTO·단일 코드 생성 단위. Stopping 재평가를 임계 해제 사건으로 바꿔 DS4 180 d 스테퍼 5/10 실행 77.8 → 6.3 s.
 - 참고 기준(하드웨어 상이): AutoSched AP 1,460 d 1회 — DS1 36:02(lot-step 34.69 M), DS2 31:30(30.01 M), DS3 40:48(39.04 M), DS4 39:58(38.15 M).
-- 네이티브 release 1회(1,460 d, Drain 포함): DS1 34.5 s(사건 70.5 M, 2.0 M/s), DS2 32.7 s(60.8 M), DS3 40.7 s(79.3 M), DS4 47.5 s(77.3 M). wasm은 단계 8에서 측정.
 
 ## 구현 구조
 
 ```text
-crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프
-crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더, 시뮬레이션 모델, 전략, 통계. wasm 의존 없음
-crates/cli/       네이티브: convert(.asd → .bin), run(검증·벤치마크)
-crates/wasm/      wasm-bindgen cdylib(패키지 fab-wasm): load(bytes), run(config) → 결과
-www/              index.html, main.js, worker.js, data/ds1–4.bin(변환 결과, 커밋), pkg/(빌드 산출)
+crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프, 관측 사건
+crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더·데이터셋 파일, 시뮬레이션 모델, 전략, 통계, 측정값·복제 요약. wasm 의존 없음
+crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert, run, validate
+crates/wasm/      wasm-bindgen cdylib(패키지 fab-wasm): Dataset, run, summarize, csv, digest
+www/              index.html, style.css, main.js(UI·워커 풀), worker.js(복제 실행), data/(데이터셋 파일, 커밋 제외), pkg/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
-- DES 코어(`des-core`, 구현됨): 사건 스케줄링 관점, 다음 사건 시각으로 시계 진행.
+- DES 코어(`des-core`): 사건 스케줄링 관점, 다음 사건 시각으로 시계 진행.
   - `Model`: 상태 + 초기화 루틴 `init`(t=0, 1회) + 사건 루틴 `handle`.
-  - `Scheduler`: 시계 `now`, `schedule_at`·`schedule_in`. 과거 시각 예약은 panic(인과성 위반).
-  - `Simulation`: `run_until(end)` = end 이하 사건 전부(처리 중 예약분 포함) 처리 후 시계 = end, 연속 호출로 이어서 실행. `events_processed` 집계.
+  - `Scheduler`: 시계 `now`, `schedule_at`·`schedule_in`, `stop`(현재 사건 후 실행 종료). 과거 시각 예약은 panic(인과성 위반).
+  - `Simulation`: `run`(정지 또는 사건 소진까지), `run_observed(interval, 관찰자)`(관측 사건열을 시각 순으로 병합, 관찰자가 중단 가능). `events_processed` = 모델 사건 수.
   - 미래 사건 목록: (시각, 예약 순번) 최소 힙(`BinaryHeap`, 동시각 FIFO, 페이로드 비교 없음).
-- 데이터(`smt2020::data`·`asd`, 구현됨): `options.def`의 활성 파일만 읽어 `Dataset` 생성(이름 → 인덱스, 시간 ms, 날짜는 SIM_START 기준).
+- 데이터(`smt2020::data`·`asd`): `options.def`의 활성 파일(또는 지정 order 파일)만 읽어 `Dataset` 생성(이름 → 인덱스, 시간 ms, 날짜는 SIM_START 기준).
   - 지원 범위 밖 값·조합(예: STNCAP 1·2 외, MINRUN 외 setup 기준, SEQ_ADDS_SETUP_DELAYS Y)은 무시하지 않고 `파일:행` 오류.
   - 검증: 이름 참조(툴그룹·스텝·setup·캘린더·부품·위치), per_batch ⇔ 배치 TG(0 < BATCHMN ≤ BATCHMX), cascading 간격 ⇔ STNCAP 2(0 < c ≤ 최소 공정시간), LTL·CQT 대상은 뒤 스텝, 리워크 대상은 앞 스텝(확률 < 100%), CQT 시작·종료 스텝과 배치·setup run 스텝은 샘플링 100%, 배치·setup run 스텝은 리워크 루프 밖(대기 lot의 도착 보장), fromto 쌍·순위 중복 없음(FIFO·CR 동시 불가), 투입 ≥ SIM_START, 기간 오름차순.
-- 시뮬레이션(`smt2020::sim`, 구현됨): `run(&Dataset, &Config) -> Result<Results, Error>`.
-  - `Config`: 종료 시각, seed·복제 번호, 부하 계수, super hot 예약, CQT 규칙(None·QTCR·QTS), Stopping 임계, 엔지니어링 규칙(BASE·EF·CAtE·CoT).
-  - `Results`: 기간별 보고(제품 × 유형 lot 지표, FF 분위수, WIP, TG 상태 시간, CQT Litho·Rest), 투입·완료 수, 마지막 완료 시각, 사건 수, 스텝 FF(QTS 입력).
-  - 모듈: `fab`(모델·사건 처리), `dispatch`(툴·lot 선택, 배치 구성), `tool`(job 단계·cascading·정지·상태 집계), `routes`(기대 스텝시간·잔여 작업·RPT 사전 계산), `plan`(투입 계획), `stats`, `strategy`, `rng`.
+- 시뮬레이션(`smt2020::sim`): `run`·`run_observed`. 종료는 마지막 lot 완료 사건의 `stop`, 기한(종료 + 365 d)도 사건이다(상태 반복 확인 없음).
+  - 모듈: `fab`(모델·사건 처리·대기열 항목), `dispatch`(툴·lot 선택, 배치 구성, Stopping 보류 표시), `tool`(job 단계·cascading·정지·상태 집계), `routes`(기대 스텝시간·잔여 작업·RPT·CQT 구간 TG 사전 계산), `plan`(투입 계획), `stats`(통계·결과·digest), `strategy`(전략·Stopping 해제 판정), `rng`.
+- 측정값(`smt2020::report`): 결과 → 측정값(논문 단위), 복제 요약(평균·표본 표준편차·Student t 95% CI), CSV.
 - 도메인 엔진: 엔티티 `Vec` + 인덱스 id(lot·툴·TG·스텝, route는 평탄 배열), `Event`는 작은 enum. 고장 중단 시 툴 epoch를 올려 기존 사건을 무효화(lazy deletion)하고 재스케줄.
-- 대기열: TG별 `Vec`. 디스패칭은 순위 키 선형 스캔(대기열 수십~수백). 유휴 툴은 TG별 FIFO.
+- 대기열: TG별 `Vec` 항목. 도착 시 순위 입력(우선순위, 도착 시각, 납기, 잔여 작업, setup, LTL 전용 툴, 배치 키, CQT 긴급도 입력)을 고정해 디스패칭이 lot·route 자료 대신 연속 메모리를 순회한다. 유휴 툴은 TG별 FIFO.
+- 디스패칭은 사건(도착, job 종료, 수리, PM 종료, 예약 해제, Stopping 임계 해제)에서만 실행한다.
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
-- 데이터 파일: postcard 직렬화 + 포맷 버전 필드. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
-- 메모리: 모델 1 MB 미만, 동시 WIP 약 2,000–2,800 lot, 대기 이벤트 수천 → 작업 집합 수십 MB 이내(추정).
-- 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬). SharedArrayBuffer 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 경계 입출력은 serde-wasm-bindgen, `i64`는 경계에서 f64(2^53 ms까지 정확).
-- 의존성: rand_xoshiro·libm(`smt2020`), wasm-bindgen(`fab-wasm`). 단계 7–8에서 serde·postcard·serde-wasm-bindgen 추가.
+- 데이터셋 파일: postcard + 매직·형식 버전. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
+- 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 진행률은 워커 `postMessage`, 취소는 `worker.terminate()`. 경계 입출력은 serde-wasm-bindgen(JSON 호환 객체), `i64`는 경계에서 f64(2^53 ms까지 정확).
+- 빌드: release 프로필 `lto = true`, `codegen-units = 1`, `panic = "abort"`(네이티브 약 7% 단축, 결과 동일).
+- 의존성: rand_xoshiro·libm·serde·postcard(`smt2020`), clap·serde_json(`smt2020-cli`), wasm-bindgen·js-sys·serde-wasm-bindgen(`fab-wasm`).
 
 ## 구현 단계
 
@@ -218,22 +378,25 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 4. 가용성: UDT·PM — 완료
 5. 통계: lot·툴·CQT 지표, 기간 — 완료
 6. 운영 전략: QTCR·QTS·Stopping·EF·CAtE·CoT — 완료
-7. `cli`: convert(.bin)·run, 기준 결과 검증
-8. `wasm` API·웹 UI·성능 측정
+7. `cli`: convert(.bin)·run·validate, 데이터셋 파일, 측정값·복제 요약, 사건 구동 종료·관측 — 완료
+8. `wasm` API·웹 UI·결정성 확인·성능 측정 — 완료
 
 ## 로컬 빌드·테스트
 
 ```bash
 cargo test
-cargo test -p smt2020 --release -- --ignored   # 실제 데이터 로드, 4개 데이터셋 2년 계획 완료, 전략 완료 검증(data/raw 필요)
+cargo test -p smt2020 --release -- --ignored   # 실데이터 로드·데이터셋 파일 왕복, 4개 데이터셋 2년 계획 완료, 전략 완료(data/raw 필요)
+cargo build --release -p smt2020-cli
+for n in 1 2 3 4; do target/release/smt2020 convert "$(ls -d "data/raw/AutoSched/dataset $n"/*/*.asd)" www/data/ds$n.bin; done
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129   # crates/wasm/Cargo.toml의 wasm-bindgen 버전과 같아야 함
 cargo build --release --target wasm32-unknown-unknown -p fab-wasm
 wasm-bindgen --target web --no-typescript --out-dir www/pkg target/wasm32-unknown-unknown/release/fab_wasm.wasm
+python -m http.server -d www
 ```
 
-`www/`를 정적 서버로 열어 확인한다(예: `python -m http.server -d www`). `file://`로 열면 ES 모듈이 막힌다.
+`file://`로 열면 ES 모듈이 막히므로 정적 서버로 연다.
 
 ## 배포
 
-`main`에 push하면 `.github/workflows/pages.yml`이 테스트·빌드 후 GitHub Pages로 배포한다.
+`main`에 push하면 `.github/workflows/pages.yml`이 테스트·빌드 후 `www/`를 GitHub Pages로 배포한다. `www/data`는 커밋 제외라 배포본은 '로컬 파일'로 데이터셋을 받는다([참고 문헌·데이터](#참고-문헌데이터)).

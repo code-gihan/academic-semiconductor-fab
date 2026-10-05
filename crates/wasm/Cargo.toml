@@ -8,5 +8,9 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+js-sys = "0.3"
+serde = "1"
+serde-wasm-bindgen = "0.6"
+smt2020 = { path = "../smt2020" }
 # Pinned: the wasm-bindgen CLI must be this exact version (CI reads it from Cargo.lock).
 wasm-bindgen = "=0.2.129"

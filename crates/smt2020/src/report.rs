@@ -1,0 +1,695 @@
+//! Measures of run results in the papers' units, and their statistics over replications: the
+//! tables of the CLI and the web page and their CSV.
+
+use std::collections::HashMap;
+use std::fmt::Write;
+
+use des_core::{DAY, HOUR};
+use serde::{Deserialize, Serialize};
+
+use crate::sim::{CqtReport, LotKind, PeriodReport, Results, StateTimes};
+
+named_enum! {
+    /// What a measure describes.
+    pub enum Scope {
+        /// The whole fab; no item.
+        Fab = "fab",
+        /// Lots of one kind over all parts; no item.
+        Kind = "kind",
+        /// Lots of one part (item) and kind.
+        Lot = "lot",
+        /// A tool group (item).
+        ToolGroup = "tool_group",
+        /// An area (item): its tool groups' tool time together.
+        Area = "area",
+        /// CQT segments with stepper steps, the others, and all (item `litho`, `rest`, `total`).
+        Cqt = "cqt",
+    }
+}
+
+named_enum! {
+    /// Measures; the name's suffix is the unit: `_pct` percent, `_d` days, `_h` hours, otherwise
+    /// counts, lots or ratios.
+    pub enum Measure {
+        /// Lots released in the window.
+        Started = "started",
+        /// Lots completed in the window (throughput); for CQT, segments completed.
+        Completed = "completed",
+        /// Time-averaged lots in the fab.
+        Wip = "wip",
+        /// Completed lots finished by their due date.
+        OnTimePct = "on_time_pct",
+        /// Cycle time mean of completed lots.
+        CtMeanD = "ct_mean_d",
+        /// Cycle time population standard deviation of completed lots.
+        CtStdD = "ct_std_d",
+        /// Mean flow factor (cycle time over raw processing time).
+        FfMean = "ff_mean",
+        /// Flow factor percentiles.
+        FfP0 = "ff_p0",
+        FfP5 = "ff_p5",
+        FfP25 = "ff_p25",
+        FfP50 = "ff_p50",
+        FfP75 = "ff_p75",
+        FfP95 = "ff_p95",
+        FfP100 = "ff_p100",
+        /// Shares of tool time per state.
+        DownPct = "down_pct",
+        PmPct = "pm_pct",
+        SetupPct = "setup_pct",
+        ProcessPct = "process_pct",
+        LoadPct = "load_pct",
+        UnloadPct = "unload_pct",
+        IdlePct = "idle_pct",
+        /// Setup, load, unload and processing.
+        UtilPct = "util_pct",
+        /// Neither down nor in PM.
+        AvailabilityPct = "availability_pct",
+        /// PM share of the downtime (scheduled down time).
+        SdtSharePct = "sdt_share_pct",
+        /// Highest tool group utilization of an area.
+        UtilMaxPct = "util_max_pct",
+        /// Segment completions with a violated limit.
+        VlPct = "vl_pct",
+        /// Violations longer than 1, 2 and 4 hours per segment completion.
+        Vl1hPct = "vl1h_pct",
+        Vl2hPct = "vl2h_pct",
+        Vl4hPct = "vl4h_pct",
+        /// Mean excess over the limits per completed segment.
+        AvlH = "avl_h",
+        /// Mean slack under the limits per completed segment.
+        AontH = "aont_h",
+    }
+}
+
+const FLOW_FACTOR_MEASURES: [Measure; 7] = [
+    Measure::FfP0,
+    Measure::FfP5,
+    Measure::FfP25,
+    Measure::FfP50,
+    Measure::FfP75,
+    Measure::FfP95,
+    Measure::FfP100,
+];
+
+/// One measure of a reporting period.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Metric {
+    pub period: String,
+    pub scope: Scope,
+    /// Part, tool group, area or CQT segment set; empty for the fab and kinds.
+    pub item: String,
+    /// Lot kind of kind and lot measures.
+    pub kind: Option<LotKind>,
+    pub measure: Measure,
+    pub value: f64,
+}
+
+/// A measure over replications.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Summary {
+    pub period: String,
+    pub scope: Scope,
+    pub item: String,
+    pub kind: Option<LotKind>,
+    pub measure: Measure,
+    /// Replications with the measure.
+    pub n: usize,
+    pub mean: f64,
+    /// Sample standard deviation and half-width of the 95% confidence interval of the mean
+    /// (Student t); `None` for a single replication.
+    pub std: Option<f64>,
+    pub ci95: Option<f64>,
+}
+
+/// Every measure of every reporting period of `results`. Measures without a basis (cycle times
+/// without completions, shares of empty windows) are left out.
+pub fn metrics(results: &Results) -> Vec<Metric> {
+    let mut metrics = Vec::new();
+    for period in &results.periods {
+        let mut add = |scope, item: &str, kind, measure, value| {
+            metrics.push(Metric {
+                period: period.name.clone(),
+                scope,
+                item: item.to_owned(),
+                kind,
+                measure,
+                value,
+            });
+        };
+        period_metrics(period, &mut add);
+    }
+    metrics
+}
+
+fn period_metrics(
+    period: &PeriodReport,
+    add: &mut impl FnMut(Scope, &str, Option<LotKind>, Measure, f64),
+) {
+    let lots = &period.lots;
+    add(
+        Scope::Fab,
+        "",
+        None,
+        Measure::Started,
+        lots.iter().map(|lot| lot.started as f64).sum(),
+    );
+    add(
+        Scope::Fab,
+        "",
+        None,
+        Measure::Completed,
+        lots.iter().map(|lot| lot.completed as f64).sum(),
+    );
+    add(Scope::Fab, "", None, Measure::Wip, period.wip);
+
+    for &kind in LotKind::ALL {
+        let of_kind = || lots.iter().filter(move |lot| lot.kind == kind);
+        if of_kind().next().is_none() {
+            continue;
+        }
+        // Moments pooled over parts: n, Σ ct, Σ (σ² + μ²)·n, Σ ff, on time.
+        let (mut n, mut sum, mut squares, mut flow_factors, mut on_time) = (0.0, 0.0, 0.0, 0.0, 0);
+        for lot in of_kind() {
+            if let (Some(mean), Some(std), Some(ff)) = (
+                lot.cycle_time_mean,
+                lot.cycle_time_std,
+                lot.flow_factor_mean,
+            ) {
+                let count = lot.completed as f64;
+                n += count;
+                sum += mean * count;
+                squares += (std * std + mean * mean) * count;
+                flow_factors += ff * count;
+                on_time += lot.on_time;
+            }
+        }
+        let started = of_kind().map(|lot| lot.started as f64).sum();
+        add(Scope::Kind, "", Some(kind), Measure::Started, started);
+        add(Scope::Kind, "", Some(kind), Measure::Completed, n);
+        if n > 0.0 {
+            let mean = sum / n;
+            add(
+                Scope::Kind,
+                "",
+                Some(kind),
+                Measure::OnTimePct,
+                100.0 * on_time as f64 / n,
+            );
+            add(
+                Scope::Kind,
+                "",
+                Some(kind),
+                Measure::CtMeanD,
+                mean / DAY as f64,
+            );
+            let variance = (squares / n - mean * mean).max(0.0);
+            add(
+                Scope::Kind,
+                "",
+                Some(kind),
+                Measure::CtStdD,
+                variance.sqrt() / DAY as f64,
+            );
+            add(
+                Scope::Kind,
+                "",
+                Some(kind),
+                Measure::FfMean,
+                flow_factors / n,
+            );
+        }
+        if let Some(percentiles) = period.flow_factors.iter().find(|ff| ff.kind == kind) {
+            for (measure, value) in FLOW_FACTOR_MEASURES
+                .into_iter()
+                .zip(percentiles.percentiles)
+            {
+                add(Scope::Kind, "", Some(kind), measure, value);
+            }
+        }
+    }
+
+    for lot in lots {
+        let kind = Some(lot.kind);
+        add(
+            Scope::Lot,
+            &lot.part,
+            kind,
+            Measure::Started,
+            lot.started as f64,
+        );
+        add(
+            Scope::Lot,
+            &lot.part,
+            kind,
+            Measure::Completed,
+            lot.completed as f64,
+        );
+        if let (Some(mean), Some(std), Some(ff)) = (
+            lot.cycle_time_mean,
+            lot.cycle_time_std,
+            lot.flow_factor_mean,
+        ) {
+            let on_time = 100.0 * lot.on_time as f64 / lot.completed as f64;
+            add(Scope::Lot, &lot.part, kind, Measure::OnTimePct, on_time);
+            add(
+                Scope::Lot,
+                &lot.part,
+                kind,
+                Measure::CtMeanD,
+                mean / DAY as f64,
+            );
+            add(
+                Scope::Lot,
+                &lot.part,
+                kind,
+                Measure::CtStdD,
+                std / DAY as f64,
+            );
+            add(Scope::Lot, &lot.part, kind, Measure::FfMean, ff);
+        }
+    }
+
+    let mut areas: Vec<(&str, StateTimes, f64)> = Vec::new();
+    for group in &period.tool_groups {
+        let time = group.time;
+        let total = total(&time);
+        if total <= 0.0 {
+            continue;
+        }
+        let share = |part: i64| 100.0 * part as f64 / total;
+        let util = share(busy(&time));
+        let item = group.name.as_str();
+        for (measure, part) in [
+            (Measure::DownPct, time.down),
+            (Measure::PmPct, time.pm),
+            (Measure::SetupPct, time.setup),
+            (Measure::ProcessPct, time.process),
+            (Measure::LoadPct, time.load),
+            (Measure::UnloadPct, time.unload),
+            (Measure::IdlePct, time.idle),
+        ] {
+            add(Scope::ToolGroup, item, None, measure, share(part));
+        }
+        add(Scope::ToolGroup, item, None, Measure::UtilPct, util);
+        add(
+            Scope::ToolGroup,
+            item,
+            None,
+            Measure::AvailabilityPct,
+            100.0 - share(time.down + time.pm),
+        );
+        if let Some(sdt) = sdt_share(&time) {
+            add(Scope::ToolGroup, item, None, Measure::SdtSharePct, sdt);
+        }
+        match areas.iter_mut().find(|(area, ..)| *area == group.area) {
+            Some((_, sum, max)) => {
+                *sum = sum_times(sum, &time);
+                *max = max.max(util);
+            }
+            None => areas.push((&group.area, time, util)),
+        }
+    }
+    for (area, time, max) in areas {
+        let total = total(&time);
+        let availability = 100.0 - 100.0 * (time.down + time.pm) as f64 / total;
+        add(
+            Scope::Area,
+            area,
+            None,
+            Measure::AvailabilityPct,
+            availability,
+        );
+        if let Some(sdt) = sdt_share(&time) {
+            add(Scope::Area, area, None, Measure::SdtSharePct, sdt);
+        }
+        let util = 100.0 * busy(&time) as f64 / total;
+        add(Scope::Area, area, None, Measure::UtilPct, util);
+        add(Scope::Area, area, None, Measure::UtilMaxPct, max);
+    }
+
+    let total_cqt = CqtReport {
+        completed: period.cqt_litho.completed + period.cqt_rest.completed,
+        violated: period.cqt_litho.violated + period.cqt_rest.violated,
+        violated_1h: period.cqt_litho.violated_1h + period.cqt_rest.violated_1h,
+        violated_2h: period.cqt_litho.violated_2h + period.cqt_rest.violated_2h,
+        violated_4h: period.cqt_litho.violated_4h + period.cqt_rest.violated_4h,
+        violation: period.cqt_litho.violation + period.cqt_rest.violation,
+        slack: period.cqt_litho.slack + period.cqt_rest.slack,
+    };
+    for (item, cqt) in [
+        ("litho", period.cqt_litho),
+        ("rest", period.cqt_rest),
+        ("total", total_cqt),
+    ] {
+        add(
+            Scope::Cqt,
+            item,
+            None,
+            Measure::Completed,
+            cqt.completed as f64,
+        );
+        if cqt.completed == 0 {
+            continue;
+        }
+        let completed = cqt.completed as f64;
+        let share = |count: u64| 100.0 * count as f64 / completed;
+        add(Scope::Cqt, item, None, Measure::VlPct, share(cqt.violated));
+        add(
+            Scope::Cqt,
+            item,
+            None,
+            Measure::Vl1hPct,
+            share(cqt.violated_1h),
+        );
+        add(
+            Scope::Cqt,
+            item,
+            None,
+            Measure::Vl2hPct,
+            share(cqt.violated_2h),
+        );
+        add(
+            Scope::Cqt,
+            item,
+            None,
+            Measure::Vl4hPct,
+            share(cqt.violated_4h),
+        );
+        let hours = |time: i64| time as f64 / completed / HOUR as f64;
+        add(Scope::Cqt, item, None, Measure::AvlH, hours(cqt.violation));
+        add(Scope::Cqt, item, None, Measure::AontH, hours(cqt.slack));
+    }
+}
+
+fn total(time: &StateTimes) -> f64 {
+    (time.down + time.pm + time.setup + time.process + time.load + time.unload + time.idle) as f64
+}
+
+fn busy(time: &StateTimes) -> i64 {
+    time.setup + time.process + time.load + time.unload
+}
+
+fn sdt_share(time: &StateTimes) -> Option<f64> {
+    let down = time.down + time.pm;
+    (down > 0).then(|| 100.0 * time.pm as f64 / down as f64)
+}
+
+fn sum_times(a: &StateTimes, b: &StateTimes) -> StateTimes {
+    StateTimes {
+        down: a.down + b.down,
+        pm: a.pm + b.pm,
+        setup: a.setup + b.setup,
+        process: a.process + b.process,
+        load: a.load + b.load,
+        unload: a.unload + b.unload,
+        idle: a.idle + b.idle,
+    }
+}
+
+/// Every measure of the replications' results (runs of one configuration, replication numbers
+/// differing), in the order of first appearance.
+pub fn summarize(replications: &[Results]) -> Vec<Summary> {
+    type Key = (String, Scope, String, Option<LotKind>, Measure);
+    let mut keys: Vec<Key> = Vec::new();
+    let mut values: Vec<Vec<f64>> = Vec::new();
+    let mut index: HashMap<Key, usize> = HashMap::new();
+    for results in replications {
+        for metric in metrics(results) {
+            let key = (
+                metric.period,
+                metric.scope,
+                metric.item,
+                metric.kind,
+                metric.measure,
+            );
+            match index.get(&key) {
+                Some(&at) => values[at].push(metric.value),
+                None => {
+                    index.insert(key.clone(), keys.len());
+                    keys.push(key);
+                    values.push(vec![metric.value]);
+                }
+            }
+        }
+    }
+    keys.into_iter()
+        .zip(values)
+        .map(|((period, scope, item, kind, measure), values)| {
+            let n = values.len();
+            let mean = values.iter().sum::<f64>() / n as f64;
+            let (std, ci95) = if n > 1 {
+                let variance = values
+                    .iter()
+                    .map(|value| (value - mean).powi(2))
+                    .sum::<f64>()
+                    / (n - 1) as f64;
+                let std = variance.sqrt();
+                (Some(std), Some(t_975(n - 1) * std / (n as f64).sqrt()))
+            } else {
+                (None, None)
+            };
+            Summary {
+                period,
+                scope,
+                item,
+                kind,
+                measure,
+                n,
+                mean,
+                std,
+                ci95,
+            }
+        })
+        .collect()
+}
+
+/// 0.975 quantile of Student's t distribution with `df` > 0 degrees of freedom: exact values to
+/// 9 df, then the Cornish–Fisher expansion (Abramowitz & Stegun 26.7.5; error below 3e-5).
+fn t_975(df: usize) -> f64 {
+    const EXACT: [f64; 9] = [
+        12.706_204_736,
+        4.302_652_730,
+        3.182_446_305,
+        2.776_445_105,
+        2.570_581_836,
+        2.446_911_851,
+        2.364_624_252,
+        2.306_004_135,
+        2.262_157_163,
+    ];
+    if let Some(&t) = EXACT.get(df - 1) {
+        return t;
+    }
+    let z: f64 = 1.959_963_985;
+    let v = df as f64;
+    let g1 = (z.powi(3) + z) / 4.0;
+    let g2 = (5.0 * z.powi(5) + 16.0 * z.powi(3) + 3.0 * z) / 96.0;
+    let g3 = (3.0 * z.powi(7) + 19.0 * z.powi(5) + 17.0 * z.powi(3) - 15.0 * z) / 384.0;
+    let g4 = (79.0 * z.powi(9) + 776.0 * z.powi(7) + 1482.0 * z.powi(5)
+        - 1920.0 * z.powi(3)
+        - 945.0 * z)
+        / 92_160.0;
+    z + g1 / v + g2 / v.powi(2) + g3 / v.powi(3) + g4 / v.powi(4)
+}
+
+/// Summaries as CSV: `period,scope,item,kind,measure,n,mean,std,ci95`; empty cells for none.
+pub fn csv(summaries: &[Summary]) -> String {
+    let mut csv = String::from("period,scope,item,kind,measure,n,mean,std,ci95\n");
+    for summary in summaries {
+        let optional =
+            |value: Option<f64>| value.map(|value| value.to_string()).unwrap_or_default();
+        let _ = writeln!(
+            csv,
+            "{},{},{},{},{},{},{},{},{}",
+            field(&summary.period),
+            summary.scope.name(),
+            field(&summary.item),
+            summary.kind.map(LotKind::name).unwrap_or_default(),
+            summary.measure.name(),
+            summary.n,
+            summary.mean,
+            optional(summary.std),
+            optional(summary.ci95),
+        );
+    }
+    csv
+}
+
+/// A CSV field, quoted if it holds a comma, quote or line break.
+fn field(text: &str) -> String {
+    if text.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::{FlowFactors, LotReport, ToolGroupReport};
+
+    /// One period: two parts' regular lots, a tool group, CQT segments.
+    fn results(ct: [f64; 2], down: i64) -> Results {
+        let lot = |part: &str, completed: u64, mean: f64, std: f64| LotReport {
+            part: part.into(),
+            kind: LotKind::Prl,
+            started: 10,
+            completed,
+            on_time: completed / 2,
+            cycle_time_mean: Some(mean * DAY as f64),
+            cycle_time_std: Some(std * DAY as f64),
+            flow_factor_mean: Some(mean / 10.0),
+        };
+        let cqt = CqtReport {
+            completed: 4,
+            violated: 1,
+            violated_1h: 1,
+            violated_2h: 0,
+            violated_4h: 0,
+            violation: 2 * HOUR,
+            slack: 6 * HOUR,
+        };
+        Results {
+            periods: vec![PeriodReport {
+                name: "Period_1".into(),
+                start: 0,
+                end: DAY,
+                lots: vec![lot("part_1", 2, ct[0], 1.0), lot("part,2", 6, ct[1], 2.0)],
+                flow_factors: vec![FlowFactors {
+                    kind: LotKind::Prl,
+                    percentiles: [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6],
+                }],
+                wip: 12.5,
+                tool_groups: vec![ToolGroupReport {
+                    name: "Etch_1".into(),
+                    area: "Etch".into(),
+                    tools: 1,
+                    time: StateTimes {
+                        down,
+                        pm: 10,
+                        setup: 20,
+                        process: 30,
+                        load: 5,
+                        unload: 5,
+                        idle: 30 - down,
+                    },
+                }],
+                cqt_litho: CqtReport::default(),
+                cqt_rest: cqt,
+            }],
+            released: 20,
+            completed: 20,
+            end: DAY,
+            events: 1,
+            step_flow_factors: Vec::new(),
+        }
+    }
+
+    fn value(metrics: &[Metric], scope: Scope, item: &str, measure: Measure) -> Option<f64> {
+        metrics
+            .iter()
+            .find(|metric| {
+                metric.scope == scope && metric.item == item && metric.measure == measure
+            })
+            .map(|metric| metric.value)
+    }
+
+    #[test]
+    fn measures_pool_parts_and_share_tool_time() {
+        let metrics = metrics(&results([10.0, 20.0], 0));
+        let kind = |measure| value(&metrics, Scope::Kind, "", measure).unwrap();
+        // 2 lots at 10 ± 1 d and 6 at 20 ± 2 d.
+        assert_eq!(kind(Measure::Completed), 8.0);
+        assert!((kind(Measure::CtMeanD) - 17.5).abs() < 1e-12);
+        let pooled = ((2.0 * 101.0 + 6.0 * 404.0) / 8.0 - 17.5f64.powi(2)).sqrt();
+        assert!((kind(Measure::CtStdD) - pooled).abs() < 1e-12);
+        assert_eq!(kind(Measure::OnTimePct), 50.0);
+        assert_eq!(kind(Measure::FfP50), 1.3);
+        assert_eq!(
+            value(&metrics, Scope::Lot, "part,2", Measure::CtMeanD),
+            Some(20.0)
+        );
+        let group = |measure| value(&metrics, Scope::ToolGroup, "Etch_1", measure).unwrap();
+        assert_eq!(
+            (group(Measure::UtilPct), group(Measure::AvailabilityPct)),
+            (60.0, 90.0)
+        );
+        assert_eq!(group(Measure::SdtSharePct), 100.0);
+        assert_eq!(
+            value(&metrics, Scope::Area, "Etch", Measure::UtilMaxPct),
+            Some(60.0)
+        );
+        let cqt = |item, measure| value(&metrics, Scope::Cqt, item, measure);
+        assert_eq!(cqt("total", Measure::VlPct), Some(25.0));
+        assert_eq!(
+            (cqt("rest", Measure::AvlH), cqt("rest", Measure::AontH)),
+            (Some(0.5), Some(1.5))
+        );
+        // No CQT segment of the stepper set completed: only the count.
+        assert_eq!(cqt("litho", Measure::Completed), Some(0.0));
+        assert_eq!(cqt("litho", Measure::VlPct), None);
+    }
+
+    #[test]
+    fn summaries_carry_student_t_intervals() {
+        let summaries = summarize(&[results([10.0, 20.0], 0), results([12.0, 20.0], 10)]);
+        let find = |scope, item: &str, measure| {
+            summaries
+                .iter()
+                .find(|summary| {
+                    summary.scope == scope && summary.item == item && summary.measure == measure
+                })
+                .unwrap()
+        };
+        let ct = find(Scope::Lot, "part_1", Measure::CtMeanD);
+        assert_eq!((ct.n, ct.mean), (2, 11.0));
+        let std = 2f64.sqrt();
+        assert!((ct.std.unwrap() - std).abs() < 1e-12);
+        assert!((ct.ci95.unwrap() - 12.706_204_736 * std / 2f64.sqrt()).abs() < 1e-9);
+        let sdt = find(Scope::ToolGroup, "Etch_1", Measure::SdtSharePct);
+        assert_eq!((sdt.n, sdt.mean), (2, 75.0));
+        let single = summarize(&[results([10.0, 20.0], 0)]);
+        assert!(
+            single
+                .iter()
+                .all(|summary| summary.std.is_none() && summary.ci95.is_none())
+        );
+    }
+
+    #[test]
+    fn t_quantiles() {
+        assert_eq!(t_975(1), 12.706_204_736);
+        for (df, exact) in [
+            (10, 2.228_138_852),
+            (30, 2.042_272_456),
+            (120, 1.979_930_405),
+        ] {
+            assert!((t_975(df) - exact).abs() < 3e-5, "df {df}");
+        }
+    }
+
+    #[test]
+    fn csv_names_and_quotes() {
+        let csv = csv(&summarize(&[results([10.0, 20.0], 0)]));
+        let mut lines = csv.lines();
+        assert_eq!(
+            lines.next(),
+            Some("period,scope,item,kind,measure,n,mean,std,ci95")
+        );
+        assert_eq!(lines.next(), Some("Period_1,fab,,,started,1,20,,"));
+        assert!(csv.contains("Period_1,lot,\"part,2\",PRL,ct_mean_d,1,20,,\n"));
+        assert!(csv.contains("Period_1,tool_group,Etch_1,,util_pct,1,60,,\n"));
+    }
+
+    #[test]
+    fn names_are_the_serialized_form() {
+        for &measure in Measure::ALL {
+            let json = serde_json::to_string(&measure).unwrap();
+            assert_eq!(json, format!("\"{}\"", measure.name()));
+            assert_eq!(serde_json::from_str::<Measure>(&json).unwrap(), measure);
+        }
+        assert!(serde_json::from_str::<Scope>("\"fabs\"").is_err());
+    }
+}

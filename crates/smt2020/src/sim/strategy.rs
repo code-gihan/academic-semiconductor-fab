@@ -3,7 +3,7 @@
 use des_core::Time;
 
 use super::stats::LotKind;
-use super::{Config, EngineeringRule, Error, QueueTimeRule};
+use super::{Config, EngineeringRule, Error, Limits, QueueTimeRule};
 use crate::data::{Dataset, ToolGroupId};
 
 /// Stepper tool groups of the CAtE/CoT ([P1] §V) and complex-CQT ([P2] §4.1) experiments.
@@ -12,6 +12,7 @@ const STEPPERS: [&str; 2] = ["LithoTrack_FE_95", "LithoTrack_FE_115"];
 pub(super) enum QueueTime {
     None,
     Qtcr,
+    /// Flow factors per route and step; never measured counts as 1.
     Qts(Vec<Vec<f64>>),
 }
 
@@ -19,15 +20,42 @@ pub(super) enum QueueTime {
 pub(super) struct Stopping {
     limits: Vec<(i64, i64)>,
     /// Constrained lots queued or processing at the group.
-    pub front: Vec<i64>,
+    front: Vec<i64>,
     /// Constrained lots that will still reach the group in their segment.
-    pub upstream: Vec<i64>,
+    upstream: Vec<i64>,
+    /// Groups whose counts changed during the current event, and whether their limit was reached
+    /// before it.
+    changed: Vec<(ToolGroupId, bool)>,
 }
 
 impl Stopping {
     pub(super) fn reached(&self, group: ToolGroupId) -> bool {
         let (front, both) = self.limits[group];
         self.front[group] >= front || self.front[group] + self.upstream[group] >= both
+    }
+
+    /// Adds `delta` constrained lots in front of `group` (`front`) or upstream of it.
+    pub(super) fn count(&mut self, group: ToolGroupId, front: bool, delta: i64) {
+        if !self.changed.iter().any(|&(changed, _)| changed == group) {
+            let reached = self.reached(group);
+            self.changed.push((group, reached));
+        }
+        let counts = if front {
+            &mut self.front
+        } else {
+            &mut self.upstream
+        };
+        counts[group] += delta;
+    }
+
+    /// Ends an event: true if a limit reached before it no longer is, which releases held lots.
+    pub(super) fn released(&mut self) -> bool {
+        let released = self
+            .changed
+            .iter()
+            .any(|&(group, was)| was && !self.reached(group));
+        self.changed.clear();
+        released
     }
 }
 
@@ -46,7 +74,12 @@ enum Engineering {
 }
 
 impl Strategy {
-    pub(super) fn new(data: &Dataset, config: &Config) -> Result<Self, Error> {
+    /// Resolves `config` against `data`; `flow_factors` are the QTS flow factors.
+    pub(super) fn new(
+        data: &Dataset,
+        config: &Config,
+        flow_factors: Option<&[Vec<Option<f64>>]>,
+    ) -> Result<Self, Error> {
         let group_id = |name: &str| {
             data.tool_groups
                 .iter()
@@ -83,10 +116,14 @@ impl Strategy {
                 Err(_) => {}
             }
         }
-        let queue_time = match &config.queue_time {
+        if config.flow_factors.is_some() && config.queue_time != QueueTimeRule::Qts {
+            return Err(Error("flow factors apply to the QTS rule only".into()));
+        }
+        let queue_time = match config.queue_time {
             QueueTimeRule::None => QueueTime::None,
             QueueTimeRule::Qtcr => QueueTime::Qtcr,
-            QueueTimeRule::Qts { flow_factors } => {
+            QueueTimeRule::Qts => {
+                let flow_factors = flow_factors.expect("QTS runs with flow factors");
                 let fits = flow_factors.len() == data.routes.len()
                     && flow_factors
                         .iter()
@@ -97,33 +134,48 @@ impl Strategy {
                         "QTS flow factors need one value per route step".into(),
                     ));
                 }
-                QueueTime::Qts(flow_factors.clone())
+                let mut resolved = Vec::with_capacity(flow_factors.len());
+                for route in flow_factors {
+                    let mut steps = Vec::with_capacity(route.len());
+                    for &ff in route {
+                        match ff {
+                            None => steps.push(1.0),
+                            Some(ff) if ff.is_finite() && ff >= 0.0 => steps.push(ff),
+                            Some(ff) => {
+                                return Err(Error(format!(
+                                    "QTS flow factor {ff} is not finite and non-negative"
+                                )));
+                            }
+                        }
+                    }
+                    resolved.push(steps);
+                }
+                QueueTime::Qts(resolved)
             }
         };
         let stopping = match &config.stopping {
             None => None,
             Some(stopping) => {
                 // A zero limit would hold lots forever.
-                let given = stopping
+                if stopping
                     .limits
-                    .iter()
-                    .map(|&(_, front, both)| (front, both));
-                if given
-                    .chain([stopping.default])
-                    .any(|(front, both)| front == 0 || both == 0)
+                    .values()
+                    .chain([&stopping.default])
+                    .any(|limits| limits.front == 0 || limits.total == 0)
                 {
                     return Err(Error("stopping limits must be positive".into()));
                 }
-                let (front, both) = stopping.default;
-                let mut limits = vec![(i64::from(front), i64::from(both)); data.tool_groups.len()];
-                for (name, front, both) in &stopping.limits {
-                    limits[group_id(name)?] = (i64::from(*front), i64::from(*both));
+                let pair = |limits: &Limits| (i64::from(limits.front), i64::from(limits.total));
+                let mut limits = vec![pair(&stopping.default); data.tool_groups.len()];
+                for (name, given) in &stopping.limits {
+                    limits[group_id(name)?] = pair(given);
                 }
                 let groups = data.tool_groups.len();
                 Some(Stopping {
                     limits,
                     front: vec![0; groups],
                     upstream: vec![0; groups],
+                    changed: Vec::new(),
                 })
             }
         };
@@ -144,27 +196,22 @@ impl Strategy {
         }
     }
 
-    /// CAtE/CoT on the steppers: 0 for lots of the preferred class, 1 otherwise; `None` elsewhere.
-    pub(super) fn class_rank(
+    /// CAtE/CoT on the steppers: whether engineering lots are preferred over production lots now;
+    /// `None` elsewhere.
+    pub(super) fn prefer_engineering(
         &self,
         group: ToolGroupId,
-        kind: LotKind,
         now: Time,
         campaign: u32,
-    ) -> Option<f64> {
+    ) -> Option<bool> {
         if !self.steppers[group] {
             return None;
         }
-        let prefer_engineering = match self.engineering {
-            Engineering::Cate { production, cycle } => now.rem_euclid(cycle) >= production,
-            Engineering::Cot(_) => campaign > 0,
-            Engineering::Base | Engineering::First => return None,
-        };
-        Some(if kind.engineering() == prefer_engineering {
-            0.0
-        } else {
-            1.0
-        })
+        match self.engineering {
+            Engineering::Cate { production, cycle } => Some(now.rem_euclid(cycle) >= production),
+            Engineering::Cot(_) => Some(campaign > 0),
+            Engineering::Base | Engineering::First => None,
+        }
     }
 
     /// CoT trigger limit.

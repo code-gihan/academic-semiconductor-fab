@@ -45,6 +45,9 @@ pub(super) struct RouteInfo {
     pub rpt: Affine,
     /// The CQT segment starting at each step includes stepper steps.
     pub cqt_litho: Vec<bool>,
+    /// Distinct tool groups of the CQT segment starting at each step, after the entrance step
+    /// (stopping limits); empty without a segment.
+    pub segment_groups: Vec<Vec<ToolGroupId>>,
 }
 
 pub(super) struct Routes {
@@ -192,11 +195,27 @@ impl RouteInfo {
                 })
             })
             .collect();
+        let segment_groups = steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| {
+                let mut groups = Vec::new();
+                if let Some(cqt) = step.cqt {
+                    for later in &steps[index + 1..=cqt.until] {
+                        if !groups.contains(&later.tool_group) {
+                            groups.push(later.tool_group);
+                        }
+                    }
+                }
+                groups
+            })
+            .collect();
         Self {
             step,
             remaining,
             rpt,
             cqt_litho,
+            segment_groups,
         }
     }
 }

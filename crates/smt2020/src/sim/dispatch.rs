@@ -1,17 +1,26 @@
 //! Lot selection: which ready tool picks first, which lots it may take, their ranking and batch
-//! formation.
+//! formation. Dispatching runs on events only (arrival, job end, repair, PM end, reservation
+//! release, stopping limit release) and reads the queue entries fixed on arrival.
 
 use std::cmp::Ordering;
 use std::mem;
 
 use des_core::{Scheduler, Time};
 
-use super::fab::{Event, Fab, Lot, LotId, LotState, Segment, ToolId};
-use super::strategy::QueueTime;
-use crate::data::{Dist, PartId, Rank, Rule, StepIndex, StepSetup, ToolGroupId};
+use super::fab::{Event, Fab, LotId, LotState, ToolId, Urgency, Waiting};
+use crate::data::{Dist, PartId, Rank, Rule, SetupId, StepIndex, StepSetup, ToolGroupId};
 
 /// Ranking key compared lexicographically, smallest first.
 pub(super) type Key = [f64; 7];
+
+/// What the keys of one selection share: the group's ranks, the tool's setup and the instant.
+struct Ranking<'a> {
+    ranks: &'a [Rank],
+    /// CAtE/CoT on the steppers: whether engineering lots are preferred.
+    prefer_engineering: Option<bool>,
+    setup: Option<SetupId>,
+    now: Time,
+}
 
 fn compare(a: &Key, b: &Key) -> Ordering {
     a.iter()
@@ -33,15 +42,25 @@ impl Fab<'_> {
         if self.groups[group].queue.is_empty() || self.groups[group].ready.is_empty() {
             return;
         }
+        if self.mark_held(group) && !self.stopped.contains(&group) {
+            self.stopped.push(group);
+        }
         let mut order = mem::take(&mut self.order);
         order.clear();
         order.extend(&self.groups[group].ready);
         if let Some(lot) = arrival
             && self.data.tool_groups[group].wake_least_setup
         {
+            let setup = self.groups[group]
+                .queue
+                .iter()
+                .rev()
+                .find(|waiting| waiting.lot == lot)
+                .expect("arrived lot")
+                .setup;
             order.sort_by(|&a, &b| {
-                self.wake_setup_time(lot, a)
-                    .total_cmp(&self.wake_setup_time(lot, b))
+                self.wake_setup_time(setup, self.tools[a].setup)
+                    .total_cmp(&self.wake_setup_time(setup, self.tools[b].setup))
             });
         }
         for &tool in &order {
@@ -55,6 +74,24 @@ impl Fab<'_> {
         self.order = order;
     }
 
+    /// Stopping ([P2] §3.2): marks the lots about to enter a CQT segment while a limit of a tool
+    /// group of the segment is reached; true if any is held. The marks hold for the whole
+    /// dispatch, as job starts leave the stopping counts unchanged.
+    fn mark_held(&mut self, group: ToolGroupId) -> bool {
+        let Some(stopping) = &self.strategy.stopping else {
+            return false;
+        };
+        let mut held = false;
+        for waiting in &mut self.groups[group].queue {
+            waiting.held = waiting.entering
+                && self.routes.info[waiting.route].segment_groups[waiting.step]
+                    .iter()
+                    .any(|&later| stopping.reached(later));
+            held |= waiting.held;
+        }
+        held
+    }
+
     /// Puts the best lot, or the best batch, for `tool` into `selected`.
     fn select(&mut self, tool: ToolId, now: Time) -> bool {
         let group = self.tools[tool].group;
@@ -66,7 +103,7 @@ impl Fab<'_> {
             let waiting = self.groups[group]
                 .queue
                 .iter()
-                .filter(|&&id| self.lots[id].kind.engineering());
+                .filter(|waiting| waiting.kind.engineering());
             if waiting.count() >= trigger as usize {
                 self.groups[group].campaign = trigger;
             }
@@ -74,209 +111,133 @@ impl Fab<'_> {
         // rule_LSSU: an unfinished setup run, hot lots included, waits for lots keeping the setup
         // while any can come (AutoSched documentation: a minimum number of lots is ensured).
         let state = &self.tools[tool];
+        let current = state.setup;
         let run_holds = matches!(self.data.tool_groups[group].rule, Rule::SetupRun(_))
             && state.run_left > 0
-            && state.setup.is_some_and(|setup| {
+            && current.is_some_and(|setup| {
                 self.can_still_come(&self.routes.setup_members[&(group, setup)])
             });
-        let mut candidates = mem::take(&mut self.candidates);
-        candidates.clear();
-        let mut stopped = false;
-        for &id in &self.groups[group].queue {
-            if self.stopping_holds(id) {
-                stopped = true;
-            } else if self.fits(id, tool) && !(run_holds && self.changes_setup(id, tool)) {
-                candidates.push((self.key(id, tool, now), id));
+        // Held lots, lots dedicated to another tool, and setup changes during a held run wait.
+        let eligible = |waiting: &Waiting| {
+            !waiting.held
+                && waiting.dedicated.is_none_or(|dedicated| dedicated == tool)
+                && !(run_holds
+                    && waiting
+                        .setup
+                        .is_some_and(|setup| current != Some(setup.setup)))
+        };
+        let spec = &self.data.tool_groups[group];
+        let ranking = Ranking {
+            ranks: &spec.ranks,
+            prefer_engineering: self.strategy.prefer_engineering(
+                group,
+                now,
+                self.groups[group].campaign,
+            ),
+            setup: current,
+            now,
+        };
+        if spec.batching.is_some() {
+            let mut candidates = mem::take(&mut self.candidates);
+            candidates.clear();
+            for (index, waiting) in self.groups[group].queue.iter().enumerate() {
+                if eligible(waiting) {
+                    candidates.push((self.key(waiting, &ranking), index));
+                }
+            }
+            let found = self.form_batch(group, &mut candidates);
+            self.candidates = candidates;
+            return found;
+        }
+        let mut best: Option<(Key, LotId)> = None;
+        for waiting in &self.groups[group].queue {
+            if eligible(waiting) {
+                let key = self.key(waiting, &ranking);
+                if best
+                    .as_ref()
+                    .is_none_or(|(best, _)| compare(&key, best).is_lt())
+                {
+                    best = Some((key, waiting.lot));
+                }
             }
         }
-        if stopped && !self.stopped.contains(&group) {
-            self.stopped.push(group);
-        }
-        let found = if self.data.tool_groups[group].batching.is_some() {
-            self.form_batch(&mut candidates)
-        } else if let Some(&(_, id)) = candidates.iter().min_by(|a, b| compare(&a.0, &b.0)) {
-            self.selected.clear();
-            self.selected.push(id);
-            true
-        } else {
-            false
-        };
-        self.candidates = candidates;
-        found
-    }
-
-    /// Stopping ([P2] §3.2): a lot about to enter a CQT segment waits while a limit of a tool group
-    /// of the segment is reached, unless it is leaving the previous segment at this step.
-    fn stopping_holds(&self, id: LotId) -> bool {
-        let Some(stopping) = &self.strategy.stopping else {
+        let Some((_, lot)) = best else {
             return false;
         };
-        let lot = &self.lots[id];
-        let steps = &self.data.routes[lot.route].steps;
-        let Some(cqt) = steps[lot.step].cqt else {
-            return false;
-        };
-        if lot
-            .segment
-            .as_ref()
-            .is_some_and(|segment| segment.exit == lot.step)
-        {
-            return false;
-        }
-        steps[lot.step + 1..=cqt.until]
-            .iter()
-            .any(|step| stopping.reached(step.tool_group))
+        self.selected.clear();
+        self.selected.push(lot);
+        true
     }
 
-    /// Lot-to-lens dedication: a lot dedicated to another tool at this step does not fit.
-    fn fits(&self, id: LotId, tool: ToolId) -> bool {
-        let lot = &self.lots[id];
-        !lot.dedicated
-            .iter()
-            .any(|&(step, dedicated)| step == lot.step && dedicated != tool)
-    }
-
-    /// The lot needs a setup other than the tool's current one.
-    fn changes_setup(&self, id: LotId, tool: ToolId) -> bool {
-        let lot = &self.lots[id];
-        self.data.routes[lot.route].steps[lot.step]
-            .setup
-            .is_some_and(|setup| self.tools[tool].setup != Some(setup.setup))
-    }
-
-    /// Setup a lot needs on a tool, if any.
-    fn needed_setup(&self, id: LotId, tool: ToolId) -> Option<StepSetup> {
-        let lot = &self.lots[id];
-        self.data.routes[lot.route].steps[lot.step]
-            .setup
-            .filter(|setup| setup.always || self.tools[tool].setup != Some(setup.setup))
-    }
-
-    /// `rank_RSETUP`: mean setup time from the setup change table. Setup times given only in the
-    /// route rank as none, as in the AutoSched reference runs.
-    fn ranked_setup_time(&self, id: LotId, tool: ToolId) -> f64 {
-        self.needed_setup(id, tool)
-            .and_then(|setup| self.setup_dist(self.tools[tool].setup, setup.setup))
+    /// `rank_RSETUP`: mean setup time from the setup change table for a lot on a tool with
+    /// `current` setup. Setup times given only in the route rank as none, as in the AutoSched
+    /// reference runs.
+    fn ranked_setup_time(&self, setup: Option<StepSetup>, current: Option<SetupId>) -> f64 {
+        needed_setup(setup, current)
+            .and_then(|setup| self.setup_dist(current, setup.setup))
             .map_or(0.0, |dist| dist.mean() as f64)
     }
 
-    /// `wake_LeastSetupTime`: mean time of the setup the lot needs on the tool.
-    fn wake_setup_time(&self, id: LotId, tool: ToolId) -> f64 {
-        self.needed_setup(id, tool).map_or(0.0, |setup| {
+    /// `wake_LeastSetupTime`: mean time of the setup a lot needs on a tool with `current` setup.
+    fn wake_setup_time(&self, setup: Option<StepSetup>, current: Option<SetupId>) -> f64 {
+        needed_setup(setup, current).map_or(0.0, |setup| {
             setup
                 .time
-                .or_else(|| {
-                    self.setup_dist(self.tools[tool].setup, setup.setup)
-                        .map(Dist::mean)
-                })
+                .or_else(|| self.setup_dist(current, setup.setup).map(Dist::mean))
                 .unwrap_or(0) as f64
         })
     }
 
     /// Lexicographic key: CAtE/CoT class preference, then the group's ranks with the queue-time
     /// urgency right before FIFO/CR, then release order.
-    fn key(&self, id: LotId, tool: ToolId, now: Time) -> Key {
-        let lot = &self.lots[id];
-        let group = self.tools[tool].group;
-        let spec = &self.data.tool_groups[group];
+    fn key(&self, waiting: &Waiting, ranking: &Ranking) -> Key {
+        let now = ranking.now;
         let mut key = [0.0; 7];
         let mut len = 0;
         let mut push = |value: f64| {
             key[len] = value;
             len += 1;
         };
-        if let Some(class) =
-            self.strategy
-                .class_rank(group, lot.kind, now, self.groups[group].campaign)
-        {
-            push(class);
+        if let Some(prefer) = ranking.prefer_engineering {
+            push(if waiting.kind.engineering() == prefer {
+                0.0
+            } else {
+                1.0
+            });
         }
-        for &rank in &spec.ranks {
+        for &rank in ranking.ranks {
             match rank {
-                Rank::Priority => push(-f64::from(lot.priority)),
-                Rank::LeastSetup => push(self.ranked_setup_time(id, tool)),
+                Rank::Priority => push(-f64::from(waiting.priority)),
+                Rank::LeastSetup => push(self.ranked_setup_time(waiting.setup, ranking.setup)),
                 Rank::Fifo | Rank::CriticalRatio => {
-                    if let Some(urgency) = self.queue_time_urgency(lot, now) {
-                        push(urgency);
+                    match waiting.urgency {
+                        Urgency::None => {}
+                        Urgency::Outside => push(f64::INFINITY),
+                        Urgency::Qtcr { deadline, work } => push(qtcr(deadline, work, now)),
+                        Urgency::Qts(deadline) => push(deadline),
                     }
                     push(match rank {
-                        Rank::Fifo => lot.queued_at as f64,
-                        _ => self.critical_ratio(lot, now),
+                        Rank::Fifo => waiting.queued_at as f64,
+                        // Time to the due date over the expected remaining work.
+                        _ => (waiting.due - now) as f64 / waiting.remaining,
                     });
                 }
             }
         }
-        push(lot.serial as f64);
+        push(waiting.serial as f64);
         key
-    }
-
-    /// Time to the due date over the expected remaining work.
-    fn critical_ratio(&self, lot: &Lot, now: Time) -> f64 {
-        (lot.due - now) as f64 / self.routes.info[lot.route].remaining[lot.step].at(lot.wafers)
-    }
-
-    /// QTCR index or QTS start deadline; `None` without a queue-time rule, +∞ outside segments.
-    fn queue_time_urgency(&self, lot: &Lot, now: Time) -> Option<f64> {
-        match &self.strategy.queue_time {
-            QueueTime::None => None,
-            QueueTime::Qtcr => Some(
-                lot.segment
-                    .as_ref()
-                    .map_or(f64::INFINITY, |segment| self.qtcr(lot, segment, now)),
-            ),
-            QueueTime::Qts(flow_factors) => {
-                Some(lot.segment.as_ref().map_or(f64::INFINITY, |segment| {
-                    self.qts(lot, segment, flow_factors)
-                }))
-            }
-        }
-    }
-
-    /// [P2] eq. (1) with p_k the expected step durations from the current step to the exit.
-    fn qtcr(&self, lot: &Lot, segment: &Segment, now: Time) -> f64 {
-        let remaining = &self.routes.info[lot.route].remaining;
-        let work = remaining[lot.step].at(lot.wafers) - remaining[segment.exit + 1].at(lot.wafers);
-        let slack = (segment.entered + segment.limit - now) as f64;
-        if slack >= 0.0 {
-            slack / work
-        } else {
-            slack * work
-        }
-    }
-
-    /// [P2] eq. (2)–(6): latest start of the current step; flow factors that were never measured
-    /// count as 1.
-    fn qts(&self, lot: &Lot, segment: &Segment, flow_factors: &[Vec<f64>]) -> f64 {
-        let deadline = (segment.entered + segment.limit) as f64;
-        if lot.step >= segment.exit {
-            return deadline;
-        }
-        let info = &self.routes.info[lot.route];
-        let steps = &self.data.routes[lot.route].steps;
-        let p = |k: usize| steps[k].sampling * info.step[k].at(lot.wafers);
-        let ff = |k: usize| {
-            Some(flow_factors[lot.route][k])
-                .filter(|ff| ff.is_finite())
-                .unwrap_or(1.0)
-        };
-        let span = (segment.entry + 1..segment.exit)
-            .map(|k| ff(k) * p(k))
-            .sum::<f64>()
-            + (ff(segment.exit) - 1.0) * p(segment.exit);
-        let allocated: f64 = (segment.entry + 1..=lot.step).map(|k| ff(k) * p(k)).sum();
-        let share = if span > 0.0 { allocated / span } else { 0.0 };
-        segment.entered as f64 + segment.limit as f64 * share - p(lot.step)
     }
 
     /// [P2] §4.1: the best-ranked lot opens a batch filled with compatible lots in rank order up to
     /// the maximum. It starts at the minimum, or below it once no compatible lot can still come;
     /// otherwise the next-ranked lot of another batch kind opens one.
-    fn form_batch(&mut self, candidates: &mut [(Key, LotId)]) -> bool {
+    fn form_batch(&mut self, group: ToolGroupId, candidates: &mut [(Key, usize)]) -> bool {
         candidates.sort_by(|a, b| compare(&a.0, &b.0));
+        let queue = &self.groups[group].queue;
         let mut tried = Vec::new();
         for first in 0..candidates.len() {
-            let head = &self.lots[candidates[first].1];
-            let key = self.routes.batch_key[head.part][head.step].expect("batch step");
+            let head = &queue[candidates[first].1];
+            let key = head.batch.expect("batch step");
             if tried.contains(&key) {
                 continue;
             }
@@ -286,13 +247,11 @@ impl Fab<'_> {
                 .expect("batch size");
             self.selected.clear();
             let mut wafers = 0;
-            for &(_, id) in &candidates[first..] {
-                let lot = &self.lots[id];
-                if self.routes.batch_key[lot.part][lot.step] == Some(key)
-                    && wafers + lot.wafers <= size.max
-                {
-                    self.selected.push(id);
-                    wafers += lot.wafers;
+            for &(_, index) in &candidates[first..] {
+                let waiting = &queue[index];
+                if waiting.batch == Some(key) && wafers + waiting.wafers <= size.max {
+                    self.selected.push(waiting.lot);
+                    wafers += waiting.wafers;
                 }
             }
             if wafers >= size.min || !self.can_still_come(&self.routes.batch_members[key]) {
@@ -317,5 +276,20 @@ impl Fab<'_> {
                                 || (lot.step == step && lot.state == LotState::Moving))
                     })
             })
+    }
+}
+
+/// Setup a lot needs on a tool with `current` setup, if any.
+fn needed_setup(setup: Option<StepSetup>, current: Option<SetupId>) -> Option<StepSetup> {
+    setup.filter(|setup| setup.always || current != Some(setup.setup))
+}
+
+/// [P2] eq. (1): QTCR index from the segment end date and the expected work to the exit step.
+fn qtcr(deadline: Time, work: f64, now: Time) -> f64 {
+    let slack = (deadline - now) as f64;
+    if slack >= 0.0 {
+        slack / work
+    } else {
+        slack * work
     }
 }

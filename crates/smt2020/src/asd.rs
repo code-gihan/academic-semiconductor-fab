@@ -1,7 +1,7 @@
 //! Loader for SMT2020 AutoSched AP model directories (`*.asd`). Reads the files named in
 //! `options.def` and returns a validated [`Dataset`]; input the model does not support is an
 //! error, never silently dropped. Label-only columns (lot, order and step descriptions, IGNORE)
-//! are not read.
+//! are not read into the dataset; [`orders`] reads the order labels the AutoSched reports use.
 
 mod table;
 
@@ -39,8 +39,57 @@ impl std::error::Error for Error {}
 /// (skip, travel, setup, load, process, unload, rework).
 const ACTION_LIST: &str = "Custom_actlist_ASISemiOpersDuringSetupAndAdditionalLoadUnload";
 
+/// Loads the model in `dir` with the active files of its `options.def`.
 pub fn load(dir: &Path) -> Result<Dataset, Error> {
     let options = Options::read(dir)?;
+    let orders = options.files("ORDER_FILES")?;
+    build(dir, &options, &orders)
+}
+
+/// [`load`] with the order files `orders` of `dir` in place of the active ORDER_FILES, e.g. the
+/// inactive periodic `order.txt` or another due-date list.
+pub fn load_with_orders(dir: &Path, orders: &[&str]) -> Result<Dataset, Error> {
+    build(dir, &Options::read(dir)?, orders)
+}
+
+/// AutoSched order: the label its reports (`order.rep`) group lots by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Order {
+    pub name: String,
+    pub part: String,
+    pub priority: u32,
+}
+
+/// Orders of the active ORDER_FILES of `dir` whose lots share one part and priority; orders mixing
+/// them (the initial WIP) are left out.
+pub fn orders(dir: &Path) -> Result<Vec<Order>, Error> {
+    let options = Options::read(dir)?;
+    let mut orders: Vec<(Order, bool)> = Vec::new();
+    for file in options.files("ORDER_FILES")? {
+        let table = Table::read(dir, file)?;
+        let [order, part, priority] = table.cols(["ORDER", "PART", "PRIOR"])?;
+        for row in table.rows() {
+            let (name, part, priority) = (row.text(order)?, row.text(part)?, row.count(priority)?);
+            match orders.iter_mut().find(|(known, _)| known.name == name) {
+                Some((known, mixed)) => *mixed |= known.part != part || known.priority != priority,
+                None => orders.push((
+                    Order {
+                        name: name.to_owned(),
+                        part: part.to_owned(),
+                        priority,
+                    },
+                    false,
+                )),
+            }
+        }
+    }
+    Ok(orders
+        .into_iter()
+        .filter_map(|(order, mixed)| (!mixed).then_some(order))
+        .collect())
+}
+
+fn build(dir: &Path, options: &Options, orders: &[&str]) -> Result<Dataset, Error> {
     let table = |key: &str| Table::read(dir, options.file(key)?);
 
     let mut setups = Names::default();
@@ -70,7 +119,7 @@ pub fn load(dir: &Path) -> Result<Dataset, Error> {
         &areas,
     )?;
     let transports = read_transports(&table("FROMTO_FILES")?, &locations)?;
-    let (streams, lots) = read_orders(dir, &options, &parts, &part_names, &routes)?;
+    let (streams, lots) = read_orders(dir, orders, options.epoch, &parts, &part_names, &routes)?;
     let periods = read_periods(&table("PERIOD_FILE")?, options.epoch)?;
     Ok(Dataset {
         areas: areas.names,
@@ -860,13 +909,14 @@ fn read_transports(table: &Table, locations: &Names) -> Result<Vec<Transport>, E
 
 fn read_orders(
     dir: &Path,
-    options: &Options,
+    files: &[&str],
+    epoch: Time,
     parts: &[Part],
     part_names: &Names,
     routes: &[Route],
 ) -> Result<(Vec<ReleaseStream>, Vec<LotRelease>), Error> {
     let (mut streams, mut lots) = (Vec::new(), Vec::new());
-    for file in options.files("ORDER_FILES")? {
+    for &file in files {
         let table = Table::read(dir, file)?;
         let [part, priority, pieces, start, due] =
             table.cols(["PART", "PRIOR", "PIECES", "START", "DUE"])?;
@@ -891,10 +941,7 @@ fn read_orders(
         for row in table.rows() {
             let filled = |col: Option<usize>| col.and_then(|col| row.opt(col));
             let part_id = lookup(row, part, part_names, "part")?;
-            let (release, due_date) = (
-                row.date(start, options.epoch)?,
-                row.date(due, options.epoch)?,
-            );
+            let (release, due_date) = (row.date(start, epoch)?, row.date(due, epoch)?);
             if release < 0 {
                 return Err(row.error("release before SIM_START"));
             }

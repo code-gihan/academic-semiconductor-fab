@@ -2,7 +2,6 @@
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use std::collections::binary_heap::PeekMut;
 
 use crate::Time;
 
@@ -30,14 +29,16 @@ impl<E> EventQueue<E> {
         self.next_seq += 1;
     }
 
-    /// Removes and returns the earliest event if it is due at or before `limit`.
-    pub(crate) fn pop_due(&mut self, limit: Time) -> Option<(Time, E)> {
-        let top = self.heap.peek_mut()?;
-        if top.time > limit {
-            return None;
-        }
-        let Entry { time, event, .. } = PeekMut::pop(top);
-        Some((time, event))
+    /// Time of the earliest event.
+    pub(crate) fn next_time(&self) -> Option<Time> {
+        self.heap.peek().map(|entry| entry.time)
+    }
+
+    /// Removes and returns the earliest event.
+    pub(crate) fn pop(&mut self) -> Option<(Time, E)> {
+        self.heap
+            .pop()
+            .map(|Entry { time, event, .. }| (time, event))
     }
 }
 
@@ -81,18 +82,18 @@ mod tests {
         }
         let mut expected = pushed;
         expected.sort_by_key(|&(time, _)| time); // stable: push order within equal times
-        let popped: Vec<_> = std::iter::from_fn(|| queue.pop_due(Time::MAX)).collect();
+        let popped: Vec<_> = std::iter::from_fn(|| queue.pop()).collect();
         assert_eq!(popped, expected);
     }
 
     #[test]
-    fn pop_due_stops_at_limit() {
+    fn next_time_is_the_earliest() {
         let mut queue = EventQueue::new();
+        assert_eq!(queue.next_time(), None);
         queue.push(20, 'b');
         queue.push(10, 'a');
-        assert_eq!(queue.pop_due(15), Some((10, 'a')));
-        assert_eq!(queue.pop_due(15), None);
-        assert_eq!(queue.pop_due(20), Some((20, 'b')));
-        assert_eq!(queue.pop_due(Time::MAX), None);
+        assert_eq!(queue.next_time(), Some(10));
+        assert_eq!(queue.pop(), Some((10, 'a')));
+        assert_eq!(queue.next_time(), Some(20));
     }
 }

@@ -2,18 +2,19 @@
 //! `SMT_2020 - Final` folder, not committed): `cargo test -p smt2020 --release -- --ignored`.
 //! Expected values were read off the raw files.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use des_core::{DAY, HOUR, MINUTE, SECOND, Time};
-use smt2020::asd;
+use smt2020::asd::{self, Order};
 use smt2020::data::{
     BatchCriterion, BatchSize, Breakdown, Cqt, Dataset, Dist, LotRelease, Pm, PmTrigger, Rank,
     ReleaseStream, Rule, ToolGroup, Unit,
 };
-use smt2020::sim::{self, Config, EngineeringRule, QueueTimeRule, Results, Stopping};
+use smt2020::sim::{self, Config, EngineeringRule, Limits, QueueTimeRule, Results, Stopping};
+use smt2020::{DAY, HOUR, MINUTE, SECOND};
 
-fn load(dataset: &str, model: &str) -> Dataset {
-    let dir: PathBuf = [
+fn model_dir(dataset: &str, model: &str) -> PathBuf {
+    [
         env!("CARGO_MANIFEST_DIR"),
         "../../data/raw/AutoSched",
         dataset,
@@ -21,8 +22,11 @@ fn load(dataset: &str, model: &str) -> Dataset {
         &format!("{model}.asd"),
     ]
     .iter()
-    .collect();
-    asd::load(&dir).unwrap_or_else(|error| panic!("{error}"))
+    .collect()
+}
+
+fn load(dataset: &str, model: &str) -> Dataset {
+    asd::load(&model_dir(dataset, model)).unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn group<'a>(dataset: &'a Dataset, name: &str) -> &'a ToolGroup {
@@ -221,6 +225,15 @@ fn dataset_1_hvlm() {
     let periods: Vec<_> = ds.periods.iter().map(|p| (p.start, p.reset)).collect();
     assert_eq!(periods.len(), 8);
     assert_eq!(periods[..2], [(0, true), (365 * DAY, false)]);
+
+    // Order labels of the AutoSched reports; the initial WIP mixes parts and is left out.
+    let orders = asd::orders(&model_dir("dataset 1", "HVLM_Model")).unwrap();
+    assert_eq!(orders.len(), 5);
+    assert!(orders.contains(&Order {
+        name: "O_SuperHotLot_3".into(),
+        part: "part_3".into(),
+        priority: 30,
+    }));
 }
 
 #[test]
@@ -266,6 +279,14 @@ fn dataset_2_lvhm() {
             step: None,
         }
     );
+
+    // The inactive periodic plan: 21 streams (10 regular, 10 hot, 1 super hot) and the WIP.
+    let periodic = asd::load_with_orders(
+        &model_dir("dataset 2", "LVHM_Model"),
+        &["order.txt", "WIP.txt"],
+    )
+    .unwrap();
+    assert_eq!((periodic.streams.len(), periodic.lots.len()), (21, 2_156));
 }
 
 #[test]
@@ -317,6 +338,8 @@ fn dataset_4_lvhm_e() {
     );
     assert_eq!((ds.streams.len(), ds.lots.len()), (0, 203_744));
     assert_eq!((ds.setups.len(), ds.setup_changes.len()), (276, 272));
+    // Dataset files decode to the same dataset.
+    assert_eq!(Dataset::from_bytes(&ds.to_bytes()).unwrap(), ds);
     // First active order file is E_order_high_SL_92PCTL.txt: E_Lot_1_1 of part_E1, due
     // 02/19/18 01:01:04.
     assert_eq!(
@@ -333,20 +356,6 @@ fn dataset_4_lvhm_e() {
     );
 }
 
-/// Dataset rules over `horizon`.
-fn base(horizon: Time) -> Config {
-    Config {
-        horizon,
-        seed: 1,
-        replication: 0,
-        load: 1.0,
-        reserve_super_hot: false,
-        queue_time: QueueTimeRule::None,
-        stopping: None,
-        engineering: EngineeringRule::Base,
-    }
-}
-
 /// Runs `config`; every lot of the plan must complete.
 fn complete(dataset: &Dataset, config: &Config) -> Results {
     let results = sim::run(dataset, config).unwrap_or_else(|error| panic!("{error}"));
@@ -361,7 +370,7 @@ fn complete(dataset: &Dataset, config: &Config) -> Results {
 
 /// The papers' two-year runs ([P1] §V, [P2] §4.2).
 fn plan_completes(dataset: &str, model: &str) {
-    complete(&load(dataset, model), &base(730 * DAY));
+    complete(&load(dataset, model), &Config::new(730 * DAY));
 }
 
 #[test]
@@ -393,43 +402,52 @@ fn dataset_4_plan_completes() {
 #[ignore = "needs the SMT2020 data in data/raw"]
 fn strategies_complete() {
     let ds = load("dataset 4", "LVHM_E_Model");
-    let horizon = 180 * DAY;
-    let flow_factors = complete(&ds, &base(horizon)).step_flow_factors;
+    let base = Config::new(180 * DAY);
+    let flow_factors = complete(&ds, &base).step_flow_factors;
     // Stepper limits low enough to hold lots in the default CQT segments ([P2] Table 3 shape).
+    let limits = Limits {
+        front: 5,
+        total: 10,
+    };
     let stopping = Stopping {
-        limits: vec![
-            ("LithoTrack_FE_95".into(), 5, 10),
-            ("LithoTrack_FE_115".into(), 5, 10),
-        ],
-        default: (1_000, 1_000),
+        limits: BTreeMap::from([
+            ("LithoTrack_FE_95".into(), limits),
+            ("LithoTrack_FE_115".into(), limits),
+        ]),
+        default: Limits::default(),
     };
     let strategies = [
-        (
-            QueueTimeRule::Qtcr,
-            Some(stopping),
-            EngineeringRule::EngineeringFirst,
-        ),
-        (
-            QueueTimeRule::Qts { flow_factors },
-            None,
-            EngineeringRule::Cate {
+        Config {
+            queue_time: QueueTimeRule::Qtcr,
+            stopping: Some(stopping),
+            engineering: EngineeringRule::EngineeringFirst,
+            ..base.clone()
+        },
+        Config {
+            queue_time: QueueTimeRule::Qts,
+            flow_factors: Some(flow_factors.clone()),
+            engineering: EngineeringRule::Cate {
                 production: 19 * HOUR + 12 * MINUTE,
                 engineering: 4 * HOUR + 48 * MINUTE,
             },
-        ),
-        (
-            QueueTimeRule::None,
-            None,
-            EngineeringRule::Cot { trigger: 10 },
-        ),
+            ..base.clone()
+        },
+        Config {
+            engineering: EngineeringRule::Cot { trigger: 10 },
+            ..base.clone()
+        },
     ];
-    for (queue_time, stopping, engineering) in strategies {
-        let config = Config {
-            queue_time,
-            stopping,
-            engineering,
-            ..base(horizon)
-        };
-        complete(&ds, &config);
+    for config in &strategies {
+        complete(&ds, config);
     }
+    // QTS without flow factors takes them from its own pass without the rule: the BASE run's.
+    let qts = Config {
+        queue_time: QueueTimeRule::Qts,
+        ..base
+    };
+    let given = Config {
+        flow_factors: Some(flow_factors),
+        ..qts.clone()
+    };
+    assert_eq!(complete(&ds, &qts).digest(), complete(&ds, &given).digest());
 }

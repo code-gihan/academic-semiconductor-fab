@@ -1,5 +1,8 @@
 //! Simulation executive: clock, scheduling and the next-event loop.
 
+use std::mem;
+use std::ops::ControlFlow;
+
 use crate::Time;
 use crate::queue::EventQueue;
 
@@ -19,6 +22,7 @@ pub trait Model {
 pub struct Scheduler<E> {
     now: Time,
     queue: EventQueue<E>,
+    stop: bool,
 }
 
 impl<E> Scheduler<E> {
@@ -46,6 +50,22 @@ impl<E> Scheduler<E> {
     pub fn schedule_in(&mut self, delay: Time, event: E) {
         self.schedule_at(self.now + delay, event);
     }
+
+    /// Ends the run once the current event is handled; pending events stay scheduled.
+    pub fn stop(&mut self) {
+        self.stop = true;
+    }
+}
+
+/// How a run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The model called [`Scheduler::stop`].
+    Stopped,
+    /// The observer broke the run off.
+    Interrupted,
+    /// No event was left.
+    Exhausted,
 }
 
 /// Owns the model, the clock and the future event list.
@@ -61,6 +81,7 @@ impl<M: Model> Simulation<M> {
         let mut sched = Scheduler {
             now: 0,
             queue: EventQueue::new(),
+            stop: false,
         };
         model.init(&mut sched);
         Self {
@@ -70,23 +91,48 @@ impl<M: Model> Simulation<M> {
         }
     }
 
-    /// Handles every event due at or before `end`, including events scheduled meanwhile, then
-    /// advances the clock to `end`. Later events stay pending, so calls can be chained.
+    /// Handles events in (time, scheduling order) until the model stops the run or no event is
+    /// left.
+    pub fn run(&mut self) -> Outcome {
+        self.run_observed(Time::MAX, |_, _| ControlFlow::Continue(()))
+    }
+
+    /// [`run`](Self::run) with an observation event every `interval` from now: the observer sees
+    /// the model after every event up to the observation time and may break the run off.
     ///
     /// # Panics
-    /// If `end` is before now.
-    pub fn run_until(&mut self, end: Time) {
+    /// If `interval` is not positive.
+    pub fn run_observed(
+        &mut self,
+        interval: Time,
+        mut observe: impl FnMut(&M, Time) -> ControlFlow<()>,
+    ) -> Outcome {
         assert!(
-            end >= self.sched.now,
-            "run_until({end}) is before now {}",
-            self.sched.now
+            interval > 0,
+            "observation interval {interval} is not positive"
         );
-        while let Some((time, event)) = self.sched.queue.pop_due(end) {
+        // The observation events form a second, periodic event stream merged in time order.
+        let mut observation = self.sched.now.saturating_add(interval);
+        loop {
+            let Some(next) = self.sched.queue.next_time() else {
+                return Outcome::Exhausted;
+            };
+            if observation < next {
+                self.sched.now = observation;
+                if observe(&self.model, observation).is_break() {
+                    return Outcome::Interrupted;
+                }
+                observation = observation.saturating_add(interval);
+                continue;
+            }
+            let (time, event) = self.sched.queue.pop().expect("a next event");
             self.sched.now = time;
             self.model.handle(event, &mut self.sched);
             self.events_processed += 1;
+            if mem::take(&mut self.sched.stop) {
+                return Outcome::Stopped;
+            }
         }
-        self.sched.now = end;
     }
 
     pub fn now(&self) -> Time {
@@ -97,7 +143,7 @@ impl<M: Model> Simulation<M> {
         &self.model
     }
 
-    /// Events handled so far (throughput metric).
+    /// Model events handled so far (throughput metric); observations do not count.
     pub fn events_processed(&self) -> u64 {
         self.events_processed
     }
@@ -108,7 +154,8 @@ mod tests {
     use super::*;
     use crate::{DAY, HOUR};
 
-    /// Logs every event; "spawn" schedules follow-ups, "rewind" breaks causality.
+    /// Logs every event; "spawn" schedules follow-ups, "stop" ends the run, "rewind" breaks
+    /// causality.
     struct Recorder {
         initial: Vec<(Time, &'static str)>,
         log: Vec<(Time, &'static str)>,
@@ -130,6 +177,7 @@ mod tests {
                     sched.schedule_in(0, "spawned now");
                     sched.schedule_in(HOUR, "spawned later");
                 }
+                "stop" => sched.stop(),
                 "rewind" => sched.schedule_at(sched.now() - 1, "never"),
                 _ => {}
             }
@@ -144,44 +192,58 @@ mod tests {
     }
 
     #[test]
-    fn run_until_is_inclusive_and_resumable() {
-        let mut sim = simulation(&[(DAY + 1, "c"), (0, "a"), (DAY, "b")]);
-        assert_eq!(sim.now(), 0);
-
-        sim.run_until(DAY);
-        assert_eq!(sim.model().log, [(0, "a"), (DAY, "b")]);
-        assert_eq!(sim.now(), DAY);
-
-        sim.run_until(2 * DAY);
-        assert_eq!(sim.model().log, [(0, "a"), (DAY, "b"), (DAY + 1, "c")]);
-        assert_eq!(sim.now(), 2 * DAY);
-        assert_eq!(sim.events_processed(), 3);
+    fn runs_in_time_then_scheduling_order_until_stopped() {
+        let mut sim = simulation(&[(DAY, "stop"), (10, "spawn"), (10, "peer"), (2 * DAY, "c")]);
+        assert_eq!(sim.run(), Outcome::Stopped);
+        assert_eq!(
+            sim.model().log,
+            [
+                (10, "spawn"),
+                (10, "peer"),
+                (10, "spawned now"),
+                (10 + HOUR, "spawned later"),
+                (DAY, "stop")
+            ]
+        );
+        assert_eq!((sim.now(), sim.events_processed()), (DAY, 5));
+        // Pending events stay: the next run continues with them.
+        assert_eq!(sim.run(), Outcome::Exhausted);
+        assert_eq!(sim.model().log.last(), Some(&(2 * DAY, "c")));
     }
 
     #[test]
-    fn events_scheduled_while_handling_follow_time_then_fifo_order() {
-        let mut sim = simulation(&[(10, "spawn"), (10, "peer")]);
-        sim.run_until(10);
-        assert_eq!(
-            sim.model().log,
-            [(10, "spawn"), (10, "peer"), (10, "spawned now")]
-        );
+    fn observations_follow_every_event_up_to_their_time() {
+        let mut sim = simulation(&[(0, "a"), (DAY, "b"), (DAY + 1, "c"), (3 * DAY, "d")]);
+        let mut seen = Vec::new();
+        let outcome = sim.run_observed(DAY, |model, now| {
+            seen.push((now, model.log.len()));
+            ControlFlow::Continue(())
+        });
+        // The run ends with the last event, before the observation it coincides with.
+        assert_eq!(outcome, Outcome::Exhausted);
+        assert_eq!(seen, [(DAY, 2), (2 * DAY, 3)]);
+        assert_eq!(sim.events_processed(), 4);
+    }
 
-        sim.run_until(10 + HOUR);
-        assert_eq!(sim.model().log.last(), Some(&(10 + HOUR, "spawned later")));
+    #[test]
+    fn observer_breaks_the_run_off() {
+        let mut sim = simulation(&[(0, "a"), (5 * DAY, "b")]);
+        let outcome = sim.run_observed(DAY, |_, now| {
+            if now == 2 * DAY {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        assert_eq!(
+            (outcome, sim.now(), sim.events_processed()),
+            (Outcome::Interrupted, 2 * DAY, 1)
+        );
     }
 
     #[test]
     #[should_panic(expected = "scheduled in the past")]
     fn scheduling_in_the_past_panics() {
-        simulation(&[(10, "rewind")]).run_until(10);
-    }
-
-    #[test]
-    #[should_panic(expected = "before now")]
-    fn running_backwards_panics() {
-        let mut sim = simulation(&[]);
-        sim.run_until(DAY);
-        sim.run_until(DAY - 1);
+        simulation(&[(10, "rewind")]).run();
     }
 }
