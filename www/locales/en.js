@@ -78,7 +78,7 @@ export default {
   "run.start": "Run simulation",
   "run.cancel": "Cancel",
   "run.duration":
-    "A 730-day replication takes about 15–25 s on a recent desktop, QTS about twice as long.",
+    "A 730-day replication takes about 15–25 s on one core of a recent desktop (QTS about twice as long); replications running side by side can each take longer.",
 
   "status.loadingWasm": "Loading the simulator…",
   "status.wasmFailed":

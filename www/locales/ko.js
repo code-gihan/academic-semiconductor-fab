@@ -72,7 +72,8 @@ export default {
 
   "run.start": "시뮬레이션 실행",
   "run.cancel": "취소",
-  "run.duration": "730일 복제 1회는 최근 데스크톱에서 약 15–25초, QTS는 약 2배 걸립니다.",
+  "run.duration":
+    "730일 복제 1회는 최근 데스크톱 코어 하나에서 약 15–25초(QTS는 약 2배) 걸리며, 여러 복제를 동시에 실행하면 각각 더 걸릴 수 있습니다.",
 
   "status.loadingWasm": "시뮬레이터를 불러오는 중…",
   "status.wasmFailed":
