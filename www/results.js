@@ -1,10 +1,16 @@
-// Results of a finished run: its setup, the headline measures and tables of a report period, and
-// the replications' digests and run times. Values are replication means ± the half-width of their
-// 95% confidence interval.
+// Results of a finished run: its setup, the headline measures, charts and tables of a report
+// period, and the replications' digests and run times. Values are replication means ± the
+// half-width of their 95% confidence interval.
+import { barChart, legend } from "./charts.js";
 import { formatNumber, t } from "./i18n.js";
+import { countUp, grow, reveal } from "./motion.js";
 
 const DAY = 86_400_000;
 const KINDS = ["PRL", "PHL", "SHL", "ERL", "EHL"];
+/** Tool states as stacked in the tool group chart: busy, then outages, then idle. */
+const STATES = ["process", "setup", "load", "unload", "down", "pm", "idle"];
+/** Tool groups the chart shows until all are asked for. */
+const TOP = 15;
 
 /** Headline measures, each shown when the period has it. */
 const KPIS = [
@@ -77,6 +83,8 @@ const TABLES = [
 ];
 
 const $ = (id) => document.getElementById(id);
+/** The tool group chart shows every group. */
+let allToolGroups = false;
 
 /** Name of the last report period before Drain: the longest window inside the horizon. */
 export function defaultPeriod(run) {
@@ -84,8 +92,9 @@ export function defaultPeriod(run) {
   return (periods.at(-2) ?? periods[0]).name;
 }
 
-/** Shows `run` (a finished run of the page) for the report period named `period`. */
-export function showResults(run, period) {
+/** Shows `run` (a finished run of the page) for the report period named `period`; `animated`
+ * plays the entrance, as for new values (not for a new language). */
+export function showResults(run, period, animated) {
   const rows = run.summary.filter((row) => row.period === period);
   const at = new Map(rows.map((row) => [key(row.scope, row.item, row.kind, row.measure), row]));
   const value = (scope, item, kind, measure) => at.get(key(scope, item, kind, measure));
@@ -110,9 +119,17 @@ export function showResults(run, period) {
   $("kpis").replaceChildren(
     ...KPIS.flatMap((spec) => {
       const summary = value(spec.scope, spec.item ?? "", spec.kind ?? null, spec.measure);
-      return summary ? [kpi(t(spec.label), summary, spec.decimals)] : [];
+      return summary ? [kpi(t(spec.label), summary, spec.decimals, animated)] : [];
     }),
   );
+  // The narrow charts fill a row before the tool groups, which take one of their own.
+  const charts = [
+    kindChart(value),
+    cqtChart(value),
+    areaChart(rows, value),
+    toolGroupChart(rows, value),
+  ];
+  $("charts").replaceChildren(...charts.filter(Boolean));
   $("tables").replaceChildren(...TABLES.map((spec) => table(spec, rows, value)).filter(Boolean));
 
   $("digests").replaceChildren(
@@ -136,22 +153,146 @@ export function showResults(run, period) {
     events: formatNumber(events / busy / 1e6, 2),
     memory: formatNumber(memory / 1e6, 0),
   });
+  if (animated) {
+    reveal($("results").querySelectorAll(".kpi, .chart"));
+    grow($("charts").querySelectorAll(".bar-fill, .bar-ci"));
+  }
 }
 
 function key(scope, item, kind, measure) {
   return `${scope}|${item}|${kind}|${measure}`;
 }
 
-function kpi(label, summary, decimals) {
+function kpi(label, summary, decimals, animated) {
   const card = element("div", "", "kpi");
-  card.append(
-    element("div", label, "hint"),
-    element("div", formatNumber(summary.mean, decimals), "value"),
-  );
+  const value = element("div", "", "value");
+  const format = (number) => formatNumber(number, decimals);
+  if (animated) {
+    countUp(value, summary.mean, format);
+  } else {
+    value.textContent = format(summary.mean);
+  }
+  card.append(element("div", label, "hint"), value);
   if (summary.ci95 != null) {
     card.append(element("div", `± ${formatNumber(summary.ci95, decimals)}`, "hint"));
   }
   return card;
+}
+
+/** Average cycle time per lot kind. */
+function kindChart(value) {
+  const rows = KINDS.flatMap((kind) => {
+    const summary = value("kind", "", kind, "ct_mean_d");
+    if (!summary) return [];
+    return [
+      {
+        label: kind,
+        segments: [{ value: summary.mean, kind: "measure" }],
+        ci: summary.ci95,
+        value: cell(summary, 1),
+        title: `${t(`kind.${kind}`)}\n${t("col.ctMean")}: ${cell(summary, 2)}`,
+      },
+    ];
+  });
+  return rows.length > 0 ? figure("chart.kinds", barChart(rows, scaleOf(rows))) : null;
+}
+
+/** Share of CQT intervals over the limit, stepper intervals and the others. */
+function cqtChart(value) {
+  const rows = ["litho", "rest", "total"].flatMap((item) => {
+    const summary = value("cqt", item, null, "vl_pct");
+    if (!summary) return [];
+    return [
+      {
+        label: t(`cqt.${item}`),
+        segments: [{ value: summary.mean, kind: "warning" }],
+        ci: summary.ci95,
+        value: `${cell(summary, 1)} %`,
+        title: `${t(`cqt.${item}`)}\n${t("col.vl")}: ${cell(summary, 2)} %`,
+      },
+    ];
+  });
+  return rows.length > 0 ? figure("chart.cqt", barChart(rows, scaleOf(rows))) : null;
+}
+
+/** Tool time by state of the busiest tool groups, or of all. */
+function toolGroupChart(rows, value) {
+  const groups = rows
+    .filter((row) => row.scope === "tool_group" && row.measure === "util_pct")
+    .sort((a, b) => b.mean - a.mean);
+  if (groups.length === 0) return null;
+  const shown = allToolGroups ? groups : groups.slice(0, TOP);
+  const bars = barChart(
+    shown.map(({ item, mean }) => {
+      const share = (state) => value("tool_group", item, null, `${state}_pct`);
+      const shares = STATES.map((state) => [state, share(state)]);
+      return {
+        label: item,
+        segments: shares.map(([state, summary]) => ({ value: summary?.mean ?? 0, kind: state })),
+        value: `${formatNumber(mean, 1)} %`,
+        title: [
+          item,
+          `${t("col.util")}: ${cell(value("tool_group", item, null, "util_pct"), 2)}`,
+          ...shares.map(([state, summary]) => `${t(`col.${state}`)}: ${cell(summary, 2)} %`),
+        ].join("\n"),
+      };
+    }),
+    100,
+  );
+  const result = figure("chart.toolGroups", bars, legend(STATES, (state) => t(`col.${state}`)));
+  if (groups.length > TOP) {
+    const toggle = element("button", t(allToolGroups ? "chart.top" : "chart.all", {
+      count: allToolGroups ? TOP : groups.length,
+    }));
+    toggle.type = "button";
+    toggle.addEventListener("click", () => {
+      allToolGroups = !allToolGroups;
+      const next = toolGroupChart(rows, value);
+      result.replaceWith(next);
+      grow(next.querySelectorAll(".bar-fill"));
+    });
+    result.firstElementChild.append(toggle);
+  }
+  result.classList.add("wide");
+  return result;
+}
+
+/** Utilization per area. */
+function areaChart(rows, value) {
+  const areas = rows.filter((row) => row.scope === "area" && row.measure === "util_pct");
+  if (areas.length === 0) return null;
+  const bars = barChart(
+    areas.map((summary) => {
+      const other = (measure) => cell(value("area", summary.item, null, measure), 2);
+      return {
+        label: summary.item,
+        segments: [{ value: summary.mean, kind: "measure" }],
+        ci: summary.ci95,
+        value: `${formatNumber(summary.mean, 1)} %`,
+        title: [
+          summary.item,
+          `${t("col.util")}: ${cell(summary, 2)}`,
+          `${t("col.availability")}: ${other("availability_pct")}`,
+          `${t("col.utilMax")}: ${other("util_max_pct")}`,
+        ].join("\n"),
+      };
+    }),
+    100,
+  );
+  return figure("chart.areas", bars);
+}
+
+/** A scale a little above the largest bar with its interval. */
+function scaleOf(rows) {
+  return Math.max(...rows.map((row) => row.segments[0].value + (row.ci ?? 0))) * 1.08 || 1;
+}
+
+function figure(title, ...content) {
+  const caption = document.createElement("figcaption");
+  caption.append(element("span", t(title)));
+  const result = element("figure", "", "chart");
+  result.append(caption, ...content.filter(Boolean));
+  return result;
 }
 
 /** The table of `spec` for the period's rows; none if no row has its measures. */

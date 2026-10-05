@@ -9,9 +9,16 @@ export default {
   "header.tagline":
     "Simulate the four SMT2020 semiconductor fab testbeds and compare operating strategies, right in your browser.",
   "header.language": "Language",
+  "header.python": "Python package",
   "header.source": "Source code",
+  "hint.show": "Explain",
   "intro.local":
     "The discrete-event simulator is written in Rust and runs here as WebAssembly, one replication per CPU thread. Nothing is uploaded.",
+  "welcome.heading": "Simulate a wafer fab in three steps",
+  "welcome.dataset": "Choose one of the four SMT2020 datasets.",
+  "welcome.strategy": "Pick the operating strategy and the run settings; ? explains each option.",
+  "welcome.run":
+    "Run: follow every replication and the fab's tool groups live, then compare the results in charts and tables.",
 
   "dataset.heading": "Dataset",
   "dataset.ds1.name": "DS1 · HV/LM",
@@ -84,7 +91,7 @@ export default {
   "status.wasmFailed":
     "The simulator could not be loaded ({message}). Use a recent Chrome, Edge, Firefox or Safari.",
   "status.loadingDataset": "Loading {dataset}…",
-  "status.starting": "Starting the run…",
+  "status.running": "Running…",
   "status.done": "Finished in {time}.",
   "status.cancelled": "Cancelled.",
   "status.error": "The run failed: {message}",
@@ -92,6 +99,7 @@ export default {
   "error.fetch": "Could not load {file} (HTTP {status}).",
   "error.worker": "A Web Worker failed: {message}",
 
+  "progress.heading": "Run",
   "progress.done": "Replications done: {done}/{count}",
   "progress.day": "day {day} of {days}",
   "progress.drain": "finishing released lots ({wip} left)",
@@ -99,6 +107,21 @@ export default {
   "progress.mainRun": "QTS main run",
   "progress.elapsed": "{time} elapsed",
   "progress.remaining": "about {time} left",
+  "lane.name": "Replication {replication}",
+  "lane.waiting": "waiting for a free CPU thread",
+  "lane.starting": "starting",
+  "lane.done": "done in {time}",
+
+  "live.heading": "Live fab",
+  "live.caption": "replication {replication} · {phase}",
+  "live.released": "Lots released",
+  "live.completed": "Lots completed",
+  "live.wip": "WIP (lots)",
+  "live.hint":
+    "A tile per tool group, by area: its fill is the share of tools busy (setup, load, processing, unload), the red bar the share down or in PM, the number the lots queued. Point at a tile for details; choose a replication above to follow it.",
+  "tip.tools": "{tools} tools · {queue} lots queued",
+  "tip.busy": "busy: setup {setup}, process {process}, load {load}, unload {unload}",
+  "tip.idle": "idle {idle} · down {down} · PM {pm}",
 
   "results.heading": "Results",
   "results.period": "Report period",
@@ -111,6 +134,7 @@ export default {
     "Values are means over the replications; ± is the half-width of their 95% confidence interval (Student t).",
   "results.kinds":
     "Lot kinds: PRL production, PHL production hot, SHL super hot, ERL engineering, EHL engineering hot.",
+  "results.tables": "Tables of every measure",
   "results.reproduce.title": "Reproducibility and performance",
   "results.reproduce.text":
     "Equal digests mean bit-identical results: a replication's config from the JSON download, run with smt2020 run --config, gives the same digest.",
@@ -125,6 +149,18 @@ export default {
   "kpi.prlOnTime": "On time, PRL (%)",
   "kpi.erlCt": "Cycle time, ERL (days)",
   "kpi.cqt": "CQT violations (%)",
+
+  "chart.kinds": "Average cycle time by lot kind (days)",
+  "chart.cqt": "CQT intervals over the limit (%)",
+  "chart.toolGroups": "Tool time by state (%), busiest tool groups first",
+  "chart.areas": "Utilization by area (%)",
+  "chart.all": "Show all {count}",
+  "chart.top": "Show the top {count}",
+  "kind.PRL": "Production regular lots",
+  "kind.PHL": "Production hot lots",
+  "kind.SHL": "Super hot lots",
+  "kind.ERL": "Engineering regular lots",
+  "kind.EHL": "Engineering hot lots",
 
   "table.kind.title": "Lot kinds",
   "table.kind.item": "Kind",
@@ -193,4 +229,5 @@ export default {
   "footer.references": "References",
   "footer.data":
     "Data: SMT2020 testbed release 1.0 (2020), FernUniversität in Hagen. The dataset files are converted from its AutoSched AP models.",
+  "footer.animation": "Animation: anime.js 4.5.0, MIT license.",
 };

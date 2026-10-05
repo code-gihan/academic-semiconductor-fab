@@ -10,12 +10,12 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 
 ### 웹 페이지
 
-영어 기본, 한국어 전환(선택은 브라우저에 저장). 항목마다 설명을 표시한다.
+영어 기본, 한국어 전환(선택은 브라우저에 저장). 넓은 화면은 2열(왼쪽 설정, 오른쪽 진행·결과, 열마다 스크롤), 좁은 화면은 1열. 항목 설명은 `?` 버튼으로 펼친다.
 
-1. 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`), 운영 전략(CQT 디스패칭, [P2] Table 3 Stopping, [P1] 엔지니어링 lot 전략, super hot 예약), 실행 설정(종료 시각(일), 복제 수, seed, 부하 계수)을 고르고 실행한다.
-2. 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 진행(1일 관측 사건마다): 완료 복제, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 경과·남은 시간(진행률 비례 추정). 실행 중 설정 잠금, 취소는 워커 종료.
-3. 결과: 실행 설정, 보고 기간별 핵심 지표(투입·완료 lot, 평균 WIP, PRL ACT·ONTIME, ERL ACT, CQT %VL)와 표 6종(lot 유형, FF 분위수, 제품 × 유형, CQT 구간, 영역, 툴그룹. 복제 평균 ± 95% 신뢰구간), 복제별 digest·성능. JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
-4. Python 패키지: 페이지 하단의 pip 명령·플랫폼별 wheel.
+1. 설정: 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`), 운영 전략(CQT 디스패칭, [P2] Table 3 Stopping, [P1] 엔지니어링 lot 전략, super hot 예약), 실행 설정(종료 시각(일), 복제 수, seed, 부하 계수)을 고르고 실행한다.
+2. 진행: 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 전체(완료 복제, 경과·남은 시간(진행률 비례 추정))와 복제별(대기, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 완료 시간) 진행 막대. FAB 지도: 따라가는 복제(실행 중인 첫 복제, 복제 클릭으로 변경)의 투입·완료 lot·WIP와 영역별 툴그룹 타일(채움 = 작업 중 툴 비율, 아래 막대 = 고장·PM 툴 비율, 숫자 = 대기 lot, 툴팁 = 상태별 툴 수). 갱신은 약 250 ms(벽시계)마다. 실행 중 설정 잠금, 취소는 워커 종료.
+3. 결과: 실행 설정, 보고 기간별 핵심 지표(투입·완료 lot, 평균 WIP, PRL ACT·ONTIME, ERL ACT, CQT %VL), 차트 4종(lot 유형별 ACT, CQT %VL, 영역 가동률, 툴그룹 상태별 시간 비율(가동률 상위 15개 또는 전체)), 표 6종(lot 유형, FF 분위수, 제품 × 유형, CQT 구간, 영역, 툴그룹), 복제별 digest·성능. 값은 복제 평균 ± 95% 신뢰구간(차트는 오차 막대, 막대 툴팁에 수치). JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
+4. Python 패키지: 페이지의 pip 명령·플랫폼별 wheel.
 
 ### Python
 
@@ -419,7 +419,7 @@ crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd
 crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert, run, validate
 crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, summarize, csv, digest. tests/(Node API 테스트)
 crates/python/    Python 포장, PyO3 cdylib(패키지 smt2020-python, maturin wheel smt2020): 같은 API + load_dataset(DS1–4 동봉), smt2020.pyi(타입), tests/(unittest)
-www/              index.html, style.css, main.js(폼·워커 풀·진행·wheel 목록), results.js(결과 표시), i18n.js(문구·숫자 형식), locales/(en·ko 문구), worker.js(복제 실행), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
+www/              index.html, style.css, main.js(폼·워커 풀·wheel 목록), worker.js(복제 실행), progress.js(진행·FAB 지도), results.js(결과 지표·차트·표), charts.js(막대 차트·툴팁), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0, MIT), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
@@ -440,7 +440,8 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터셋 파일: postcard + 매직·형식 버전. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
 - 바인딩: 코어 메서드를 그대로 위임하고 값은 serde 스키마로 변환한다(JS: serde-wasm-bindgen JSON 호환 객체, `i64`는 경계에서 f64(2^53 ms까지 정확). 설정은 JSON 값을 거쳐 읽어 미지 필드를 검출(구조체 역직렬화는 알려진 속성만 읽음). Python: pythonize dict·list). 관찰자 반환값 `false`/`False`만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 1일마다 다시 잡아 관찰자·Ctrl-C를 처리한다.
-- 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬, 워커마다 `Simulation`). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 진행률은 워커 `postMessage`, 취소는 `worker.terminate()`.
+- 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬, 워커마다 `Simulation`). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 워커의 관찰자는 직전 보고 후 250 ms(벽시계)가 지난 첫 1일 관측에서 일시정지하고, 워커는 진행·`toolGroups()`를 `postMessage`한 뒤 이어 실행한다(일시정지는 결과 불변, 타이머 없음). 메인 스레드는 복제별 상태를 갱신하고 프레임마다 최대 1회(`requestAnimationFrame`) 그린다. 취소는 `worker.terminate()`.
+- 애니메이션: anime.js 4.5.0(MIT, `www/vendor/`에 동봉, 외부 CDN 미사용)으로 등장·수치 증가·막대 성장·설명 펼침. `prefers-reduced-motion`이면 생략(최종 화면 동일).
 - 다국어: 언어별 문구 파일(`www/locales/*.js`, `en.js`와 같은 키, `{이름}` 자리 표시, 빠진 키는 영어). 정적 요소는 `data-i18n` 키, 동적 문구는 `t()`, 숫자는 `Intl.NumberFormat`. 상태 문구·결과는 언어 전환 시 다시 그린다. 언어 추가 = 문구 파일 + `www/i18n.js`의 `LANGUAGES`·`MESSAGES` 등록.
 - 빌드: release 프로필 `lto = true`, `codegen-units = 1`, `panic = "abort"`(네이티브 약 7% 단축, 결과 동일).
 - 의존성: rand_xoshiro·libm·serde·postcard(`smt2020`), clap·serde_json(`smt2020-cli`), wasm-bindgen·js-sys·serde-wasm-bindgen·serde_json(`fab-wasm`), pyo3(abi3-py39)·pythonize(`smt2020-python`).

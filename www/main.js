@@ -2,15 +2,9 @@
 // worker, at most navigator.hardwareConcurrency at once) and the wasm module summarizes them.
 // Everything reacts to events (input, worker messages); nothing polls.
 import init, { csv, summarize } from "./pkg/fab_wasm.js";
-import {
-  LANGUAGES,
-  formatDuration,
-  formatNumber,
-  initLanguage,
-  language,
-  setLanguage,
-  t,
-} from "./i18n.js";
+import { LANGUAGES, formatDuration, initLanguage, language, setLanguage, t } from "./i18n.js";
+import { pulse, reveal, toggle } from "./motion.js";
+import { lanes, showProgress, startProgress } from "./progress.js";
 import { defaultPeriod, showResults } from "./results.js";
 
 const DAY = 86_400_000;
@@ -57,23 +51,35 @@ $("language").replaceChildren(
 describeForm();
 setStatus(() => t("status.loadingWasm"));
 loadWheels();
+reveal(document.querySelectorAll(".sidebar .step, .sidebar .actions, #welcome"));
 
 $("language").addEventListener("change", (event) => {
   setLanguage(event.target.value);
   describeForm();
   setStatus(statusText);
   showWheels();
-  if (finished) showResults(finished, $("period").value);
+  if (active) showProgress(active);
+  if (finished) showResults(finished, $("period").value, false);
 });
 form.addEventListener("change", (event) => {
-  if (event.target.name === "dataset") selectDataset();
+  if (event.target.name !== "dataset") return;
+  selectDataset();
+  pulse(event.target.closest(".choice"));
+});
+// The ? buttons open and close the explanation of their field.
+form.addEventListener("click", (event) => {
+  const button = event.target.closest(".info");
+  if (!button) return;
+  const open = button.getAttribute("aria-expanded") !== "true";
+  button.setAttribute("aria-expanded", String(open));
+  toggle($(button.getAttribute("aria-controls")), open);
 });
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   start();
 });
 $("cancel").addEventListener("click", () => stop(() => t("status.cancelled")));
-$("period").addEventListener("change", () => showResults(finished, $("period").value));
+$("period").addEventListener("change", () => showResults(finished, $("period").value, true));
 $("download-json").addEventListener("click", downloadJson);
 $("download-csv").addEventListener("click", () =>
   download(`${finished.name}.csv`, csv(finished.summary), "text/csv"),
@@ -217,14 +223,20 @@ async function start() {
     next: 0,
     done: [],
     workers: [],
-    fractions: new Map(),
-    latest: null,
+    lanes: lanes(count),
+    /** Replication shown in the live fab map. */
+    follow: null,
     started: performance.now(),
     frame: 0,
   };
   active = run;
-  $("results").hidden = true;
   setRunning(true);
+  $("welcome").hidden = true;
+  $("results").hidden = true;
+  $("run-panel").hidden = false;
+  startProgress(run, (replication) => follow(run, replication));
+  showProgress(run);
+  reveal([$("run-panel")]);
   setStatus(() => t("status.loadingDataset", { dataset: datasetName(dataset, name) }));
   try {
     const bytes = await datasetBytes(dataset, file);
@@ -240,7 +252,7 @@ async function start() {
       worker.postMessage({ type: "load", bytes: copy }, [copy]);
       run.workers.push(worker);
     }
-    setStatus(() => t("status.starting"));
+    setStatus(() => t("status.running"));
   } catch (error) {
     if (run !== active) return;
     stop(() =>
@@ -258,18 +270,29 @@ function receive(run, worker, base, message) {
       assign(run, worker, base);
       break;
     case "progress": {
-      const { pass, passes, now, horizon } = message.progress;
-      run.fractions.set(message.replication, (pass + Math.min(now / horizon, 1)) / passes);
-      run.latest = message.progress;
-      run.frame ||= requestAnimationFrame(() => showProgress(run));
+      const lane = run.lanes[message.replication];
+      lane.progress = message.progress;
+      lane.toolGroups = message.toolGroups;
+      // The fab map follows the first running replication with progress until it is done.
+      if (run.follow === null || run.lanes[run.follow].state === "done") {
+        run.follow = run.lanes.findIndex((each) => each.state === "running" && each.toolGroups);
+      }
+      redraw(run);
       break;
     }
-    case "done":
-      run.fractions.delete(message.config.replication);
+    case "done": {
+      const lane = run.lanes[message.config.replication];
+      lane.state = "done";
+      lane.seconds = message.seconds;
       run.done.push(message);
       assign(run, worker, base);
-      if (run.done.length === run.count) finish(run);
+      if (run.done.length === run.count) {
+        finish(run);
+      } else {
+        redraw(run);
+      }
       break;
+    }
     case "error":
       stop(() => t("status.error", { message: message.message }));
       break;
@@ -279,48 +302,28 @@ function receive(run, worker, base, message) {
 /** Gives the worker the next replication, or ends it. */
 function assign(run, worker, base) {
   if (run.next < run.count) {
-    worker.postMessage({ type: "run", config: { ...base, replication: run.next++ } });
+    const replication = run.next++;
+    run.lanes[replication].state = "running";
+    worker.postMessage({ type: "run", config: { ...base, replication } });
+    redraw(run);
   } else {
     worker.terminate();
   }
 }
 
-/** Share of the run's work done: finished replications and the running ones' progress. */
-function fraction(run) {
-  const running = [...run.fractions.values()].reduce((sum, value) => sum + value, 0);
-  return (run.done.length + running) / run.count;
+/** Shows the run's progress at the next frame, once however many messages came. */
+function redraw(run) {
+  run.frame ||= requestAnimationFrame(() => {
+    run.frame = 0;
+    if (run === active) showProgress(run);
+  });
 }
 
-/** Progress bar and text, at most once per frame. */
-function showProgress(run) {
-  run.frame = 0;
-  if (run !== active) return;
-  $("progress").value = fraction(run);
-  setStatus(() => progressText(run));
-}
-
-function progressText(run) {
-  const parts = [t("progress.done", { done: run.done.length, count: run.count })];
-  const last = run.latest;
-  if (last) {
-    parts.push(
-      last.now > last.horizon
-        ? t("progress.drain", { wip: formatNumber(last.wip, 0) })
-        : t("progress.day", {
-            day: formatNumber(Math.floor(last.now / DAY), 0),
-            days: formatNumber(last.horizon / DAY, 0),
-          }),
-    );
-    if (last.passes > 1) parts.push(t(last.pass === 0 ? "progress.preRun" : "progress.mainRun"));
-  }
-  const elapsed = (performance.now() - run.started) / 1000;
-  parts.push(t("progress.elapsed", { time: formatDuration(elapsed) }));
-  const done = fraction(run);
-  // Estimated from the pace so far, once there is some, until the horizon (the drain is not).
-  if (done >= 0.02 && done < 1) {
-    parts.push(t("progress.remaining", { time: formatDuration((elapsed * (1 - done)) / done) }));
-  }
-  return parts.join(" · ");
+/** Follows a replication with progress in the fab map. */
+function follow(run, replication) {
+  if (run !== active || !run.lanes[replication].toolGroups) return;
+  run.follow = replication;
+  showProgress(run);
 }
 
 function finish(run) {
@@ -331,8 +334,9 @@ function finish(run) {
   run.done.sort((a, b) => a.config.replication - b.config.replication);
   const summary = summarize(run.done.map((replication) => replication.results));
   finished = { ...run, seconds, summary };
-  showResults(finished, defaultPeriod(finished));
+  $("run-panel").hidden = true;
   $("results").hidden = false;
+  showResults(finished, defaultPeriod(finished), true);
   $("results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -346,16 +350,16 @@ function stop(render) {
   }
   setRunning(false);
   setStatus(render);
+  $("run-panel").hidden = true;
   $("results").hidden = !finished;
+  $("welcome").hidden = Boolean(finished);
 }
 
-/** While running, the settings are locked and the progress bar shows. */
+/** While running, the settings are locked. */
 function setRunning(running) {
   fields.run.disabled = running;
   $("cancel").disabled = !running;
   for (const step of form.querySelectorAll("fieldset")) step.disabled = running;
-  $("progress").hidden = !running;
-  $("progress").value = 0;
 }
 
 /** Shows the status text `render()` returns; it is rendered again when the language changes. */
@@ -394,7 +398,8 @@ function showWheels() {
         : file.includes("macosx")
           ? "python.macos"
           : "python.linux";
-      const link = Object.assign(document.createElement("a"), { href: url, textContent: t(platform) });
+      const link = Object.assign(document.createElement("a"), { href: url });
+      link.textContent = t(platform);
       const name = Object.assign(document.createElement("span"), { className: "hint" });
       name.textContent = ` ${file}`;
       const item = document.createElement("li");

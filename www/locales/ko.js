@@ -8,9 +8,16 @@ export default {
   "header.tagline":
     "SMT2020 반도체 FAB 테스트베드 4종을 시뮬레이션하고 운영 전략을 브라우저에서 바로 비교합니다.",
   "header.language": "언어",
+  "header.python": "Python 패키지",
   "header.source": "소스 코드",
+  "hint.show": "설명",
   "intro.local":
     "Rust로 작성한 이산 사건 시뮬레이터가 이 브라우저에서 WebAssembly로 실행되며, 복제 1회에 CPU 스레드 1개를 씁니다. 아무것도 업로드하지 않습니다.",
+  "welcome.heading": "세 단계로 웨이퍼 FAB 시뮬레이션",
+  "welcome.dataset": "SMT2020 데이터셋 4종 중 하나를 고릅니다.",
+  "welcome.strategy": "운영 전략과 실행 설정을 고릅니다. ?를 누르면 항목 설명이 나옵니다.",
+  "welcome.run":
+    "실행: 복제별 진행과 FAB 툴그룹 상태를 실시간으로 보고, 결과를 차트와 표로 비교합니다.",
 
   "dataset.heading": "데이터셋",
   "dataset.ds1.name": "DS1 · HV/LM",
@@ -79,7 +86,7 @@ export default {
   "status.wasmFailed":
     "시뮬레이터를 불러오지 못했습니다({message}). 최신 Chrome, Edge, Firefox, Safari를 사용하세요.",
   "status.loadingDataset": "{dataset} 불러오는 중…",
-  "status.starting": "실행을 시작하는 중…",
+  "status.running": "실행 중…",
   "status.done": "{time} 만에 끝났습니다.",
   "status.cancelled": "취소했습니다.",
   "status.error": "실행하지 못했습니다: {message}",
@@ -87,6 +94,7 @@ export default {
   "error.fetch": "{file}을(를) 불러오지 못했습니다(HTTP {status}).",
   "error.worker": "Web Worker 오류: {message}",
 
+  "progress.heading": "실행",
   "progress.done": "완료 복제 {done}/{count}",
   "progress.day": "{day}/{days}일",
   "progress.drain": "투입한 lot 마무리 중({wip}개 남음)",
@@ -94,6 +102,21 @@ export default {
   "progress.mainRun": "QTS 본 실행",
   "progress.elapsed": "경과 {time}",
   "progress.remaining": "약 {time} 남음",
+  "lane.name": "복제 {replication}",
+  "lane.waiting": "빈 CPU 스레드 대기",
+  "lane.starting": "시작 중",
+  "lane.done": "{time} 만에 완료",
+
+  "live.heading": "실시간 FAB",
+  "live.caption": "복제 {replication} · {phase}",
+  "live.released": "투입 lot",
+  "live.completed": "완료 lot",
+  "live.wip": "WIP (lot)",
+  "live.hint":
+    "타일 하나가 툴그룹 하나이고 영역별로 묶었습니다. 채움은 가동 중인 툴 비율(setup·load·공정·unload), 빨간 막대는 고장·PM 중인 툴 비율, 숫자는 대기 lot 수입니다. 타일에 포인터를 올리면 자세히 보이고, 위에서 복제를 고르면 그 복제를 따라갑니다.",
+  "tip.tools": "툴 {tools}대 · 대기 lot {queue}개",
+  "tip.busy": "가동: setup {setup}, 공정 {process}, load {load}, unload {unload}",
+  "tip.idle": "유휴 {idle} · 고장 {down} · PM {pm}",
 
   "results.heading": "결과",
   "results.period": "보고 기간",
@@ -105,6 +128,7 @@ export default {
   "results.ci": "값은 복제 평균이며, ± 뒤는 95% 신뢰구간의 반폭(Student t)입니다.",
   "results.kinds":
     "lot 유형: PRL 생산, PHL 생산 hot, SHL super hot, ERL 엔지니어링, EHL 엔지니어링 hot.",
+  "results.tables": "전체 지표 표",
   "results.reproduce.title": "재현성·성능",
   "results.reproduce.text":
     "digest가 같으면 결과가 비트 단위로 같습니다. JSON 파일의 복제별 config를 smt2020 run --config로 실행하면 같은 digest가 나옵니다.",
@@ -119,6 +143,18 @@ export default {
   "kpi.prlOnTime": "PRL 납기 준수 (%)",
   "kpi.erlCt": "ERL 사이클 타임 (일)",
   "kpi.cqt": "CQT 위반 (%)",
+
+  "chart.kinds": "lot 유형별 평균 사이클 타임 (일)",
+  "chart.cqt": "한도를 넘긴 CQT 구간 (%)",
+  "chart.toolGroups": "상태별 툴 시간 (%), 가동률 높은 툴그룹부터",
+  "chart.areas": "영역별 가동률 (%)",
+  "chart.all": "전체 {count}개 보기",
+  "chart.top": "상위 {count}개만 보기",
+  "kind.PRL": "생산 일반 lot",
+  "kind.PHL": "생산 hot lot",
+  "kind.SHL": "super hot lot",
+  "kind.ERL": "엔지니어링 일반 lot",
+  "kind.EHL": "엔지니어링 hot lot",
 
   "table.kind.title": "lot 유형",
   "table.kind.item": "유형",
@@ -187,4 +223,5 @@ export default {
   "footer.references": "참고 문헌",
   "footer.data":
     "데이터: SMT2020 testbed release 1.0(2020), FernUniversität in Hagen. 데이터셋 파일은 그 AutoSched AP 모델을 변환한 것입니다.",
+  "footer.animation": "애니메이션: anime.js 4.5.0, MIT 라이선스.",
 };

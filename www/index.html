@@ -19,148 +19,201 @@
         <span class="sr-only" data-i18n="header.language"></span>
         <select id="language"></select>
       </label>
+      <a href="#python" data-i18n="header.python"></a>
       <a href="https://github.com/code-gihan/academic-semiconductor-fab" data-i18n="header.source"></a>
     </nav>
   </header>
+  <noscript><p class="lead">This simulator needs JavaScript and WebAssembly.</p></noscript>
 
-  <main>
-    <p class="intro" data-i18n="intro.local"></p>
-    <noscript><p class="intro">This simulator needs JavaScript and WebAssembly.</p></noscript>
+  <div class="layout">
+    <aside class="sidebar">
+      <form id="setup">
+        <fieldset class="step">
+          <legend><span class="step-number" aria-hidden="true">1</span><span data-i18n="dataset.heading"></span></legend>
+          <div class="choices">
+            <label class="choice">
+              <input type="radio" name="dataset" value="ds1" checked>
+              <span><strong data-i18n="dataset.ds1.name"></strong><span class="hint" data-i18n="dataset.ds1.description"></span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="dataset" value="ds2">
+              <span><strong data-i18n="dataset.ds2.name"></strong><span class="hint" data-i18n="dataset.ds2.description"></span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="dataset" value="ds3">
+              <span><strong data-i18n="dataset.ds3.name"></strong><span class="hint" data-i18n="dataset.ds3.description"></span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="dataset" value="ds4">
+              <span><strong data-i18n="dataset.ds4.name"></strong><span class="hint" data-i18n="dataset.ds4.description"></span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="dataset" value="file">
+              <span><strong data-i18n="dataset.file.name"></strong><span class="hint" data-i18n="dataset.file.description"></span></span>
+            </label>
+          </div>
+          <div class="field" id="file-field" hidden>
+            <label for="file" data-i18n="dataset.file.label"></label>
+            <input id="file" name="file" type="file" accept=".bin">
+          </div>
+          <p class="hint"><span data-i18n="dataset.common"></span> <a href="#ref-p1">[P1]</a></p>
+        </fieldset>
 
-    <form id="setup">
-      <fieldset class="step">
-        <legend><span class="step-number" aria-hidden="true">1</span><span data-i18n="dataset.heading"></span></legend>
-        <div class="choices">
-          <label class="choice">
-            <input type="radio" name="dataset" value="ds1" checked>
-            <span><strong data-i18n="dataset.ds1.name"></strong><span class="hint" data-i18n="dataset.ds1.description"></span></span>
-          </label>
-          <label class="choice">
-            <input type="radio" name="dataset" value="ds2">
-            <span><strong data-i18n="dataset.ds2.name"></strong><span class="hint" data-i18n="dataset.ds2.description"></span></span>
-          </label>
-          <label class="choice">
-            <input type="radio" name="dataset" value="ds3">
-            <span><strong data-i18n="dataset.ds3.name"></strong><span class="hint" data-i18n="dataset.ds3.description"></span></span>
-          </label>
-          <label class="choice">
-            <input type="radio" name="dataset" value="ds4">
-            <span><strong data-i18n="dataset.ds4.name"></strong><span class="hint" data-i18n="dataset.ds4.description"></span></span>
-          </label>
-          <label class="choice">
-            <input type="radio" name="dataset" value="file">
-            <span><strong data-i18n="dataset.file.name"></strong><span class="hint" data-i18n="dataset.file.description"></span></span>
-          </label>
-        </div>
-        <div class="field" id="file-field" hidden>
-          <label for="file" data-i18n="dataset.file.label"></label>
-          <input id="file" name="file" type="file" accept=".bin">
-        </div>
-        <p class="hint"><span data-i18n="dataset.common"></span> <a href="#ref-p1">[P1]</a></p>
-      </fieldset>
-
-      <fieldset class="step">
-        <legend><span class="step-number" aria-hidden="true">2</span><span data-i18n="strategy.heading"></span></legend>
-        <div class="fields">
+        <fieldset class="step">
+          <legend><span class="step-number" aria-hidden="true">2</span><span data-i18n="strategy.heading"></span></legend>
           <div class="field">
-            <label for="queue-time" data-i18n="strategy.queueTime.label"></label>
+            <div class="label-row">
+              <label for="queue-time" data-i18n="strategy.queueTime.label"></label>
+              <button class="info" type="button" aria-controls="queue-time-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+            </div>
             <select id="queue-time" name="queueTime" aria-describedby="queue-time-hint">
               <option value="none" data-i18n="strategy.queueTime.none"></option>
               <option value="qtcr" data-i18n="strategy.queueTime.qtcr"></option>
               <option value="qts" data-i18n="strategy.queueTime.qts"></option>
             </select>
-            <p class="hint" id="queue-time-hint"><span data-i18n="strategy.queueTime.hint"></span> <a href="#ref-p2">[P2]</a></p>
+            <p class="hint explain" id="queue-time-hint" hidden><span data-i18n="strategy.queueTime.hint"></span> <a href="#ref-p2">[P2]</a></p>
           </div>
           <div class="field">
-            <label for="stopping" data-i18n="strategy.stopping.label"></label>
+            <div class="label-row">
+              <label for="stopping" data-i18n="strategy.stopping.label"></label>
+              <button class="info" type="button" aria-controls="stopping-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+            </div>
             <select id="stopping" name="stopping" aria-describedby="stopping-hint">
               <option value="none" data-i18n="strategy.stopping.none"></option>
               <option value="high" data-i18n="strategy.stopping.high"></option>
               <option value="medium" data-i18n="strategy.stopping.medium"></option>
               <option value="small" data-i18n="strategy.stopping.small"></option>
             </select>
-            <p class="hint" id="stopping-hint"><span data-i18n="strategy.stopping.hint"></span> <a href="#ref-p2">[P2]</a></p>
+            <p class="hint explain" id="stopping-hint" hidden><span data-i18n="strategy.stopping.hint"></span> <a href="#ref-p2">[P2]</a></p>
           </div>
           <div class="field">
-            <label for="engineering" data-i18n="strategy.engineering.label"></label>
+            <div class="label-row">
+              <label for="engineering" data-i18n="strategy.engineering.label"></label>
+              <button class="info" type="button" aria-controls="engineering-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+            </div>
             <select id="engineering" name="engineering" aria-describedby="engineering-hint"></select>
-            <p class="hint" id="engineering-hint"><span data-i18n="strategy.engineering.hint"></span> <a href="#ref-p1">[P1]</a></p>
+            <p class="hint explain" id="engineering-hint" hidden><span data-i18n="strategy.engineering.hint"></span> <a href="#ref-p1">[P1]</a></p>
           </div>
           <div class="field check">
             <input id="reserve-super-hot" name="reserveSuperHot" type="checkbox" aria-describedby="super-hot-hint">
             <label for="reserve-super-hot" data-i18n="strategy.superHot.label"></label>
-            <p class="hint" id="super-hot-hint" data-i18n="strategy.superHot.hint"></p>
+            <button class="info" type="button" aria-controls="super-hot-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+            <p class="hint explain" id="super-hot-hint" data-i18n="strategy.superHot.hint" hidden></p>
           </div>
-        </div>
-      </fieldset>
+        </fieldset>
 
-      <fieldset class="step">
-        <legend><span class="step-number" aria-hidden="true">3</span><span data-i18n="settings.heading"></span></legend>
-        <div class="fields">
-          <div class="field">
-            <label for="horizon" data-i18n="settings.horizon.label"></label>
-            <input id="horizon" name="horizon" type="number" min="1" step="any" value="730" required aria-describedby="horizon-hint">
-            <p class="hint" id="horizon-hint" data-i18n="settings.horizon.hint"></p>
+        <fieldset class="step">
+          <legend><span class="step-number" aria-hidden="true">3</span><span data-i18n="settings.heading"></span></legend>
+          <div class="fields">
+            <div class="field">
+              <div class="label-row">
+                <label for="horizon" data-i18n="settings.horizon.label"></label>
+                <button class="info" type="button" aria-controls="horizon-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+              </div>
+              <input id="horizon" name="horizon" type="number" min="1" step="any" value="730" required aria-describedby="horizon-hint">
+              <p class="hint explain" id="horizon-hint" data-i18n="settings.horizon.hint" hidden></p>
+            </div>
+            <div class="field">
+              <div class="label-row">
+                <label for="replications" data-i18n="settings.replications.label"></label>
+                <button class="info" type="button" aria-controls="replications-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+              </div>
+              <input id="replications" name="replications" type="number" min="1" max="1000" step="1" value="4" required aria-describedby="replications-hint">
+              <p class="hint explain" id="replications-hint" hidden></p>
+            </div>
+            <div class="field">
+              <div class="label-row">
+                <label for="seed" data-i18n="settings.seed.label"></label>
+                <button class="info" type="button" aria-controls="seed-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+              </div>
+              <input id="seed" name="seed" type="number" min="0" step="1" value="1" required aria-describedby="seed-hint">
+              <p class="hint explain" id="seed-hint" data-i18n="settings.seed.hint" hidden></p>
+            </div>
+            <div class="field">
+              <div class="label-row">
+                <label for="load" data-i18n="settings.load.label"></label>
+                <button class="info" type="button" aria-controls="load-hint" aria-expanded="false"><span aria-hidden="true">?</span><span class="sr-only" data-i18n="hint.show"></span></button>
+              </div>
+              <input id="load" name="load" type="number" min="0.01" step="any" value="1" required aria-describedby="load-hint">
+              <p class="hint explain" id="load-hint" data-i18n="settings.load.hint" hidden></p>
+            </div>
           </div>
-          <div class="field">
-            <label for="replications" data-i18n="settings.replications.label"></label>
-            <input id="replications" name="replications" type="number" min="1" max="1000" step="1" value="4" required aria-describedby="replications-hint">
-            <p class="hint" id="replications-hint"></p>
-          </div>
-          <div class="field">
-            <label for="seed" data-i18n="settings.seed.label"></label>
-            <input id="seed" name="seed" type="number" min="0" step="1" value="1" required aria-describedby="seed-hint">
-            <p class="hint" id="seed-hint" data-i18n="settings.seed.hint"></p>
-          </div>
-          <div class="field">
-            <label for="load" data-i18n="settings.load.label"></label>
-            <input id="load" name="load" type="number" min="0.01" step="any" value="1" required aria-describedby="load-hint">
-            <p class="hint" id="load-hint" data-i18n="settings.load.hint"></p>
-          </div>
-        </div>
-      </fieldset>
+        </fieldset>
 
-      <div class="actions">
-        <button name="run" type="submit" class="primary" disabled data-i18n="run.start"></button>
-        <button id="cancel" type="button" disabled data-i18n="run.cancel"></button>
+        <div class="actions">
+          <button name="run" type="submit" class="primary" disabled data-i18n="run.start"></button>
+          <button id="cancel" type="button" disabled data-i18n="run.cancel"></button>
+        </div>
+        <output id="status" aria-live="polite"></output>
         <p class="hint" data-i18n="run.duration"></p>
-      </div>
-      <progress id="progress" max="1" value="0" hidden></progress>
-      <output id="status" aria-live="polite"></output>
-    </form>
+      </form>
+    </aside>
 
-    <section id="results" hidden>
-      <h2 data-i18n="results.heading"></h2>
-      <dl id="run-setup" class="setup"></dl>
-      <div class="toolbar">
-        <div class="field">
-          <label for="period" data-i18n="results.period"></label>
-          <select id="period" aria-describedby="period-hint"></select>
+    <main class="main">
+      <section id="welcome" class="panel welcome">
+        <h2 data-i18n="welcome.heading"></h2>
+        <ol class="steps">
+          <li><span class="step-number" aria-hidden="true">1</span><span data-i18n="welcome.dataset"></span></li>
+          <li><span class="step-number" aria-hidden="true">2</span><span data-i18n="welcome.strategy"></span></li>
+          <li><span class="step-number" aria-hidden="true">3</span><span data-i18n="welcome.run"></span></li>
+        </ol>
+        <p class="hint" data-i18n="intro.local"></p>
+      </section>
+
+      <section id="run-panel" class="panel" hidden>
+        <div class="panel-head">
+          <h2 data-i18n="progress.heading"></h2>
+          <span id="progress-summary" class="hint"></span>
         </div>
-        <button id="download-json" type="button" data-i18n="results.downloadJson"></button>
-        <button id="download-csv" type="button" data-i18n="results.downloadCsv"></button>
-      </div>
-      <p class="hint" id="period-hint" data-i18n="results.periodHint"></p>
-      <div id="kpis" class="kpis"></div>
-      <p class="hint" data-i18n="results.ci"></p>
-      <p class="hint" data-i18n="results.kinds"></p>
-      <div id="tables"></div>
-      <details>
-        <summary data-i18n="results.reproduce.title"></summary>
-        <p class="hint" data-i18n="results.reproduce.text"></p>
-        <ol id="digests"></ol>
-        <p class="hint" id="performance"></p>
-      </details>
-    </section>
+        <div class="track"><span id="progress-fill" class="track-fill"></span></div>
+        <ol id="lanes" class="lanes"></ol>
+        <div id="live" hidden>
+          <div class="panel-head">
+            <h3 data-i18n="live.heading"></h3>
+            <span id="live-caption" class="hint"></span>
+          </div>
+          <div id="live-stats" class="stats"></div>
+          <div id="fab-map" class="fab-map" role="img" aria-labelledby="live-hint"></div>
+          <p class="hint" id="live-hint" data-i18n="live.hint"></p>
+        </div>
+      </section>
 
-    <section id="python">
-      <h2 data-i18n="python.heading"></h2>
-      <p data-i18n="python.intro"></p>
-      <pre><code id="python-install"></code></pre>
-      <p class="hint" id="wheels-note"></p>
-      <ul id="wheels" class="wheels"></ul>
-      <h3 data-i18n="python.quickstart"></h3>
-      <pre><code>import smt2020
+      <section id="results" class="panel" hidden>
+        <div class="panel-head">
+          <h2 data-i18n="results.heading"></h2>
+          <div class="toolbar">
+            <label for="period" data-i18n="results.period"></label>
+            <select id="period" aria-describedby="period-hint"></select>
+            <button id="download-json" type="button" data-i18n="results.downloadJson"></button>
+            <button id="download-csv" type="button" data-i18n="results.downloadCsv"></button>
+          </div>
+        </div>
+        <dl id="run-setup" class="chips"></dl>
+        <p class="hint" id="period-hint" data-i18n="results.periodHint"></p>
+        <div id="kpis" class="kpis"></div>
+        <p class="hint" data-i18n="results.ci"></p>
+        <div id="charts" class="charts"></div>
+        <details>
+          <summary data-i18n="results.tables"></summary>
+          <p class="hint" data-i18n="results.kinds"></p>
+          <div id="tables"></div>
+        </details>
+        <details>
+          <summary data-i18n="results.reproduce.title"></summary>
+          <p class="hint" data-i18n="results.reproduce.text"></p>
+          <ol id="digests"></ol>
+          <p class="hint" id="performance"></p>
+        </details>
+      </section>
+
+      <section id="python" class="panel">
+        <h2 data-i18n="python.heading"></h2>
+        <p data-i18n="python.intro"></p>
+        <pre><code id="python-install"></code></pre>
+        <p class="hint" id="wheels-note"></p>
+        <ul id="wheels" class="wheels"></ul>
+        <h3 data-i18n="python.quickstart"></h3>
+        <pre><code>import smt2020
 from smt2020 import DAY
 
 dataset = smt2020.load_dataset("ds2")  # bundled ds1-ds4, a .bin file or an AutoSched model
@@ -176,17 +229,21 @@ simulation.run()  # to the end: every released lot complete
 summary = smt2020.summarize([simulation.results()])
 
 simulation.reset({**simulation.config(), "queue_time": "qts"})  # starts over with another strategy</code></pre>
-      <p class="hint"><span data-i18n="python.more"></span> <a href="https://github.com/code-gihan/academic-semiconductor-fab#quick-start">README</a></p>
-    </section>
-  </main>
+        <p class="hint"><span data-i18n="python.more"></span> <a href="https://github.com/code-gihan/academic-semiconductor-fab#quick-start">README</a></p>
+      </section>
 
-  <footer>
-    <h2 data-i18n="footer.references"></h2>
-    <ol class="references">
-      <li id="ref-p1">[P1] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “SMT2020—A Semiconductor Manufacturing Testbed,” <i>IEEE Trans. Semicond. Manuf.</i>, 33(4), 522–531, 2020. <a href="https://doi.org/10.1109/TSM.2020.3001933">doi:10.1109/TSM.2020.3001933</a></li>
-      <li id="ref-p2">[P2] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “Integrating Critical Queue Time Constraints into SMT2020 Simulation Models,” <i>Proc. Winter Simulation Conference 2020</i>, 1813–1824. <a href="https://doi.org/10.1109/WSC48552.2020.9383889">doi:10.1109/WSC48552.2020.9383889</a></li>
-    </ol>
-    <p><span data-i18n="footer.data"></span> <a href="https://p2schedgen.fernuni-hagen.de/downloads/simulation">p2schedgen.fernuni-hagen.de</a></p>
-  </footer>
+      <footer>
+        <h2 data-i18n="footer.references"></h2>
+        <ol class="references">
+          <li id="ref-p1">[P1] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “SMT2020—A Semiconductor Manufacturing Testbed,” <i>IEEE Trans. Semicond. Manuf.</i>, 33(4), 522–531, 2020. <a href="https://doi.org/10.1109/TSM.2020.3001933">doi:10.1109/TSM.2020.3001933</a></li>
+          <li id="ref-p2">[P2] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “Integrating Critical Queue Time Constraints into SMT2020 Simulation Models,” <i>Proc. Winter Simulation Conference 2020</i>, 1813–1824. <a href="https://doi.org/10.1109/WSC48552.2020.9383889">doi:10.1109/WSC48552.2020.9383889</a></li>
+        </ol>
+        <p><span data-i18n="footer.data"></span> <a href="https://p2schedgen.fernuni-hagen.de/downloads/simulation">p2schedgen.fernuni-hagen.de</a></p>
+        <p><span data-i18n="footer.animation"></span> <a href="vendor/anime.LICENSE.md">anime.js</a></p>
+      </footer>
+    </main>
+  </div>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
 </body>
 </html>

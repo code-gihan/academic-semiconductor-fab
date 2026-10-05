@@ -1,6 +1,10 @@
 // One replication at a time on the wasm simulator. Messages in: {type: "load", bytes},
-// {type: "run", config}. Messages out: "loaded", "progress", "done", "error".
+// {type: "run", config}. Messages out: "loaded", "progress" (with the tool groups), "done",
+// "error".
 import init, { Dataset, Simulation, digest } from "./pkg/fab_wasm.js";
+
+/** Wall time between progress messages: the run pauses at the next simulated day after it. */
+const SHOW_EVERY_MS = 250;
 
 const ready = init();
 let dataset = null;
@@ -17,9 +21,19 @@ self.onmessage = async ({ data: message }) => {
       const started = performance.now();
       const simulation = new Simulation(dataset, config);
       try {
-        simulation.run(undefined, (progress) => {
-          self.postMessage({ type: "progress", replication: config.replication, progress });
-        });
+        // Paused to show the fab, which leaves the results unchanged.
+        let shown = started;
+        let progress;
+        do {
+          progress = simulation.run(undefined, () => performance.now() - shown < SHOW_EVERY_MS);
+          shown = performance.now();
+          self.postMessage({
+            type: "progress",
+            replication: config.replication,
+            progress,
+            toolGroups: simulation.toolGroups(),
+          });
+        } while (!progress.finished);
         const results = simulation.results();
         self.postMessage({
           type: "done",
