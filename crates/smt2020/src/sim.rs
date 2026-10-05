@@ -1062,6 +1062,14 @@ mod tests {
             ]
         );
         assert!(events.time.windows(2).all(|pair| pair[0] <= pair[1]));
+        // Lot events name the lot's part, tool events neither.
+        assert!(
+            events
+                .lot
+                .iter()
+                .zip(&events.part)
+                .all(|(lot, part)| lot.is_some() == part.is_some())
+        );
     }
 
     #[test]

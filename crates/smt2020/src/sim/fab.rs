@@ -388,6 +388,7 @@ impl Fab {
         self.log(now, |fab| Entry {
             kind,
             lot: None,
+            part: None,
             tool: Some(tool),
             tool_group: Some(fab.tools[tool].group),
             step: None,
@@ -521,6 +522,7 @@ impl Fab {
         self.log(now, |fab| Entry {
             kind: EventKind::Release,
             lot: Some(fab.serial),
+            part: Some(spec.part),
             tool: None,
             tool_group: None,
             step: spec.step,
@@ -582,6 +584,7 @@ impl Fab {
         self.log(now, |fab| Entry {
             kind: EventKind::Arrive,
             lot: Some(fab.lots[id].serial),
+            part: Some(fab.lots[id].part),
             tool: None,
             tool_group: Some(group),
             step: Some(fab.lots[id].step),
@@ -691,6 +694,7 @@ impl Fab {
         self.log(now, |fab| Entry {
             kind: EventKind::Complete,
             lot: Some(fab.lots[id].serial),
+            part: Some(fab.lots[id].part),
             tool: None,
             tool_group: None,
             step: None,
@@ -806,6 +810,7 @@ impl Fab {
             self.log(now, |fab| Entry {
                 kind: EventKind::Start,
                 lot: Some(fab.lots[id].serial),
+                part: Some(fab.lots[id].part),
                 tool: Some(tool_id),
                 tool_group: Some(group_id),
                 step: Some(step_index),
@@ -854,6 +859,7 @@ impl Fab {
             self.log(now, |fab| Entry {
                 kind: EventKind::End,
                 lot: Some(fab.lots[id].serial),
+                part: Some(fab.lots[id].part),
                 tool: Some(tool_id),
                 tool_group: Some(group),
                 step: Some(fab.lots[id].step),

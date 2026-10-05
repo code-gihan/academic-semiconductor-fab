@@ -171,6 +171,7 @@ class Events(TypedDict):
         Literal["release", "arrive", "start", "end", "complete", "down", "up", "pm_start", "pm_end"]
     ]
     lot: list[Optional[int]]
+    part: list[Optional[int]]
     tool: list[Optional[int]]
     tool_group: list[Optional[int]]
     step: list[Optional[int]]

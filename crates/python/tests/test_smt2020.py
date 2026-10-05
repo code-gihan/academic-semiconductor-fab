@@ -145,6 +145,9 @@ class SimulationTest(unittest.TestCase):
         events = records["events"]
         self.assertTrue(all(DAY <= time < 2 * DAY for time in events["time"]))
         self.assertTrue(all(group == 0 for group in events["tool_group"]))
+        self.assertTrue(
+            all((part is None) == (lot is None) for part, lot in zip(events["part"], events["lot"]))
+        )
         self.assertEqual(sum(day["started"] for day in recorded["days"]), recorded["released"])
         self.assertEqual(len(recorded["periods"][0]["cqt_segments"]), len(info["segments"]))
         self.assertIsNone(simulation.flow_factors())

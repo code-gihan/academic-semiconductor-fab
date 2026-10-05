@@ -24,7 +24,7 @@
     <nav class="tabs" data-i18n-attr="aria-label:view.label">
       <a href="#setup" data-view="setup"><span data-i18n="view.setup"></span></a>
       <a href="#run" data-view="run"><span data-i18n="view.run"></span><span id="run-badge" class="badge" hidden></span></a>
-      <a href="#results" data-view="results"><span data-i18n="view.results"></span></a>
+      <a href="#analysis" data-view="analysis"><span data-i18n="view.analysis"></span></a>
       <a href="#python" data-view="python"><span data-i18n="view.python"></span></a>
     </nav>
   </header>
@@ -156,10 +156,10 @@
       </div>
     </section>
 
-    <section id="view-results" class="view" data-view="results" hidden>
+    <section id="view-analysis" class="view" data-view="analysis" hidden>
       <div class="panel">
-        <p id="results-empty" class="hint" data-i18n="results.empty"></p>
-        <div id="results-body" hidden>
+        <p id="analysis-empty" class="hint" data-i18n="results.empty"></p>
+        <div id="analysis-body" hidden>
           <div class="panel-head">
             <h2 data-i18n="results.heading"></h2>
             <div class="toolbar">
@@ -186,6 +186,17 @@
             <p class="hint" id="performance"></p>
           </details>
         </div>
+      </div>
+      <div id="details" class="panel" hidden>
+        <div class="panel-head">
+          <h2 data-i18n="details.heading"></h2>
+          <div class="toolbar">
+            <span id="details-replication"></span>
+            <output id="details-status" aria-live="polite"></output>
+          </div>
+        </div>
+        <p class="hint" data-i18n="details.intro"></p>
+        <div id="details-body" class="details"></div>
       </div>
     </section>
 
@@ -232,6 +243,7 @@ simulation.reset({**simulation.config(), "queue_time": "qts"})  # starts over wi
     </ol>
     <p><span data-i18n="footer.data"></span> <a href="https://p2schedgen.fernuni-hagen.de/downloads/simulation">p2schedgen.fernuni-hagen.de</a></p>
     <p><span data-i18n="footer.animation"></span> <a href="vendor/anime.LICENSE.md">anime.js</a></p>
+    <p><span data-i18n="footer.charts"></span> <a href="vendor/echarts.LICENSE.txt">Apache ECharts</a></p>
   </footer>
 
   <div id="tooltip" class="tooltip" role="tooltip" hidden></div>

@@ -1,16 +1,30 @@
-// Results of a finished run: its setup, the headline measures, charts and tables of a report
-// period, and the replications' digests and run times. Values are replication means ± the
-// half-width of their 95% confidence interval.
-import { barChart, legend } from "./charts.js";
+// The overview of a finished run: its setup, the headline measures, charts and tables of a report
+// period (CQT violations per segment, where the waits of one segment go, the days), and the
+// replications' digests and run times. Values are replication means ± the half-width of their
+// 95% confidence interval.
+import { barChart, lineChart } from "./charts.js";
 import { formatNumber, t } from "./i18n.js";
-import { countUp, grow, reveal } from "./motion.js";
+import { DAY, segmentKey, segmentLabel, segmentTitle, stepLabel } from "./labels.js";
+import { countUp, reveal } from "./motion.js";
 
-const DAY = 86_400_000;
 const KINDS = ["PRL", "PHL", "SHL", "ERL", "EHL"];
 /** Tool states as stacked in the tool group chart: busy, then outages, then idle. */
 const STATES = ["process", "setup", "load", "unload", "down", "pm", "idle"];
-/** Tool groups the chart shows until all are asked for. */
+/** Tool groups and segments the charts show until all are asked for. */
 const TOP = 15;
+/** Parts of a CQT wait and their colours. */
+const PARTS = [
+  ["queue", "warning"],
+  ["transport", "load"],
+  ["process", "process"],
+];
+/** Day-by-day measures offered: [scope, measure, decimals]. */
+const DAILY = [
+  ["cqt", "vl_pct", 1],
+  ["fab", "wip", 0],
+  ["fab", "completed", 0],
+  ["cqt", "completed", 0],
+];
 
 /** Headline measures, each shown when the period has it. */
 const KPIS = [
@@ -83,8 +97,17 @@ const TABLES = [
 ];
 
 const $ = (id) => document.getElementById(id);
-/** The tool group chart shows every group. */
+/** The charts show every tool group, every segment. */
 let allToolGroups = false;
+let allSegments = false;
+/** The run and period shown, the segment whose waits are broken down, the daily measure. */
+let shown = { run: null, period: null };
+let selected = null;
+let daily = 0;
+/** The charts drawn now play their entrance (new values, not a choice within them). */
+let animate = false;
+/** Called with the segment the user chooses. */
+let chosen = () => {};
 
 /** Name of the last report period before Drain: the longest window inside the horizon. */
 export function defaultPeriod(run) {
@@ -92,9 +115,22 @@ export function defaultPeriod(run) {
   return (periods.at(-2) ?? periods[0]).name;
 }
 
+/** The CQT segment chosen in the overview (index), for the details. */
+export function selectedSegment() {
+  return selected;
+}
+
+/** Calls `callback(segment)` whenever the user chooses a CQT segment in the overview. */
+export function onSegmentChosen(callback) {
+  chosen = callback;
+}
+
 /** Shows `run` (a finished run of the page) for the report period named `period`; `animated`
  * plays the entrance, as for new values (not for a new language). */
 export function showResults(run, period, animated) {
+  if (run !== shown.run) selected = null;
+  shown = { run, period };
+  animate = animated;
   const rows = run.summary.filter((row) => row.period === period);
   const at = new Map(rows.map((row) => [key(row.scope, row.item, row.kind, row.measure), row]));
   const value = (scope, item, kind, measure) => at.get(key(scope, item, kind, measure));
@@ -122,10 +158,18 @@ export function showResults(run, period, animated) {
       return summary ? [kpi(t(spec.label), summary, spec.decimals, animated)] : [];
     }),
   );
-  // Lot outcomes side by side, then the capacity by area and by tool group, a row each.
+  // Lot outcomes side by side, the CQT segments and where their waits go, the days, then the
+  // capacity by area and by tool group, a row each.
+  const segments = rankedSegments(run, value);
+  if (segments.length > 0 && !segments.some((segment) => segment.index === selected)) {
+    selected = segments[0].index;
+  }
   const charts = [
     kindChart(value),
     cqtChart(value),
+    segmentChart(run, value, segments),
+    breakdownChart(run, value, segments),
+    dailyChart(run),
     areaChart(rows, value),
     toolGroupChart(rows, value),
   ];
@@ -153,10 +197,171 @@ export function showResults(run, period, animated) {
     events: formatNumber(events / busy / 1e6, 2),
     memory: formatNumber(memory / 1e6, 0),
   });
-  if (animated) {
-    reveal($("results-body").querySelectorAll(".kpi, .chart"));
-    grow($("charts").querySelectorAll(".bar-fill, .bar-ci"));
+  if (animated) reveal($("analysis-body").querySelectorAll(".kpi, .chart"));
+}
+
+/** Shows the same run and period again (a choice within the charts). */
+function redraw() {
+  showResults(shown.run, shown.period, false);
+}
+
+/** Breaks down the waits of segment `index` and lists its violations in the details. */
+function choose(index) {
+  selected = index;
+  redraw();
+  chosen(selected);
+}
+
+/** The CQT segments with completions in the period, most violations first. */
+function rankedSegments(run, value) {
+  const info = run.info;
+  const segments = info.segments
+    .map((_, index) => {
+      const item = segmentKey(info, index);
+      return {
+        index,
+        item,
+        share: value("cqt_segment", item, null, "vl_pct"),
+        completed: value("cqt_segment", item, null, "completed"),
+      };
+    })
+    .filter((segment) => segment.share);
+  const violations = (segment) => segment.share.mean * segment.completed.mean;
+  return segments.sort((a, b) => violations(b) - violations(a));
+}
+
+/** Share over the limit per CQT segment; a row chooses the segment. */
+function segmentChart(run, value, segments) {
+  if (segments.length === 0) return null;
+  const info = run.info;
+  const listed = allSegments ? segments : segments.slice(0, TOP);
+  const rows = listed.map((segment) => ({
+    label: segmentLabel(info, segment.index),
+    values: [segment.share.mean],
+    ci: segment.share.ci95,
+    text: `${cell(segment.share, 1)} %`,
+    title: [
+      segmentTitle(info, segment.index),
+      `${t("col.completed")}: ${cell(segment.completed, 0)}`,
+      `${t("col.vl")}: ${cell(segment.share, 2)} %`,
+      `${t("col.avl")}: ${cell(value("cqt_segment", segment.item, null, "avl_h"), 2)}`,
+    ].join("\n"),
+    selected: segment.index === selected,
+  }));
+  const result = figure(
+    "chart.segments",
+    barChart({
+      rows,
+      parts: [{ kind: "warning", label: t("col.vl") }],
+      label: t("chart.segments"),
+      onSelect: (row) => choose(listed[row].index),
+      animate,
+    }),
+    element("p", t("chart.segmentsHint"), "hint"),
+  );
+  result.classList.add("wide");
+  if (segments.length > TOP) {
+    const toggle = element("button", t(allSegments ? "chart.top" : "chart.all", {
+      count: allSegments ? TOP : segments.length,
+    }));
+    toggle.type = "button";
+    toggle.addEventListener("click", () => {
+      allSegments = !allSegments;
+      redraw();
+    });
+    result.firstElementChild.append(toggle);
   }
+  return result;
+}
+
+/** Where the waits of the chosen segment go: hours per visit of each step, over and within the
+ * limit; the segment is chosen here too. */
+function breakdownChart(run, value, segments) {
+  if (selected === null) return null;
+  const info = run.info;
+  const segment = info.segments[selected];
+  const item = segmentKey(info, selected);
+  const rows = [];
+  for (let step = segment.entry + 1; step <= segment.exit; step++) {
+    for (const outcome of ["vl", "ok"]) {
+      const parts = PARTS.map(([part]) => ({
+        part,
+        summary: value("cqt_step", `${item}:${step}`, null, `${part}_${outcome}_h`),
+      }));
+      if (parts.every((each) => !each.summary)) continue;
+      const total = parts.reduce((sum, each) => sum + (each.summary?.mean ?? 0), 0);
+      rows.push({
+        label: `${stepLabel(info, segment.route, step)} · ${t(`breakdown.${outcome}`)}`,
+        values: parts.map((each) => each.summary?.mean ?? 0),
+        text: t("unit.hours", { value: formatNumber(total, 2) }),
+        title: [
+          stepLabel(info, segment.route, step),
+          t(`breakdown.${outcome}`),
+          ...parts.map((each) => `${t(`part.${each.part}`)}: ${cell(each.summary, 2)} h`),
+        ].join("\n"),
+      });
+    }
+  }
+  if (rows.length === 0) return null;
+  const choice = document.createElement("select");
+  choice.setAttribute("aria-label", t("details.segment"));
+  for (const each of segments) {
+    const text = `${segmentLabel(info, each.index)} (${cell(each.share, 1)} %)`;
+    choice.append(new Option(text, String(each.index), false, each.index === selected));
+  }
+  choice.addEventListener("change", () => choose(Number(choice.value)));
+  const result = figure(
+    "chart.breakdown",
+    element("p", segmentTitle(info, selected), "hint"),
+    barChart({
+      rows,
+      parts: PARTS.map(([part, kind]) => ({ kind, label: t(`part.${part}`) })),
+      label: t("chart.breakdown"),
+      animate,
+    }),
+  );
+  result.firstElementChild.append(choice);
+  result.classList.add("wide");
+  return result;
+}
+
+/** A measure day by day: mean over the replications with its 95% interval. */
+function dailyChart(run) {
+  const [scope, measure, decimals] = DAILY[daily];
+  const rows = run.daily.filter((row) => row.scope === scope && row.measure === measure);
+  if (rows.length < 2) return null;
+  const name = t(`daily.${scope}.${measure}`);
+  const chart = lineChart({
+    series: [
+      {
+        label: name,
+        kind: scope === "cqt" ? "warning" : "process",
+        // The measures are not negative, nor is their interval shown below 0.
+        points: rows.map((row) =>
+          row.ci95 == null
+            ? [row.day, row.mean]
+            : [row.day, row.mean, Math.max(0, row.mean - row.ci95), row.mean + row.ci95],
+        ),
+      },
+    ],
+    x: (day) => t("time.day", { day: formatNumber(day, 0) }),
+    y: (number) => formatNumber(number, decimals),
+    label: `${t("chart.daily")}: ${name}`,
+    animate,
+  });
+  const choice = document.createElement("select");
+  choice.setAttribute("aria-label", t("chart.dailyMeasure"));
+  DAILY.forEach(([each, measured], index) => {
+    choice.append(new Option(t(`daily.${each}.${measured}`), String(index), false, index === daily));
+  });
+  choice.addEventListener("change", () => {
+    daily = Number(choice.value);
+    redraw();
+  });
+  const result = figure("chart.daily", chart, element("p", t("chart.dailyHint"), "hint"));
+  result.firstElementChild.append(choice);
+  result.classList.add("wide");
+  return result;
 }
 
 function key(scope, item, kind, measure) {
@@ -187,14 +392,16 @@ function kindChart(value) {
     return [
       {
         label: kind,
-        segments: [{ value: summary.mean, kind: "measure" }],
+        values: [summary.mean],
         ci: summary.ci95,
-        value: cell(summary, 1),
+        text: cell(summary, 1),
         title: `${t(`kind.${kind}`)}\n${t("col.ctMean")}: ${cell(summary, 2)}`,
       },
     ];
   });
-  return rows.length > 0 ? figure("chart.kinds", barChart(rows, scaleOf(rows))) : null;
+  if (rows.length === 0) return null;
+  const parts = [{ kind: "process", label: t("col.ctMean") }];
+  return figure("chart.kinds", barChart({ rows, parts, label: t("chart.kinds"), animate }));
 }
 
 /** Share of CQT intervals over the limit, stepper intervals and the others. */
@@ -205,14 +412,16 @@ function cqtChart(value) {
     return [
       {
         label: t(`cqt.${item}`),
-        segments: [{ value: summary.mean, kind: "warning" }],
+        values: [summary.mean],
         ci: summary.ci95,
-        value: `${cell(summary, 1)} %`,
+        text: `${cell(summary, 1)} %`,
         title: `${t(`cqt.${item}`)}\n${t("col.vl")}: ${cell(summary, 2)} %`,
       },
     ];
   });
-  return rows.length > 0 ? figure("chart.cqt", barChart(rows, scaleOf(rows))) : null;
+  if (rows.length === 0) return null;
+  const parts = [{ kind: "warning", label: t("col.vl") }];
+  return figure("chart.cqt", barChart({ rows, parts, label: t("chart.cqt"), animate }));
 }
 
 /** Tool time by state of the busiest tool groups, or of all. */
@@ -221,25 +430,27 @@ function toolGroupChart(rows, value) {
     .filter((row) => row.scope === "tool_group" && row.measure === "util_pct")
     .sort((a, b) => b.mean - a.mean);
   if (groups.length === 0) return null;
-  const shown = allToolGroups ? groups : groups.slice(0, TOP);
-  const bars = barChart(
-    shown.map(({ item, mean }) => {
-      const share = (state) => value("tool_group", item, null, `${state}_pct`);
-      const shares = STATES.map((state) => [state, share(state)]);
+  const listed = allToolGroups ? groups : groups.slice(0, TOP);
+  const bars = barChart({
+    rows: listed.map(({ item, mean }) => {
+      const shares = STATES.map((state) => value("tool_group", item, null, `${state}_pct`));
       return {
         label: item,
-        segments: shares.map(([state, summary]) => ({ value: summary?.mean ?? 0, kind: state })),
-        value: `${formatNumber(mean, 1)} %`,
+        values: shares.map((summary) => summary?.mean ?? 0),
+        text: `${formatNumber(mean, 1)} %`,
         title: [
           item,
           `${t("col.util")}: ${cell(value("tool_group", item, null, "util_pct"), 2)}`,
-          ...shares.map(([state, summary]) => `${t(`col.${state}`)}: ${cell(summary, 2)} %`),
+          ...STATES.map((state, index) => `${t(`col.${state}`)}: ${cell(shares[index], 2)} %`),
         ].join("\n"),
       };
     }),
-    100,
-  );
-  const result = figure("chart.toolGroups", bars, legend(STATES, (state) => t(`col.${state}`)));
+    parts: STATES.map((state) => ({ kind: state, label: t(`col.${state}`) })),
+    max: 100,
+    label: t("chart.toolGroups"),
+    animate,
+  });
+  const result = figure("chart.toolGroups", bars);
   if (groups.length > TOP) {
     const toggle = element("button", t(allToolGroups ? "chart.top" : "chart.all", {
       count: allToolGroups ? TOP : groups.length,
@@ -247,9 +458,7 @@ function toolGroupChart(rows, value) {
     toggle.type = "button";
     toggle.addEventListener("click", () => {
       allToolGroups = !allToolGroups;
-      const next = toolGroupChart(rows, value);
-      result.replaceWith(next);
-      grow(next.querySelectorAll(".bar-fill"));
+      result.replaceWith(toolGroupChart(rows, value));
     });
     result.firstElementChild.append(toggle);
   }
@@ -261,14 +470,14 @@ function toolGroupChart(rows, value) {
 function areaChart(rows, value) {
   const areas = rows.filter((row) => row.scope === "area" && row.measure === "util_pct");
   if (areas.length === 0) return null;
-  const bars = barChart(
-    areas.map((summary) => {
+  const bars = barChart({
+    rows: areas.map((summary) => {
       const other = (measure) => cell(value("area", summary.item, null, measure), 2);
       return {
         label: summary.item,
-        segments: [{ value: summary.mean, kind: "measure" }],
+        values: [summary.mean],
         ci: summary.ci95,
-        value: `${formatNumber(summary.mean, 1)} %`,
+        text: `${formatNumber(summary.mean, 1)} %`,
         title: [
           summary.item,
           `${t("col.util")}: ${cell(summary, 2)}`,
@@ -277,16 +486,14 @@ function areaChart(rows, value) {
         ].join("\n"),
       };
     }),
-    100,
-  );
+    parts: [{ kind: "process", label: t("col.util") }],
+    max: 100,
+    label: t("chart.areas"),
+    animate,
+  });
   const result = figure("chart.areas", bars);
   result.classList.add("wide");
   return result;
-}
-
-/** A scale a little above the largest bar with its interval. */
-function scaleOf(rows) {
-  return Math.max(...rows.map((row) => row.segments[0].value + (row.ci ?? 0))) * 1.08 || 1;
 }
 
 function figure(title, ...content) {

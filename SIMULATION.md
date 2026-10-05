@@ -562,7 +562,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 - `records()`: 열 단위 표(같은 길이 Vec), 문자열 대신 데이터셋 정보 index.
   - violations: 위반 구간 완료마다 lot(투입 순번), part, kind, segment, release, entered(시작 스텝 종료), arrived(종료 스텝 도착), exit(종료 스텝 작업 시작).
   - tool_groups: 날 × TG(날 닫힘 때 모든 툴을 그 시각까지 집계): 시간가중 대기 lot 수(대기열 변화마다 적분), 상태별 툴 시간 합(초기화 없는 툴 누적의 차).
-  - events: 창 [from, until)·TG·lot 필터를 통과한 사건의 시각, 종류(release·arrive·start·end·complete·down·up·pm_start·pm_end), lot, 툴, TG, 스텝(없으면 null). TG 없는 사건(투입·완료)은 TG 필터, lot 없는 사건(고장·PM)은 lot 필터를 통과하지 못한다.
+  - events: 창 [from, until)·TG·lot 필터를 통과한 사건의 시각, 종류(release·arrive·start·end·complete·down·up·pm_start·pm_end), lot, part, 툴, TG, 스텝(part의 route 기준; 없으면 null). TG 없는 사건(투입·완료)은 TG 필터, lot 없는 사건(고장·PM)은 lot 필터를 통과하지 못한다.
 - `flow_factors()`: 본 실행의 QTS FF(입력 또는 1차 pass 측정). 이를 설정에 넣으면 1 pass로 같은 결과 → 재생(같은 설정·복제를 기록과 함께 다시 실행)이 1차 pass를 생략한다.
 - 규모(DS2 730 d): 위반 17.7만 행, TG 일별 8.1만 행(JSON 19.5 MB), 기록 오버헤드 1–2%.
 

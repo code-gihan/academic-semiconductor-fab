@@ -20,12 +20,13 @@ export class Failure extends Error {
   }
 }
 
-/** The view; `status(render)` shows a status text, `run(scenario)` starts a run. `ready()` is
- * called once the wasm module works; `relabel()` after a language change. */
+/** The view; `status(render)` shows a status text, `run(scenario)` starts a run of
+ * {name, dataset: {key, bytes}, info, config, replications, setup}. `ready()` is called once the
+ * wasm module works; `relabel()` after a language change. */
 export function setupView({ status, run }) {
   const form = $("setup");
   const fields = form.elements;
-  /** Decoded datasets by key: {name, bytes, dataset, info}. */
+  /** Decoded datasets by id: {id, key, name, bytes, dataset, info}. */
   const loaded = new Map();
   let current = null;
   /** Bumped by every dataset choice, so a slower earlier load is dropped. */
@@ -93,7 +94,7 @@ export function setupView({ status, run }) {
         status(() => t("status.loadingDataset", { dataset: datasetName(key, name) }));
         const bytes = await datasetBytes(key, file);
         const dataset = new Dataset(new Uint8Array(bytes));
-        entry = { key, name, bytes, dataset, info: dataset.info() };
+        entry = { id, key, name, bytes, dataset, info: dataset.info() };
         loaded.set(id, entry);
       }
       if (token !== choice) return;
@@ -180,7 +181,8 @@ export function setupView({ status, run }) {
     const snapshot = structuredClone(config);
     run({
       name: current.name,
-      bytes: current.bytes,
+      dataset: { key: current.id, bytes: current.bytes },
+      info: current.info,
       config: snapshot,
       replications: Number(fields.replications.value),
       setup: describe(current.key, current.name, snapshot, Number(fields.replications.value)),

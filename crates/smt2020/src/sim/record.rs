@@ -111,6 +111,8 @@ pub struct Events {
     pub time: Vec<Time>,
     pub kind: Vec<EventKind>,
     pub lot: Vec<Option<u64>>,
+    /// The lot's part, whose route the step indexes.
+    pub part: Vec<Option<PartId>>,
     /// Tool index (tool status).
     pub tool: Vec<Option<usize>>,
     pub tool_group: Vec<Option<ToolGroupId>>,
@@ -205,6 +207,7 @@ impl Recorder {
             events.time.push(time);
             events.kind.push(entry.kind);
             events.lot.push(entry.lot);
+            events.part.push(entry.part);
             events.tool.push(entry.tool);
             events.tool_group.push(entry.tool_group);
             events.step.push(entry.step);
@@ -216,6 +219,7 @@ impl Recorder {
 pub(super) struct Entry {
     pub kind: EventKind,
     pub lot: Option<u64>,
+    pub part: Option<PartId>,
     pub tool: Option<usize>,
     pub tool_group: Option<ToolGroupId>,
     pub step: Option<StepIndex>,

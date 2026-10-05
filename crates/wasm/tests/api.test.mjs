@@ -151,6 +151,7 @@ test("recording leaves the results unchanged and accounts for them", () => {
   assert.equal(days.day.length, recorded.days.length * info.tool_groups.length);
   assert.ok(events.time.every((time) => time >= DAY && time < 2 * DAY));
   assert.ok(events.tool_group.every((group) => group === 0));
+  assert.ok(events.part.every((part, row) => (part === null) === (events.lot[row] === null)));
   assert.equal(
     recorded.days.reduce((sum, day) => sum + day.started, 0),
     recorded.released,

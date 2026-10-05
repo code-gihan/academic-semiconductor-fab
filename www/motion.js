@@ -1,5 +1,5 @@
-// Motion of the page (anime.js): entrances, counts and chart growth. None when the user prefers
-// reduced motion; the page shows the same end state either way.
+// Motion of the page (anime.js): entrances, counts, pulses and disclosures. None when the user
+// prefers reduced motion; the page shows the same end state either way.
 import { animate, remove, stagger } from "./vendor/anime.esm.min.js";
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");
@@ -29,18 +29,6 @@ export function countUp(element, value, format) {
     onUpdate: () => {
       element.textContent = format(count.value);
     },
-  });
-}
-
-/** Grows bars from their start edge. */
-export function grow(bars) {
-  if (reduced.matches) return;
-  remove(bars);
-  animate(bars, {
-    scaleX: [0, 1],
-    duration: 650,
-    delay: stagger(18),
-    ease: "outQuart",
   });
 }
 
