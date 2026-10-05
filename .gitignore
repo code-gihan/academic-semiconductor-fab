@@ -1,4 +1,6 @@
 /target
 /www/pkg
+/www/python
 /data/raw
 /data/*.bin
+__pycache__/

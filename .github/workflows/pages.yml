@@ -16,7 +16,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  wheels:
+    name: Python wheel (${{ matrix.os }})
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: windows-latest
+            target: x64
+          - os: macos-latest
+            target: universal2-apple-darwin
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --locked --out dist -m crates/python/Cargo.toml
+
+      - name: Test wheel
+        shell: bash
+        run: |
+          python -m pip install --no-index --find-links dist smt2020
+          python -m unittest discover -s crates/python/tests -v
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist/*.whl
+
   build:
+    needs: wheels
     runs-on: ubuntu-latest
 
     steps:
@@ -38,6 +80,26 @@ jobs:
 
       - name: Generate JS bindings
         run: wasm-bindgen --target web --no-typescript --out-dir www/pkg target/wasm32-unknown-unknown/release/fab_wasm.wasm
+
+      - name: Test JavaScript API
+        run: node --test crates/wasm/tests/api.test.mjs
+
+      - name: Collect wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: www/python
+
+      # The index lists the wheels for the page and for pip --find-links.
+      - name: Index wheels
+        working-directory: www/python
+        run: |
+          {
+            echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>smt2020 wheels</title></head><body>'
+            for wheel in *.whl; do echo "<a href=\"$wheel\">$wheel</a><br>"; done
+            echo '</body></html>'
+          } > index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

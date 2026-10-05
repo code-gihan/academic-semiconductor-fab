@@ -407,9 +407,30 @@ details > * + * {
   margin-top: 0.5rem;
 }
 
-#digests {
+#digests,
+code {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 0.8125rem;
+}
+
+#python {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+pre {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: var(--surface);
+}
+
+.wheels {
+  margin: 0.5rem 0 1.5rem;
+  padding-left: 1.25rem;
 }
 
 footer {

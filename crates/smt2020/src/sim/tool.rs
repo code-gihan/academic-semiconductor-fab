@@ -6,19 +6,23 @@ use des_core::Time;
 use super::fab::LotId;
 use crate::data::{Pm, PmTrigger, SetupId, ToolGroupId};
 
-/// Tool state. Where jobs of a cascading tool overlap, the earlier variant counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum State {
-    Down,
-    Pm,
-    Setup,
-    Process,
-    Load,
-    Unload,
-    Idle,
+named_enum! {
+    /// Tool state. Where jobs of a cascading tool overlap, the earlier variant counts.
+    pub enum ToolState {
+        /// Broken down (unscheduled downtime).
+        Down = "down",
+        /// In preventive maintenance (scheduled downtime).
+        Pm = "pm",
+        Setup = "setup",
+        Process = "process",
+        Load = "load",
+        Unload = "unload",
+        /// Up without a job phase: no job, or a job waiting for the first slot of a cascading tool.
+        Idle = "idle",
+    }
 }
 
-pub(super) const STATES: usize = 7;
+pub(super) const STATES: usize = ToolState::ALL.len();
 
 /// Durations of a job about to start.
 pub(super) struct Work {
@@ -46,17 +50,17 @@ pub(super) struct Job {
 
 impl Job {
     /// Phase at `t` (`None` while waiting or done) and when it ends.
-    fn phase(&self, t: Time) -> (Option<State>, Time) {
+    fn phase(&self, t: Time) -> (Option<ToolState>, Time) {
         if t < self.setup_end {
-            (Some(State::Setup), self.setup_end)
+            (Some(ToolState::Setup), self.setup_end)
         } else if t < self.load_end {
-            (Some(State::Load), self.load_end)
+            (Some(ToolState::Load), self.load_end)
         } else if t < self.process_start {
             (None, self.process_start)
         } else if t < self.process_end {
-            (Some(State::Process), self.process_end)
+            (Some(ToolState::Process), self.process_end)
         } else if t < self.end {
-            (Some(State::Unload), self.end)
+            (Some(ToolState::Unload), self.end)
         } else {
             (None, Time::MAX)
         }
@@ -237,14 +241,20 @@ impl Tool {
         }
     }
 
-    fn state_at(&self, t: Time) -> (State, Time) {
+    /// State now; `now` must not precede the last event of the tool.
+    pub(super) fn state(&self, now: Time) -> ToolState {
+        self.state_at(now).0
+    }
+
+    /// State at `t` and when it changes next, as of the tool's current jobs and outages.
+    fn state_at(&self, t: Time) -> (ToolState, Time) {
         if self.breakdowns > 0 {
-            return (State::Down, Time::MAX);
+            return (ToolState::Down, Time::MAX);
         }
         if self.pm.is_some() {
-            return (State::Pm, Time::MAX);
+            return (ToolState::Pm, Time::MAX);
         }
-        let mut state = State::Idle;
+        let mut state = ToolState::Idle;
         let mut change = Time::MAX;
         for job in self.jobs.iter().filter(|job| job.active) {
             let (phase, end) = job.phase(t);
@@ -347,16 +357,19 @@ mod tests {
         let time = tool.time;
         assert_eq!(
             [
-                time[State::Setup as usize],
-                time[State::Load as usize],
-                time[State::Process as usize]
+                time[ToolState::Setup as usize],
+                time[ToolState::Load as usize],
+                time[ToolState::Process as usize]
             ],
             [2, 1, 6]
         );
         assert_eq!(
-            [time[State::Down as usize], time[State::Unload as usize]],
+            [
+                time[ToolState::Down as usize],
+                time[ToolState::Unload as usize]
+            ],
             [10, 1]
         );
-        assert_eq!(time[State::Idle as usize], 30 - 20);
+        assert_eq!(time[ToolState::Idle as usize], 30 - 20);
     }
 }

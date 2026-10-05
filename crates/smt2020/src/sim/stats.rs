@@ -3,7 +3,7 @@
 use des_core::{HOUR, Time};
 use serde::{Deserialize, Serialize};
 
-use super::tool::{STATES, State, Tool};
+use super::tool::{STATES, Tool, ToolState};
 use crate::data::{Dataset, PartId, RouteId};
 
 named_enum! {
@@ -330,13 +330,13 @@ impl Stats {
                 area: data.areas[group.area].clone(),
                 tools: group.tools,
                 time: StateTimes {
-                    down: time[State::Down as usize],
-                    pm: time[State::Pm as usize],
-                    setup: time[State::Setup as usize],
-                    process: time[State::Process as usize],
-                    load: time[State::Load as usize],
-                    unload: time[State::Unload as usize],
-                    idle: time[State::Idle as usize],
+                    down: time[ToolState::Down as usize],
+                    pm: time[ToolState::Pm as usize],
+                    setup: time[ToolState::Setup as usize],
+                    process: time[ToolState::Process as usize],
+                    load: time[ToolState::Load as usize],
+                    unload: time[ToolState::Unload as usize],
+                    idle: time[ToolState::Idle as usize],
                 },
             })
             .collect();

@@ -3,9 +3,15 @@
 //! over replications.
 //!
 //! ```no_run
-//! let dataset = smt2020::Dataset::from_bytes(&std::fs::read("ds1.bin")?)?;
-//! let results = smt2020::run(&dataset, &smt2020::Config::new(730 * smt2020::DAY))?;
-//! let table = smt2020::report::summarize(&[results]);
+//! use std::sync::Arc;
+//! use smt2020::{Config, DAY, Dataset, Simulation};
+//!
+//! let dataset = Arc::new(Dataset::from_bytes(&std::fs::read("ds1.bin")?)?);
+//! let mut simulation = Simulation::new(dataset, Config::new(730 * DAY))?;
+//! simulation.run(Some(100 * DAY))?; // paused at day 100
+//! let queued = simulation.tool_groups().iter().map(|group| group.queue).sum::<usize>();
+//! simulation.run(None)?; // to the end
+//! let table = smt2020::report::summarize(&[simulation.results()?]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
@@ -61,4 +67,4 @@ pub mod sim;
 
 pub use data::Dataset;
 pub use des_core::{DAY, HOUR, MINUTE, SECOND, Time};
-pub use sim::{Config, Results, run};
+pub use sim::{Config, Progress, Results, Simulation};

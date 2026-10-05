@@ -1,10 +1,10 @@
 # academic-semiconductor-fab
 
-SMT2020 반도체 FAB 테스트베드(데이터셋 4종)를 정적 웹 페이지에서 사용자가 직접 실행하는 시뮬레이터. DES 엔진·이벤트 큐·루프·모델·운영 전략을 모두 Rust로 구현해 wasm으로 컴파일하고, 서버나 상용 시뮬레이터(AutoSched AP) 없이 클라이언트 브라우저에서 연산한다. 같은 라이브러리를 네이티브 CLI로도 실행한다.
+SMT2020 반도체 FAB 테스트베드(데이터셋 4종) 시뮬레이터. DES 엔진·이벤트 큐·루프·모델·운영 전략을 Rust 라이브러리(`smt2020`) 하나로 구현하고, 같은 코어를 웹 페이지(wasm, 클라이언트 브라우저에서 연산)·JavaScript 모듈·Python 패키지·네이티브 CLI로 포장한다. 서버나 상용 시뮬레이터(AutoSched AP)가 필요 없다.
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: 구현 단계 1–8 완료([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
+현재: 구현 단계 1–9 완료([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
 
 ## Quick Start
 
@@ -15,29 +15,86 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 1. 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`), 운영 전략(CQT 디스패칭, [P2] Table 3 Stopping, [P1] 엔지니어링 lot 전략, super hot 예약), 실행 설정(종료 시각(일), 복제 수, seed, 부하 계수)을 고르고 실행한다.
 2. 복제 1회를 Web Worker 1개가 실행하고 `navigator.hardwareConcurrency`개까지 병렬로 돌린다. 진행(1일 관측 사건마다): 완료 복제, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 경과·남은 시간(진행률 비례 추정). 실행 중 설정 잠금, 취소는 워커 종료.
 3. 결과: 실행 설정, 보고 기간별 핵심 지표(투입·완료 lot, 평균 WIP, PRL ACT·ONTIME, ERL ACT, CQT %VL)와 표 6종(lot 유형, FF 분위수, 제품 × 유형, CQT 구간, 영역, 툴그룹. 복제 평균 ± 95% 신뢰구간), 복제별 digest·성능. JSON(CLI `--json`과 같은 형식)·CSV로 내려받는다.
+4. Python 패키지: 페이지 하단의 pip 명령·플랫폼별 wheel.
+
+### Python
+
+Python 3.9 이상, Windows x64·Linux x86-64·macOS(Intel, Apple silicon). wheel에 DS1–4 데이터셋 포함.
+
+```bash
+pip install smt2020 --no-index --find-links https://code-gihan.github.io/academic-semiconductor-fab/python/
+```
+
+```python
+import smt2020
+from smt2020 import DAY
+
+dataset = smt2020.load_dataset("ds2")  # 동봉 ds1–ds4, 데이터셋 파일 경로 또는 AutoSched 모델 디렉터리
+simulation = smt2020.Simulation(dataset, {"horizon": 730 * DAY, "queue_time": "qtcr"})  # 시각 0
+
+simulation.run(until=100 * DAY)  # 100일에 일시정지
+simulation.progress()  # pass, passes, now, horizon, released, completed, wip, finished
+simulation.lots()  # 재공 lot: id, part, kind, step, tool_group, state, tool, cqt_deadline …
+simulation.tools()  # 툴: id, tool_group, state, setup, lots
+simulation.tool_groups()  # 툴그룹: queue, 상태별 툴 수
+
+simulation.run(on_progress=lambda progress: progress["wip"] < 2500)  # 매일 호출, False면 일시정지
+simulation.run()  # 끝까지: 투입 lot 전량 완료
+results = simulation.results()
+summary = smt2020.summarize([results])  # 측정값별 평균·95% 신뢰구간
+simulation.reset({**simulation.config(), "queue_time": "qts"})  # 다른 전략으로 시각 0부터
+```
+
+- 실행 중 GIL을 놓으므로 스레드마다 `Simulation`을 두면 복제가 병렬로 실행된다. Ctrl-C는 실행을 일시정지하고 `KeyboardInterrupt`를 발생시킨다.
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+def replicate(replication):
+    simulation = smt2020.Simulation(dataset, {"horizon": 730 * DAY, "replication": replication})
+    simulation.run()
+    return simulation.results()
+
+with ThreadPoolExecutor() as pool:
+    summary = smt2020.summarize(list(pool.map(replicate, range(10))))
+```
 
 ### JavaScript
 
 ```js
-// module worker: run()은 실행이 끝날 때까지 스레드를 점유한다.
-import init, { Dataset, run, summarize, csv, digest } from "./pkg/fab_wasm.js";
+// module worker: run()은 진행하는 동안 스레드를 점유한다.
+import init, { Dataset, Simulation, summarize, csv, digest } from "./pkg/fab_wasm.js";
 
 await init();
 const dataset = new Dataset(new Uint8Array(await (await fetch("data/ds2.bin")).arrayBuffer()));
 const DAY = 86_400_000; // 시간 단위 ms
-const results = run(
-  dataset,
-  { horizon: 730 * DAY, replication: 0, queue_time: "qtcr" }, // horizon 외 필드는 기본값
-  (progress) => postMessage(progress), // 1일마다 호출, false를 반환하면 취소
-);
-const summaries = summarize([results]); // 측정값별 평균·95% 신뢰구간(복제 결과 배열)
-const table = csv(summaries); // CSV 문자열
+const simulation = new Simulation(dataset, { horizon: 730 * DAY, queue_time: "qtcr" });
+simulation.run(100 * DAY); // 100일에 일시정지
+const queues = simulation.toolGroups().map((group) => [group.name, group.queue]);
+simulation.run(undefined, (progress) => postMessage(progress)); // 매일 호출, false면 일시정지
+const results = simulation.results();
+const table = csv(summarize([results])); // 측정값별 평균·95% 신뢰구간의 CSV
 const fingerprint = digest(results); // 같으면 결과가 비트 단위로 같다
+simulation.free(); // wasm 메모리 해제
 ```
 
 - 복제는 `replication`만 다르게 워커마다 실행하고 결과 배열을 `summarize`·`csv`에 넘긴다(`www/main.js`·`www/worker.js`).
 - 데이터셋 파일: 배포 페이지의 `data/ds1.bin`–`ds4.bin`(다른 출처에서도 fetch 가능, 예: `https://code-gihan.github.io/academic-semiconductor-fab/data/ds2.bin`) 또는 `smt2020 convert` 출력.
 - Node.js: `initSync({ module: readFileSync("www/pkg/fab_wasm_bg.wasm") })` 후 같은 API.
+
+### Rust
+
+```rust
+use std::sync::Arc;
+use smt2020::{Config, DAY, Dataset, Simulation};
+
+let dataset = Arc::new(Dataset::from_bytes(&std::fs::read("www/data/ds2.bin")?)?);
+let mut simulation = Simulation::new(dataset, Config::new(730 * DAY))?;
+simulation.run(Some(100 * DAY))?; // 100일에 일시정지
+let queued = simulation.tool_groups().iter().map(|group| group.queue).sum::<usize>();
+simulation.run(None)?; // 끝까지
+let summary = smt2020::report::summarize(&[simulation.results()?]);
+```
 
 ### CLI
 
@@ -51,10 +108,6 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 
 - `run`: 데이터셋 파일 또는 `.asd` 디렉터리. 설정은 `--config`(JSON, [실행 설정](#실행-설정)) 위에 옵션을 덮어쓴다: `--horizon` 일, `--seed`, `--load`, `--reserve-super-hot`, `--queue-time none|qtcr|qts`, `--stopping TG=FRONT/TOTAL`(반복), `--stopping-default FRONT/TOTAL`, `--engineering base|engineering_first|cate:생산h/엔지니어링h|cot:N`. `--replications N`(설정의 replication부터 번호), `--threads`(기본 가용 코어), `--period`(표 기간), `--json`·`--csv` 출력.
 - 웹 JSON의 `replications[i].config`를 `--config`로 실행하면 digest가 같다(결정성 확인).
-
-### Python
-
-미구현. PyO3·maturin 바인딩은 같은 API(`Dataset.from_bytes`, `run`, `summarize`, `csv`)와 직렬화 스키마(dict)를 그대로 노출하는 형태로 추가한다(`sim::run_observed`의 관찰자로 진행률 전달·Ctrl-C 취소).
 
 ## 참고 문헌·데이터
 
@@ -173,17 +226,32 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 
 ## API
 
-Rust 라이브러리 `smt2020`이 핵심 API를 제공하고, CLI와 wasm(JS)은 같은 함수·직렬화 스키마를 그대로 노출한다. 시간 단위는 ms(`Time = i64`).
+코어는 Rust 라이브러리 `smt2020` 하나다. JavaScript(`fab_wasm`)·Python(`smt2020`)은 같은 기능과 직렬화 스키마를 언어 관례대로 노출하는 포장이고(시간 ms, `DAY`·`HOUR`·`MINUTE`·`SECOND` 상수), CLI(`convert`, `run`, `validate`)는 그 위의 실행 도구다.
 
-| 인터페이스 | API |
-|---|---|
-| Rust `smt2020` | `Dataset::from_bytes`·`to_bytes`, `asd::{load, load_with_orders, orders}`, `run(&Dataset, &Config)`, `sim::run_observed(…, 관찰자)`, `Results::digest`, `report::{metrics, summarize, csv}` |
-| JS `fab_wasm` | `new Dataset(bytes)`, `run(dataset, config, onProgress?)`, `summarize(results[])`, `csv(summaries)`, `digest(results)` |
-| CLI `smt2020` | `convert`, `run`, `validate` |
+| 기능 | Rust `smt2020` | JS `fab_wasm` | Python `smt2020` |
+|---|---|---|---|
+| 데이터셋 | `Dataset::from_bytes`·`to_bytes`, `asd::{load, load_with_orders, orders}` | `new Dataset(bytes)` | `Dataset(bytes)`, `load_dataset(source)` |
+| 생성(시각 0) | `Simulation::new(Arc<Dataset>, Config)` | `new Simulation(dataset, config)` | `Simulation(dataset, config)` |
+| 실행·일시정지 | `run(until)`, `run_observed(until, 관찰자)` | `run(until?, onProgress?)` | `run(until=None, on_progress=None)` |
+| 상태 | `progress()`, `lots()`, `tools()`, `tool_groups()` | `progress()`, `lots()`, `tools()`, `toolGroups()` | `progress()`, `lots()`, `tools()`, `tool_groups()` |
+| 설정·재시작 | `config()`, `reset(Config)` | `config()`, `reset(config?)` | `config()`, `reset(config=None)` |
+| 결과 | `results()`, `Results::digest` | `results()`, `digest(results)` | `results()`, `digest(results)` |
+| 복제 요약 | `report::{metrics, summarize, csv}` | `summarize(results[])`, `csv(summaries)` | `summarize(results)`, `csv(summaries)` |
+
+### 실행 흐름
+
+- `Simulation` = 설정 1개의 실행 1회. 생성할 때 설정을 검증하고(잘못되면 오류) 시각 0에서 시작한다.
+- `run(until)`: `until`(ms, 그 시각의 사건 포함)까지 또는 끝까지 진행하고 진행 상태를 돌려준다. 관찰자는 모의 1일마다 진행 상태를 받고, `false`(Rust `Break`)를 돌려주면 그 시각에 일시정지한다. 관찰자의 예외(JS throw, Python 예외·Ctrl-C)도 일시정지 후 그대로 전달된다. 다시 `run`하면 이어서 진행하고, 일시정지는 결과를 바꾸지 않는다(같은 digest).
+- 종료 조건: `horizon` 전에 시작하는 lot만 투입하고, 투입 lot이 전부 완료되면 끝난다(`finished`, 이후 `run`은 그대로). 종료 시각 + 365일에 lot이 남으면 실행 실패(이후 `run`도 같은 오류). 그 밖의 조건(시각, WIP, 완료 수 등)은 `until`·관찰자로 일시정지해 판단한다.
+- 상태: 진행·일시정지 중 언제든 읽는다. 아래 [진행·상태·결과](#진행상태결과).
+- `results()`: 끝난 실행의 결과(전에는 오류). `reset(config)`: 같은 데이터셋으로 시각 0부터(설정을 생략하면 같은 설정, 거부되면 그대로 유지).
+- 운영 전략은 설정(`queue_time`, `stopping`, `engineering`, `reserve_super_hot`)으로 정하고 `reset`으로 바꾼다. 실행 중 변경은 없다(대기열 항목이 도착 시 순위 입력을 고정).
+- QTS + `flow_factors` 없음: 같은 설정에서 CQT 규칙·Stopping을 뺀 1차 실행이 FF를 측정한 뒤 본 실행(진행 `pass` 0/2 → 1/2). `until`·결과는 본 실행 기준이고, 설정 검증은 생성 시 함께 한다.
+- 병렬: JS는 Web Worker마다, Python은 스레드마다(실행 중 GIL 해제), Rust는 스레드마다(`Simulation: Send`) `Simulation`을 둔다. 데이터셋은 공유한다.
 
 ### 실행 설정
 
-JSON·JS 객체·Rust `Config` 공통. `horizon` 외 필드는 생략하면 기본값, 미지 필드는 오류, 시간 필드는 ms 수(소수는 ms 반올림).
+JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생략하면 기본값, 미지 필드는 오류, 시간 필드는 ms 수(소수는 ms 반올림, `until`도 같음).
 
 | 필드 | 기본값 | 내용 |
 |---|---|---|
@@ -192,13 +260,16 @@ JSON·JS 객체·Rust `Config` 공통. `horizon` 외 필드는 생략하면 기�
 | `load` | 1 | 부하 계수(투입 시각 ÷ load, 납기 오프셋 유지) |
 | `reserve_super_hot` | false | super hot lot 다음 툴 예약 |
 | `queue_time` | `"none"` | `"none"`·`"qtcr"`·`"qts"` |
-| `flow_factors` | null | QTS FF(route × 스텝, null = 미측정 = 1). 없으면 사전 실행으로 산출 |
+| `flow_factors` | null | QTS FF(route × 스텝, null = 미측정 = 1). 없으면 1차 실행으로 산출 |
 | `stopping` | null | `{"limits": {"LithoTrack_FE_95": {"front": 50, "total": 85}}, "default": {"front": 1000, "total": 1000}}` |
 | `engineering` | `"base"` | `"base"`·`"engineering_first"`·`{"cate": {"production": ms, "engineering": ms}}`·`{"cot": {"trigger": 100}}` |
 
-### 진행·결과
+### 진행·상태·결과
 
-- 진행(`Progress`, 1일 1회 관측 사건): `pass`·`passes`(QTS FF 사전 실행이면 0/2·1/2), `now`, `horizon`, `wip`. 관찰자가 `false`(Rust `Break`)를 반환하면 취소.
+- 진행(`Progress`, 관찰자에게 1일 1회, `progress()`·`run`의 반환): `pass`·`passes`(QTS 1차 실행이면 0/2·1/2), `now`(그 pass의 시각), `horizon`, `released`·`completed`(투입·완료 lot), `wip`, `finished`.
+- lot(`lots()`, 재공 lot을 id 순으로): `id`(투입 순번, 0부터), `part`, `kind`, `priority`(디스패칭 우선순위, EF 반영), `wafers`, `release`, `due`, `step`·`step_name`·`tool_group`(이동 중이면 향하는, 대기·공정 중이면 그 스텝), `state`(`moving`·`queued`·`processing`), `tool`(공정 중인 툴 id), `cqt_exit`·`cqt_deadline`(진행 중인 CQT 구간의 종료 스텝과 그 스텝의 한도 내 최종 시작 시각).
+- 툴(`tools()`, id = 데이터셋의 툴그룹 순서대로 매긴 번호): `id`, `tool_group`, `state`(`down`·`pm`·`setup`·`process`·`load`·`unload`·`idle`, cascading job이 겹치면 앞선 상태), `setup`(현재 setup), `lots`(공정 중인 lot id, cascading은 job 2개).
+- 툴그룹(`tool_groups()`, 데이터셋 순): `name`, `area`, `tools`, `queue`(대기 lot 수), 상태별 툴 수 `down`·`pm`·`setup`·`process`·`load`·`unload`·`idle`.
 - 결과(`Results`): `periods[]`(보고 기간, 마지막은 Drain: `name`, `start`, `end`, `lots[]` {`part`, `kind`(PRL·PHL·SHL·ERL·EHL), `started`, `completed`, `on_time`, `cycle_time_mean`·`cycle_time_std`(ms, 완료 없으면 null), `flow_factor_mean`}, `flow_factors[]` {`kind`, `percentiles`(0·5·25·50·75·95·100%)}, `wip`, `tool_groups[]` {`name`, `area`, `tools`, `time` {`down`, `pm`, `setup`, `process`, `load`, `unload`, `idle`}(ms)}, `cqt_litho`·`cqt_rest` {`completed`, `violated`, `violated_1h`·`2h`·`4h`, `violation`·`slack`(ms)}), `released`, `completed`, `end`, `events`, `step_flow_factors`(QTS `flow_factors` 입력).
 - digest: 결과 postcard 인코딩의 FNV-1a 64비트 해시. 같으면 결과가 비트 단위로 같다.
 - 측정값(`summarize`·`csv`): 범위 fab·kind·lot·tool_group·area·cqt별 측정(`ct_mean_d`, `on_time_pct`, `ff_p50`, `util_pct`, `vl_pct`, `avl_h` 등, 접미사 = 단위)의 n·평균·표본 표준편차·95% CI 반폭(Student t). 목록·정의는 [SIMULATION.md](SIMULATION.md) 9.3. CSV 열 `period,scope,item,kind,measure,n,mean,std,ci95`.
@@ -335,7 +406,7 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 | 최대 메모리 네이티브 / wasm | 7.9 / 8 MB | 32.7 / 24 MB | 11.4 / 10 MB | 34.4 / 26 MB |
 | 결과 digest(네이티브 = wasm) | a6a4ebb859444917 | 3812b426031492da | 902437158169298d | ad6cd4f70849b303 |
 
-- 결정성: 네 데이터셋 모두 네이티브·wasm 결과가 비트 단위로 같다(digest 일치, Node.js에서도 동일).
+- 결정성: 네 데이터셋 모두 네이티브·wasm(브라우저·Node.js)·Python wheel 결과가 비트 단위로 같다(digest 일치). Python은 실행 중 GIL을 놓아 DS1–4를 스레드 4개로 동시에 실행하면 42 s(각각 단독 27–35 s).
 - 2년(730 d, 웹 기본값) 네이티브: 12.6·12.1·14.9·16.8 s. 병렬: DS3 2년 20회 16스레드 57 s.
 - 이전 구현 대비(같은 1,460 d): 34.5·32.7·40.7·47.5 s → 25.4·23.5·29.7·33.0 s(26–31% 단축, 결과 동일). 대기열 항목(도착 시 순위 입력 고정), 선택당 공통 입력 1회 계산, LTO·단일 코드 생성 단위. Stopping 재평가를 임계 해제 사건으로 바꿔 DS4 180 d 스테퍼 5/10 실행 77.8 → 6.3 s.
 - 참고 기준(하드웨어 상이): AutoSched AP 1,460 d 1회 — DS1 36:02(lot-step 34.69 M), DS2 31:30(30.01 M), DS3 40:48(39.04 M), DS4 39:58(38.15 M).
@@ -343,34 +414,36 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 ## 구현 구조
 
 ```text
-crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프, 관측 사건
-crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더·데이터셋 파일, 시뮬레이션 모델, 전략, 통계, 측정값·복제 요약. wasm 의존 없음
+crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프, 종료 시각, 관측 사건
+crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더·데이터셋 파일, Simulation(단계 실행·상태), 전략, 통계, 측정값·복제 요약. 바인딩 의존 없음
 crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert, run, validate
-crates/wasm/      wasm-bindgen cdylib(패키지 fab-wasm): Dataset, run, summarize, csv, digest
-www/              index.html, style.css, main.js(폼·워커 풀·진행), results.js(결과 표시), i18n.js(문구·숫자 형식), locales/(en·ko 문구), worker.js(복제 실행), data/(DS1–4 데이터셋 파일), pkg/(빌드 산출)
+crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, summarize, csv, digest. tests/(Node API 테스트)
+crates/python/    Python 포장, PyO3 cdylib(패키지 smt2020-python, maturin wheel smt2020): 같은 API + load_dataset(DS1–4 동봉), smt2020.pyi(타입), tests/(unittest)
+www/              index.html, style.css, main.js(폼·워커 풀·진행·wheel 목록), results.js(결과 표시), i18n.js(문구·숫자 형식), locales/(en·ko 문구), worker.js(복제 실행), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
 - DES 코어(`des-core`): 사건 스케줄링 관점, 다음 사건 시각으로 시계 진행.
   - `Model`: 상태 + 초기화 루틴 `init`(t=0, 1회) + 사건 루틴 `handle`.
   - `Scheduler`: 시계 `now`, `schedule_at`·`schedule_in`, `stop`(현재 사건 후 실행 종료). 과거 시각 예약은 panic(인과성 위반).
-  - `Simulation`: `run`(정지 또는 사건 소진까지), `run_observed(interval, 관찰자)`(관측 사건열을 시각 순으로 병합, 관찰자가 중단 가능). `events_processed` = 모델 사건 수.
+  - `Simulation`: `run(until)`(`until` 이하 사건 처리 후 시계 = `until`, 정지·사건 소진 시 먼저 종료, 다음 실행이 이어서 진행), `run_observed(until, interval, 관찰자)`(`interval` 격자의 관측 사건열을 시각 순으로 병합, 일시정지 후에도 같은 격자, 관찰자가 중단 가능). `events_processed` = 모델 사건 수.
   - 미래 사건 목록: (시각, 예약 순번) 최소 힙(`BinaryHeap`, 동시각 FIFO, 페이로드 비교 없음).
 - 데이터(`smt2020::data`·`asd`): `options.def`의 활성 파일(또는 지정 order 파일)만 읽어 `Dataset` 생성(이름 → 인덱스, 시간 ms, 날짜는 SIM_START 기준).
   - 지원 범위 밖 값·조합(예: STNCAP 1·2 외, MINRUN 외 setup 기준, SEQ_ADDS_SETUP_DELAYS Y)은 무시하지 않고 `파일:행` 오류.
   - 검증: 이름 참조(툴그룹·스텝·setup·캘린더·부품·위치), per_batch ⇔ 배치 TG(0 < BATCHMN ≤ BATCHMX), cascading 간격 ⇔ STNCAP 2(0 < c ≤ 최소 공정시간), LTL·CQT 대상은 뒤 스텝, 리워크 대상은 앞 스텝(확률 < 100%), CQT 시작·종료 스텝과 배치·setup run 스텝은 샘플링 100%, 배치·setup run 스텝은 리워크 루프 밖(대기 lot의 도착 보장), fromto 쌍·순위 중복 없음(FIFO·CR 동시 불가), 투입 ≥ SIM_START, 기간 오름차순.
-- 시뮬레이션(`smt2020::sim`): `run`·`run_observed`. 종료는 마지막 lot 완료 사건의 `stop`, 기한(종료 + 365 d)도 사건이다(상태 반복 확인 없음).
-  - 모듈: `fab`(모델·사건 처리·대기열 항목), `dispatch`(툴·lot 선택, 배치 구성, Stopping 보류 표시), `tool`(job 단계·cascading·정지·상태 집계), `routes`(기대 스텝시간·잔여 작업·RPT·CQT 구간 TG 사전 계산), `plan`(투입 계획), `stats`(통계·결과·digest), `strategy`(전략·Stopping 해제 판정), `rng`.
+- 시뮬레이션(`smt2020::sim`): `Simulation`이 데이터셋(`Arc`, 시뮬레이션 간 공유)·설정·pass·des-core 실행기를 소유하고 [실행 흐름](#실행-흐름)을 구현한다. 종료는 마지막 lot 완료 사건의 `stop`, 기한(종료 + 365 d)도 사건이다(상태 반복 확인 없음). 상태 조회는 모델을 읽기만 한다(집계 갱신 없음, 결과 불변).
+  - 모듈: `fab`(모델·사건 처리·대기열 항목), `dispatch`(툴·lot 선택, 배치 구성, Stopping 보류 표시), `tool`(job 단계·cascading·정지·상태 집계), `status`(lot·툴·툴그룹 상태), `routes`(기대 스텝시간·잔여 작업·RPT·CQT 구간 TG 사전 계산), `plan`(투입 계획), `stats`(통계·결과·digest), `strategy`(전략·Stopping 해제 판정), `rng`.
 - 측정값(`smt2020::report`): 결과 → 측정값(논문 단위), 복제 요약(평균·표본 표준편차·Student t 95% CI), CSV.
 - 도메인 엔진: 엔티티 `Vec` + 인덱스 id(lot·툴·TG·스텝, route는 평탄 배열), `Event`는 작은 enum. 고장 중단 시 툴 epoch를 올려 기존 사건을 무효화(lazy deletion)하고 재스케줄.
 - 대기열: TG별 `Vec` 항목. 도착 시 순위 입력(우선순위, 도착 시각, 납기, 잔여 작업, setup, LTL 전용 툴, 배치 키, CQT 긴급도 입력)을 고정해 디스패칭이 lot·route 자료 대신 연속 메모리를 순회한다. 유휴 툴은 TG별 FIFO.
 - 디스패칭은 사건(도착, job 종료, 수리, PM 종료, 예약 해제, Stopping 임계 해제)에서만 실행한다.
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터셋 파일: postcard + 매직·형식 버전. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
-- 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 진행률은 워커 `postMessage`, 취소는 `worker.terminate()`. 경계 입출력은 serde-wasm-bindgen(JSON 호환 객체), `i64`는 경계에서 f64(2^53 ms까지 정확).
+- 바인딩: 코어 메서드를 그대로 위임하고 값은 serde 스키마로 변환한다(JS: serde-wasm-bindgen JSON 호환 객체, `i64`는 경계에서 f64(2^53 ms까지 정확). 설정은 JSON 값을 거쳐 읽어 미지 필드를 검출(구조체 역직렬화는 알려진 속성만 읽음). Python: pythonize dict·list). 관찰자 반환값 `false`/`False`만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 1일마다 다시 잡아 관찰자·Ctrl-C를 처리한다.
+- 웹: 복제 1회 = Web Worker 1개(`navigator.hardwareConcurrency`만큼 병렬, 워커마다 `Simulation`). SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 진행률은 워커 `postMessage`, 취소는 `worker.terminate()`.
 - 다국어: 언어별 문구 파일(`www/locales/*.js`, `en.js`와 같은 키, `{이름}` 자리 표시, 빠진 키는 영어). 정적 요소는 `data-i18n` 키, 동적 문구는 `t()`, 숫자는 `Intl.NumberFormat`. 상태 문구·결과는 언어 전환 시 다시 그린다. 언어 추가 = 문구 파일 + `www/i18n.js`의 `LANGUAGES`·`MESSAGES` 등록.
 - 빌드: release 프로필 `lto = true`, `codegen-units = 1`, `panic = "abort"`(네이티브 약 7% 단축, 결과 동일).
-- 의존성: rand_xoshiro·libm·serde·postcard(`smt2020`), clap·serde_json(`smt2020-cli`), wasm-bindgen·js-sys·serde-wasm-bindgen(`fab-wasm`).
+- 의존성: rand_xoshiro·libm·serde·postcard(`smt2020`), clap·serde_json(`smt2020-cli`), wasm-bindgen·js-sys·serde-wasm-bindgen·serde_json(`fab-wasm`), pyo3(abi3-py39)·pythonize(`smt2020-python`).
 
 ## 구현 단계
 
@@ -382,11 +455,12 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 6. 운영 전략: QTCR·QTS·Stopping·EF·CAtE·CoT — 완료
 7. `cli`: convert(.bin)·run·validate, 데이터셋 파일, 측정값·복제 요약, 사건 구동 종료·관측 — 완료
 8. `wasm` API·웹 UI·결정성 확인·성능 측정 — 완료
+9. 재사용 코어: `Simulation`(단계 실행·일시정지·상태 조회·재시작), JS·Python 포장(같은 API), wheel 배포 — 완료
 
 ## 로컬 빌드·테스트
 
 ```bash
-cargo test
+cargo test   # 기본 멤버(crates/python 제외)
 cargo test -p smt2020 --release -- --ignored   # 실데이터 로드·데이터셋 파일 왕복, 동봉 데이터셋 파일 = 원천 변환, 4개 데이터셋 2년 계획 완료, 전략 완료(data/raw 필요)
 cargo build --release -p smt2020-cli
 # 데이터셋 파일(커밋 대상) 재생성: 로더·형식 변경 시
@@ -395,6 +469,11 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129   # crates/wasm/Cargo.toml의 wasm-bindgen 버전과 같아야 함
 cargo build --release --target wasm32-unknown-unknown -p fab-wasm
 wasm-bindgen --target web --no-typescript --out-dir www/pkg target/wasm32-unknown-unknown/release/fab_wasm.wasm
+node --test crates/wasm/tests/api.test.mjs   # JS API(www/pkg 필요)
+pip install maturin
+maturin build --release -m crates/python/Cargo.toml --out dist   # 현재 플랫폼 wheel
+pip install --no-index --find-links dist smt2020
+python -m unittest discover -s crates/python/tests   # Python API
 python -m http.server -d www
 ```
 
@@ -402,4 +481,7 @@ python -m http.server -d www
 
 ## 배포
 
-`main`에 push하면 `.github/workflows/pages.yml`이 테스트(동봉 데이터셋 파일을 현재 빌드로 디코딩 포함)·빌드 후 `www/`(데이터셋 파일 포함)를 GitHub Pages로 배포한다.
+`main`에 push하면 `.github/workflows/pages.yml`이 실행된다.
+
+1. wheel: Linux(manylinux x86-64)·Windows(x64)·macOS(universal2)에서 maturin으로 빌드하고, 각 플랫폼에서 설치해 Python API 테스트를 돌린다.
+2. 페이지: Rust 테스트(동봉 데이터셋 파일을 현재 빌드로 디코딩 포함), wasm 빌드, JS API 테스트 후 wheel을 `www/python/`에 모아 목록(`index.html`, 페이지의 내려받기·pip `--find-links` 공용)을 만들고 `www/`(데이터셋 파일 포함)를 GitHub Pages로 배포한다.

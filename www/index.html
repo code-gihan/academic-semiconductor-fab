@@ -152,6 +152,32 @@
         <p class="hint" id="performance"></p>
       </details>
     </section>
+
+    <section id="python">
+      <h2 data-i18n="python.heading"></h2>
+      <p data-i18n="python.intro"></p>
+      <pre><code id="python-install"></code></pre>
+      <p class="hint" id="wheels-note"></p>
+      <ul id="wheels" class="wheels"></ul>
+      <h3 data-i18n="python.quickstart"></h3>
+      <pre><code>import smt2020
+from smt2020 import DAY
+
+dataset = smt2020.load_dataset("ds2")  # bundled ds1-ds4, a .bin file or an AutoSched model
+simulation = smt2020.Simulation(dataset, {"horizon": 730 * DAY, "queue_time": "qtcr"})
+
+simulation.run(until=100 * DAY)  # paused at day 100
+print(simulation.progress())  # now, released, completed, wip, finished
+queues = {group["name"]: group["queue"] for group in simulation.tool_groups()}
+queued = [lot for lot in simulation.lots() if lot["state"] == "queued"]
+
+simulation.run(on_progress=lambda progress: progress["wip"] &lt; 2500)  # pauses at a WIP of 2,500
+simulation.run()  # to the end: every released lot complete
+summary = smt2020.summarize([simulation.results()])
+
+simulation.reset({**simulation.config(), "queue_time": "qts"})  # starts over with another strategy</code></pre>
+      <p class="hint"><span data-i18n="python.more"></span> <a href="https://github.com/code-gihan/academic-semiconductor-fab#quick-start">README</a></p>
+    </section>
   </main>
 
   <footer>

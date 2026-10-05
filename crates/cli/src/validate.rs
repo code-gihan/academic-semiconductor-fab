@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use smt2020::report::{self, Measure, Scope, Summary};
 use smt2020::sim::LotKind;
@@ -53,7 +54,7 @@ impl Comparison {
 
 pub fn run(args: &Args) -> Result<(), Box<dyn Error>> {
     let asd = model_directory(&args.model)?;
-    let dataset = asd::load(&asd)?;
+    let dataset = Arc::new(asd::load(&asd)?);
     let orders = asd::orders(&asd)?;
     let config = Config {
         seed: args.seed,

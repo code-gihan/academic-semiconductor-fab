@@ -67,7 +67,7 @@ fn departures_match_lindley_recursion() {
         in_service: None,
         departures: Vec::new(),
     });
-    assert_eq!(sim.run(), Outcome::Exhausted);
+    assert_eq!(sim.run(Time::MAX), Outcome::Exhausted);
 
     let mut last_departure = 0;
     let expected: Vec<(usize, Time)> = arrivals

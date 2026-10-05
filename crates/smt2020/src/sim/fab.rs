@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::mem;
+use std::sync::Arc;
 
 use des_core::{Model, Scheduler, Time};
 
@@ -51,11 +52,16 @@ pub(super) enum Event {
     Deadline,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum LotState {
-    Moving,
-    Queued,
-    Processing,
+named_enum! {
+    /// Where a lot is at its current step.
+    pub enum LotState {
+        /// On the way to the step's tool group.
+        Moving = "moving",
+        /// In the tool group's queue.
+        Queued = "queued",
+        /// In a job on a tool.
+        Processing = "processing",
+    }
 }
 
 /// Open CQT segment: from the end of step `entry` to the start of step `exit`.
@@ -154,8 +160,8 @@ struct Period {
     reset: bool,
 }
 
-pub(super) struct Fab<'a> {
-    pub data: &'a Dataset,
+pub(super) struct Fab {
+    pub data: Arc<Dataset>,
     pub routes: Routes,
     pub strategy: Strategy,
     pub plan: Plan,
@@ -189,18 +195,18 @@ pub(super) struct Fab<'a> {
     pub order: Vec<ToolId>,
 }
 
-impl<'a> Fab<'a> {
+impl Fab {
     pub(super) fn new(
-        data: &'a Dataset,
+        data: Arc<Dataset>,
         config: &Config,
         flow_factors: Option<&[Vec<Option<f64>>]>,
     ) -> Result<Self, Error> {
         if config.horizon <= 0 {
             return Err(Error("the horizon must be positive".into()));
         }
-        let strategy = Strategy::new(data, config, flow_factors)?;
-        let routes = Routes::new(data, &strategy.steppers);
-        let plan = Plan::new(data, config.horizon, config.load)?;
+        let strategy = Strategy::new(&data, config, flow_factors)?;
+        let routes = Routes::new(&data, &strategy.steppers);
+        let plan = Plan::new(&data, config.horizon, config.load)?;
 
         let mut periods = Vec::new();
         for (index, period) in data.periods.iter().enumerate() {
@@ -250,6 +256,7 @@ impl<'a> Fab<'a> {
         }
 
         Ok(Self {
+            stats: Stats::new(&data),
             data,
             routes,
             strategy,
@@ -265,7 +272,6 @@ impl<'a> Fab<'a> {
             groups,
             setup_times,
             transports,
-            stats: Stats::new(data),
             reports: Vec::new(),
             step_flow_factors: Vec::new(),
             released: 0,
@@ -284,8 +290,21 @@ impl<'a> Fab<'a> {
         self.finished.is_some()
     }
 
+    pub(super) fn released(&self) -> u64 {
+        self.released
+    }
+
+    pub(super) fn completed(&self) -> u64 {
+        self.completed
+    }
+
     pub(super) fn wip(&self) -> usize {
         self.wip
+    }
+
+    /// QTS flow factors measured up to the horizon; empty before it.
+    pub(super) fn step_flow_factors(&self) -> &[Vec<Option<f64>>] {
+        &self.step_flow_factors
     }
 
     pub(super) fn results(&self, events: u64) -> Results {
@@ -401,12 +420,13 @@ impl<'a> Fab<'a> {
 
     /// Sends a lot to its next processed step (metrology sampling may skip steps), or completes it.
     fn advance(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
-        let data = self.data;
-        let steps = &data.routes[self.lots[id].route].steps;
+        let steps = &self.data.routes[self.lots[id].route].steps;
         let mut step = self.lots[id].step;
         while step < steps.len() && !self.rng.chance(Purpose::Sampling, steps[step].sampling) {
             step += 1;
         }
+        // Tool group of the next processed step; none past the last step.
+        let next = steps.get(step).map(|next| next.tool_group);
         self.lots[id].step = step;
         if let Some(group) = self.lots[id].reservation
             && self.groups[group]
@@ -416,14 +436,14 @@ impl<'a> Fab<'a> {
         {
             self.release_reservation(group, sched);
         }
-        if step == steps.len() {
+        let Some(group) = next else {
             self.complete(id, sched);
             return;
-        }
-        let to = data.tool_groups[steps[step].tool_group].location;
+        };
+        let to = self.data.tool_groups[group].location;
         let transport = self.lots[id]
             .location
-            .and_then(|from| self.transports[from * data.locations.len() + to]);
+            .and_then(|from| self.transports[from * self.data.locations.len() + to]);
         let delay = transport.map_or(0, |time| self.rng.sample(Purpose::Transport, time));
         self.lots[id].state = LotState::Moving;
         self.count_segment(id, 1);
@@ -542,14 +562,14 @@ impl<'a> Fab<'a> {
 
     /// Starts the lots in `selected` (one lot or a batch) on `tool`.
     pub(super) fn start_job(&mut self, tool_id: ToolId, sched: &mut Scheduler<Event>) {
-        let data = self.data;
         let now = sched.now();
         let lots = mem::take(&mut self.selected);
         let head = &self.lots[lots[0]];
         let (route, step_index) = (head.route, head.step);
-        let step = &data.routes[route].steps[step_index];
+        let step = &self.data.routes[route].steps[step_index];
         let group_id = step.tool_group;
-        let group = &data.tool_groups[group_id];
+        let group = &self.data.tool_groups[group_id];
+        let rule = group.rule;
         self.groups[group_id]
             .queue
             .retain(|waiting| !lots.contains(&waiting.lot));
@@ -565,11 +585,11 @@ impl<'a> Fab<'a> {
                 .map(Dist::Constant)
                 .or_else(|| self.setup_dist(current, needed.setup));
             setup = dist.map_or(0, |dist| self.rng.sample(Purpose::Setup, dist));
-            if let Rule::SetupRun(setup_group) = group.rule
+            if let Rule::SetupRun(setup_group) = rule
                 && current != Some(needed.setup)
             {
                 // A new setup run must reach the group's minimum run length.
-                self.tools[tool_id].run_left = data.setup_groups[setup_group]
+                self.tools[tool_id].run_left = self.data.setup_groups[setup_group]
                     .min_run
                     .iter()
                     .find(|run| run.0 == needed.setup)
@@ -577,7 +597,7 @@ impl<'a> Fab<'a> {
             }
             self.tools[tool_id].setup = Some(needed.setup);
         }
-        if let Rule::SetupRun(_) = group.rule {
+        if let Rule::SetupRun(_) = rule {
             let tool = &mut self.tools[tool_id];
             tool.run_left = tool.run_left.saturating_sub(1);
         }
@@ -635,7 +655,7 @@ impl<'a> Fab<'a> {
             if self.lots[id].reservation == Some(group_id) {
                 self.release_reservation(group_id, sched);
             }
-            if self.lots[id].reserve && group.rule == Rule::HotLotFirst {
+            if self.lots[id].reserve && rule == Rule::HotLotFirst {
                 self.reserve_next(id, sched);
             }
         }
@@ -661,11 +681,10 @@ impl<'a> Fab<'a> {
     }
 
     fn finish_step(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
-        let data = self.data;
         let now = sched.now();
         self.count_segment(id, -1);
         let lot = &mut self.lots[id];
-        let step = &data.routes[lot.route].steps[lot.step];
+        let step = &self.data.routes[lot.route].steps[lot.step];
         let info = &self.routes.info[lot.route];
         self.stats.step(
             lot.route,
@@ -673,7 +692,7 @@ impl<'a> Fab<'a> {
             (now - lot.last_done) as f64 / info.step[lot.step].at(lot.wafers),
         );
         lot.last_done = now;
-        lot.location = Some(data.tool_groups[step.tool_group].location);
+        lot.location = Some(self.data.tool_groups[step.tool_group].location);
         if lot
             .segment
             .as_ref()
@@ -839,14 +858,13 @@ impl<'a> Fab<'a> {
 
     /// Reserves a tool of the next step's group for the lot (`rule_HotLotFIRST` groups only).
     fn reserve_next(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
-        let data = self.data;
         let lot = &self.lots[id];
         let step = lot.step + 1;
-        let Some(next) = data.routes[lot.route].steps.get(step) else {
+        let Some(next) = self.data.routes[lot.route].steps.get(step) else {
             return;
         };
         let group = next.tool_group;
-        if data.tool_groups[group].rule != Rule::HotLotFirst
+        if self.data.tool_groups[group].rule != Rule::HotLotFirst
             || self.groups[group].reservation.is_some()
         {
             return;
@@ -962,7 +980,7 @@ impl<'a> Fab<'a> {
         self.stats.wip(now, self.wip);
         if report {
             self.reports
-                .push(self.stats.report(name, now, self.data, &self.tools));
+                .push(self.stats.report(name, now, &self.data, &self.tools));
         }
         if reset {
             self.stats.reset(now);
@@ -973,7 +991,7 @@ impl<'a> Fab<'a> {
     }
 }
 
-impl Model for Fab<'_> {
+impl Model for Fab {
     type Event = Event;
 
     fn init(&mut self, sched: &mut Scheduler<Event>) {

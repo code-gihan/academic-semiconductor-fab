@@ -62,6 +62,8 @@ impl<E> Scheduler<E> {
 pub enum Outcome {
     /// The model called [`Scheduler::stop`].
     Stopped,
+    /// The clock reached the end time of the run.
+    Reached,
     /// The observer broke the run off.
     Interrupted,
     /// No event was left.
@@ -91,19 +93,22 @@ impl<M: Model> Simulation<M> {
         }
     }
 
-    /// Handles events in (time, scheduling order) until the model stops the run or no event is
-    /// left.
-    pub fn run(&mut self) -> Outcome {
-        self.run_observed(Time::MAX, |_, _| ControlFlow::Continue(()))
+    /// Handles the events up to `until` (inclusive) in (time, scheduling order), then sets the
+    /// clock to `until`; ends earlier when the model stops the run or no event is left. A later
+    /// run continues with the pending events; `Time::MAX` runs without end time.
+    pub fn run(&mut self, until: Time) -> Outcome {
+        self.run_observed(until, Time::MAX, |_, _| ControlFlow::Continue(()))
     }
 
-    /// [`run`](Self::run) with an observation event every `interval` from now: the observer sees
-    /// the model after every event up to the observation time and may break the run off.
+    /// [`run`](Self::run) with an observation at every multiple of `interval` up to `until`: the
+    /// observer sees the model after every event up to the observation time and may break the run
+    /// off.
     ///
     /// # Panics
     /// If `interval` is not positive.
     pub fn run_observed(
         &mut self,
+        until: Time,
         interval: Time,
         mut observe: impl FnMut(&M, Time) -> ControlFlow<()>,
     ) -> Outcome {
@@ -111,19 +116,24 @@ impl<M: Model> Simulation<M> {
             interval > 0,
             "observation interval {interval} is not positive"
         );
-        // The observation events form a second, periodic event stream merged in time order.
-        let mut observation = self.sched.now.saturating_add(interval);
+        // The observations form a second event stream on the grid of `interval`, merged in time
+        // order; a run resumed between grid points keeps the grid.
+        let mut observation = (self.sched.now / interval + 1).saturating_mul(interval);
         loop {
             let Some(next) = self.sched.queue.next_time() else {
                 return Outcome::Exhausted;
             };
-            if observation < next {
+            if observation < next && observation <= until {
                 self.sched.now = observation;
                 if observe(&self.model, observation).is_break() {
                     return Outcome::Interrupted;
                 }
                 observation = observation.saturating_add(interval);
                 continue;
+            }
+            if next > until {
+                self.sched.now = self.sched.now.max(until);
+                return Outcome::Reached;
             }
             let (time, event) = self.sched.queue.pop().expect("a next event");
             self.sched.now = time;
@@ -194,7 +204,7 @@ mod tests {
     #[test]
     fn runs_in_time_then_scheduling_order_until_stopped() {
         let mut sim = simulation(&[(DAY, "stop"), (10, "spawn"), (10, "peer"), (2 * DAY, "c")]);
-        assert_eq!(sim.run(), Outcome::Stopped);
+        assert_eq!(sim.run(Time::MAX), Outcome::Stopped);
         assert_eq!(
             sim.model().log,
             [
@@ -207,15 +217,30 @@ mod tests {
         );
         assert_eq!((sim.now(), sim.events_processed()), (DAY, 5));
         // Pending events stay: the next run continues with them.
-        assert_eq!(sim.run(), Outcome::Exhausted);
+        assert_eq!(sim.run(Time::MAX), Outcome::Exhausted);
         assert_eq!(sim.model().log.last(), Some(&(2 * DAY, "c")));
+    }
+
+    #[test]
+    fn runs_end_at_their_end_time_and_continue_from_it() {
+        let mut sim = simulation(&[(0, "a"), (DAY, "b"), (DAY, "c"), (2 * DAY, "d")]);
+        // Events at the end time are handled; the clock stops there.
+        assert_eq!(sim.run(DAY), Outcome::Reached);
+        assert_eq!((sim.now(), sim.model().log.len()), (DAY, 3));
+        // An end time already passed leaves the clock as it is.
+        assert_eq!(sim.run(DAY / 2), Outcome::Reached);
+        assert_eq!((sim.now(), sim.model().log.len()), (DAY, 3));
+        assert_eq!(sim.run(DAY + HOUR), Outcome::Reached);
+        assert_eq!(sim.now(), DAY + HOUR);
+        assert_eq!(sim.run(Time::MAX), Outcome::Exhausted);
+        assert_eq!((sim.now(), sim.events_processed()), (2 * DAY, 4));
     }
 
     #[test]
     fn observations_follow_every_event_up_to_their_time() {
         let mut sim = simulation(&[(0, "a"), (DAY, "b"), (DAY + 1, "c"), (3 * DAY, "d")]);
         let mut seen = Vec::new();
-        let outcome = sim.run_observed(DAY, |model, now| {
+        let outcome = sim.run_observed(Time::MAX, DAY, |model, now| {
             seen.push((now, model.log.len()));
             ControlFlow::Continue(())
         });
@@ -226,9 +251,30 @@ mod tests {
     }
 
     #[test]
+    fn observations_keep_their_grid_across_runs() {
+        let mut sim = simulation(&[(0, "a"), (5 * DAY, "b")]);
+        let mut seen = Vec::new();
+        let mut observe = |_: &Recorder, now| {
+            seen.push(now);
+            ControlFlow::Continue(())
+        };
+        // Observed up to and at the end time, then on the same grid after it.
+        assert_eq!(
+            sim.run_observed(2 * DAY, DAY, &mut observe),
+            Outcome::Reached
+        );
+        assert_eq!(sim.run(2 * DAY + HOUR), Outcome::Reached);
+        assert_eq!(
+            sim.run_observed(Time::MAX, DAY, &mut observe),
+            Outcome::Exhausted
+        );
+        assert_eq!(seen, [DAY, 2 * DAY, 3 * DAY, 4 * DAY]);
+    }
+
+    #[test]
     fn observer_breaks_the_run_off() {
         let mut sim = simulation(&[(0, "a"), (5 * DAY, "b")]);
-        let outcome = sim.run_observed(DAY, |_, now| {
+        let outcome = sim.run_observed(Time::MAX, DAY, |_, now| {
             if now == 2 * DAY {
                 ControlFlow::Break(())
             } else {
@@ -244,6 +290,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "scheduled in the past")]
     fn scheduling_in_the_past_panics() {
-        simulation(&[(10, "rewind")]).run();
+        simulation(&[(10, "rewind")]).run(Time::MAX);
     }
 }

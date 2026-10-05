@@ -30,7 +30,7 @@ fn compare(a: &Key, b: &Key) -> Ordering {
         .unwrap_or(Ordering::Equal)
 }
 
-impl Fab<'_> {
+impl Fab {
     /// Lets the group's ready tools pick lots, longest available first; for a lot arriving at a
     /// `wake_LeastSetupTime` group, the tools needing the least setup for it first.
     pub(super) fn dispatch(

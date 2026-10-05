@@ -46,6 +46,8 @@ const threads = navigator.hardwareConcurrency || 4;
 let active = null;
 let finished = null;
 let statusText = () => "";
+/** Python wheels published next to the page: file URLs. */
+let wheels = [];
 
 initLanguage();
 const languages = Object.entries(LANGUAGES);
@@ -54,11 +56,13 @@ $("language").replaceChildren(
 );
 describeForm();
 setStatus(() => t("status.loadingWasm"));
+loadWheels();
 
 $("language").addEventListener("change", (event) => {
   setLanguage(event.target.value);
   describeForm();
   setStatus(statusText);
+  showWheels();
   if (finished) showResults(finished, $("period").value);
 });
 form.addEventListener("change", (event) => {
@@ -358,6 +362,46 @@ function setRunning(running) {
 function setStatus(render) {
   statusText = render;
   $("status").textContent = render();
+}
+
+/** Reads the wheel index the deployment writes (python/index.html, pip's --find-links page);
+ * a copy of the page without it offers none. */
+async function loadWheels() {
+  try {
+    const response = await fetch("python/");
+    if (response.ok) {
+      const index = new DOMParser().parseFromString(await response.text(), "text/html");
+      wheels = [...index.querySelectorAll('a[href$=".whl"]')].map(
+        (link) => new URL(link.getAttribute("href"), response.url).href,
+      );
+    }
+  } catch {
+    // No index reachable: no wheels.
+  }
+  showWheels();
+}
+
+/** The pip command and the wheels by platform. */
+function showWheels() {
+  const index = new URL("python/", location.href).href;
+  $("python-install").textContent = `pip install smt2020 --no-index --find-links ${index}`;
+  $("wheels-note").textContent = t(wheels.length > 0 ? "python.downloads" : "python.none");
+  $("wheels").replaceChildren(
+    ...wheels.map((url) => {
+      const file = url.slice(url.lastIndexOf("/") + 1);
+      const platform = file.includes("win_amd64")
+        ? "python.windows"
+        : file.includes("macosx")
+          ? "python.macos"
+          : "python.linux";
+      const link = Object.assign(document.createElement("a"), { href: url, textContent: t(platform) });
+      const name = Object.assign(document.createElement("span"), { className: "hint" });
+      name.textContent = ` ${file}`;
+      const item = document.createElement("li");
+      item.append(link, name);
+      return item;
+    }),
+  );
 }
 
 /** The results in the JSON form of the command line's --json output. */

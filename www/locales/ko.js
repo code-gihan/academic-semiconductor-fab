@@ -173,6 +173,17 @@ export default {
   "common.on": "켬",
   "common.off": "끔",
 
+  "python.heading": "Python 패키지",
+  "python.intro":
+    "같은 시뮬레이터를 데이터셋 4종과 함께 Python 모듈로 씁니다(Python 3.9 이상, Windows·Linux·macOS). 코드에서 시뮬레이션을 실행·일시정지·조회·초기화합니다. 이 페이지에서 설치합니다:",
+  "python.downloads": "또는 플랫폼에 맞는 wheel을 내려받습니다:",
+  "python.none": "wheel은 페이지를 배포할 때 만들어지며, 이 사본에는 없습니다.",
+  "python.windows": "Windows (x64)",
+  "python.linux": "Linux (x86-64)",
+  "python.macos": "macOS (Intel, Apple silicon)",
+  "python.quickstart": "빠른 시작",
+  "python.more": "모든 함수와 옵션(JavaScript·Rust 포함):",
+
   "footer.references": "참고 문헌",
   "footer.data":
     "데이터: SMT2020 testbed release 1.0(2020), FernUniversität in Hagen. 데이터셋 파일은 그 AutoSched AP 모델을 변환한 것입니다.",

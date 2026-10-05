@@ -1,18 +1,20 @@
 //! Loads and runs the four SMT2020 AutoSched datasets from `data/raw` (the extracted
 //! `SMT_2020 - Final` folder, not committed): `cargo test -p smt2020 --release -- --ignored`.
 //! Expected values were read off the raw files. The web page's dataset files (`www/data`) are
-//! checked without the raw data.
+//! checked, and run in steps, without the raw data.
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::ops::ControlFlow::{Break, Continue};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use smt2020::asd::{self, Order};
 use smt2020::data::{
     BatchCriterion, BatchSize, Breakdown, Cqt, Dataset, Dist, LotRelease, Pm, PmTrigger, Rank,
     ReleaseStream, Rule, ToolGroup, Unit,
 };
-use smt2020::sim::{self, Config, EngineeringRule, Limits, QueueTimeRule, Results, Stopping};
+use smt2020::sim::{Config, EngineeringRule, Limits, QueueTimeRule, Results, Simulation, Stopping};
 use smt2020::{DAY, HOUR, MINUTE, SECOND};
 
 fn model_dir(dataset: &str, model: &str) -> PathBuf {
@@ -402,9 +404,40 @@ fn page_datasets_match_raw() {
     }
 }
 
+/// Pausing leaves a run unchanged: the page's DS1 at day 5, reached at once or in steps.
+#[test]
+fn paused_runs_reach_the_same_state() {
+    let data = Arc::new(Dataset::from_bytes(&page_dataset(1)).unwrap());
+    let config = Config::new(30 * DAY);
+    let mut straight = Simulation::new(Arc::clone(&data), config.clone()).unwrap();
+    straight.run(Some(5 * DAY)).unwrap();
+    let mut stepped = Simulation::new(data, config).unwrap();
+    stepped.run(Some(DAY + 7 * HOUR)).unwrap();
+    stepped
+        .run_observed(None, |progress| {
+            if progress.now == 3 * DAY {
+                Break(())
+            } else {
+                Continue(())
+            }
+        })
+        .unwrap();
+    stepped.run(Some(5 * DAY)).unwrap();
+    assert_eq!(stepped.progress(), straight.progress());
+    assert!(stepped.progress().wip > 2_000);
+    assert_eq!(stepped.lots(), straight.lots());
+    assert_eq!(stepped.tools(), straight.tools());
+    assert_eq!(stepped.tool_groups(), straight.tool_groups());
+}
+
 /// Runs `config`; every lot of the plan must complete.
-fn complete(dataset: &Dataset, config: &Config) -> Results {
-    let results = sim::run(dataset, config).unwrap_or_else(|error| panic!("{error}"));
+fn complete(dataset: &Arc<Dataset>, config: &Config) -> Results {
+    let results = Simulation::new(Arc::clone(dataset), config.clone())
+        .and_then(|mut simulation| {
+            simulation.run(None)?;
+            simulation.results()
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
     assert!(results.released > 0);
     assert_eq!(results.completed, results.released);
     assert_eq!(
@@ -416,7 +449,7 @@ fn complete(dataset: &Dataset, config: &Config) -> Results {
 
 /// The papers' two-year runs ([P1] §V, [P2] §4.2).
 fn plan_completes(dataset: &str, model: &str) {
-    complete(&load(dataset, model), &Config::new(730 * DAY));
+    complete(&Arc::new(load(dataset, model)), &Config::new(730 * DAY));
 }
 
 #[test]
@@ -447,7 +480,7 @@ fn dataset_4_plan_completes() {
 #[test]
 #[ignore = "needs the SMT2020 data in data/raw"]
 fn strategies_complete() {
-    let ds = load("dataset 4", "LVHM_E_Model");
+    let ds = Arc::new(load("dataset 4", "LVHM_E_Model"));
     let base = Config::new(180 * DAY);
     let flow_factors = complete(&ds, &base).step_flow_factors;
     // Stepper limits low enough to hold lots in the default CQT segments ([P2] Table 3 shape).

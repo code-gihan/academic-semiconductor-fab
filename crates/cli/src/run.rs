@@ -6,15 +6,15 @@ use std::error::Error;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
 use serde::Serialize;
 use smt2020::report::{self, Measure, Scope, Summary};
 use smt2020::sim::{self, EngineeringRule, Limits, QueueTimeRule, Stopping};
-use smt2020::{Config, DAY, Dataset, HOUR, Results, Time, asd};
+use smt2020::{Config, DAY, Dataset, HOUR, Results, Simulation, Time, asd};
 
 use crate::heap::Counting;
 
@@ -66,7 +66,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> Result<(), Box<dyn Error>> {
-    let dataset = load(&args.data)?;
+    let dataset = Arc::new(load(&args.data)?);
     let config = config(args)?;
     let threads = threads(args.threads);
     let started = Instant::now();
@@ -251,7 +251,7 @@ pub struct Replication {
 /// Runs replications `config.replication`.. `+ count` on `threads` threads, each taking the next
 /// replication when done; reports every completed replication on stderr.
 pub fn replicate(
-    dataset: &Dataset,
+    dataset: &Arc<Dataset>,
     config: &Config,
     count: u32,
     threads: usize,
@@ -272,7 +272,12 @@ pub fn replicate(
                         ..config.clone()
                     };
                     let started = Instant::now();
-                    let outcome = sim::run(dataset, &config);
+                    let outcome = Simulation::new(Arc::clone(dataset), config.clone()).and_then(
+                        |mut simulation| {
+                            simulation.run(None)?;
+                            simulation.results()
+                        },
+                    );
                     let seconds = started.elapsed().as_secs_f64();
                     failed.fetch_or(outcome.is_err(), Relaxed);
                     eprintln!("replication {} done in {seconds:.1} s", config.replication);

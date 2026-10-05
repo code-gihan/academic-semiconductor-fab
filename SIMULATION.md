@@ -8,12 +8,13 @@
 |---|---|
 | `crates/des-core/src/time.rs` | 시각 `Time = i64` ms, SECOND·MINUTE·HOUR·DAY |
 | `crates/des-core/src/queue.rs` | 미래 사건 목록(FEL) |
-| `crates/des-core/src/engine.rs` | `Model`·`Scheduler`·`Simulation`(사건 루프, 관측 사건, 정지) |
+| `crates/des-core/src/engine.rs` | `Model`·`Scheduler`·`Simulation`(사건 루프, 종료 시각, 관측 사건, 정지) |
 | `crates/smt2020/src/data.rs` | `Dataset` 데이터 모델, 데이터셋 파일 형식 |
 | `crates/smt2020/src/asd.rs`, `asd/table.rs` | AutoSched `.asd` 로더, 표 파서, 입력 검증, order 이름 |
 | `crates/smt2020/src/rng.rs` | 용도별 난수 스트림 |
-| `crates/smt2020/src/sim.rs` | `Config`, `Progress`, `run`·`run_observed`, `Error` |
+| `crates/smt2020/src/sim.rs` | `Config`, `Simulation`(단계 실행·pass·상태·결과), `Progress`, `time`, `Error` |
 | `sim/fab.rs` | 모델 `Fab`: 사건 처리, 투입·이동, 대기열 항목, job, 고장·PM, 예약, Stopping 집계, 기간, 종료 |
+| `sim/status.rs` | 현재 상태: `LotStatus`, `ToolStatus`, `ToolGroupStatus` |
 | `sim/dispatch.rs` | 툴 순서, lot 선택·순위 키, 배치 구성, Stopping 보류 표시 |
 | `sim/tool.rs` | 툴: job 단계 시간표, cascading 슬롯, 일시정지·재개, 상태 시간 집계 |
 | `sim/routes.rs` | route 사전 계산: 기대 스텝시간, 잔여 작업, RPT, CQT litho 여부·구간 TG, 배치 호환 키, setup 구성원 |
@@ -21,16 +22,21 @@
 | `sim/stats.rs` | 통계 창, 기간 보고서, `Results`, digest |
 | `sim/strategy.rs` | 운영 전략 해석·상태, Stopping 임계 해제 판정 |
 | `crates/smt2020/src/report.rs` | 측정값(논문 단위), 복제 요약(평균·95% CI), CSV |
-| `crates/smt2020/tests/datasets.rs` | 실데이터 로드·실행 테스트 |
+| `crates/smt2020/tests/datasets.rs` | 실데이터 로드·실행 테스트, 페이지 데이터셋 단계 실행 |
+| `crates/wasm/src/lib.rs`, `crates/python/src/lib.rs` | JS·Python 포장: 코어 API 위임, 스키마 변환(4.6) |
 
 ```text
 asd::load(dir) ─▶ Dataset ◀─▶ 데이터셋 파일(to_bytes·from_bytes)
-sim::run_observed(&Dataset, &Config, 관찰자)
-  ├─ (QTS, FF 미지정) FF 사전 실행: 같은 설정에서 CQT 규칙·Stopping 제외(8.3)
+Simulation::new(Arc<Dataset>, Config)
+  ├─ (QTS, FF 미지정) 설정 전체 검증 후 1차 pass: 같은 설정에서 CQT 규칙·Stopping 제외(8.3)
   ├─ Fab::new          설정 검증, 전략 해석, route 사전 계산, 투입 계획, 보고 기간, 툴 생성
-  ├─ Simulation::new   Fab::init: 첫 사건·기한 사건 예약
-  ├─ run_observed(1 d) 모델 사건 + 1일 관측 사건(관찰자 호출)
-  └─ 마지막 lot 완료 사건 ─▶ Drain 보고 ─▶ stop ─▶ Results
+  └─ des_core::Simulation::new   Fab::init: 첫 사건·기한 사건 예약 (시각 0)
+run(until)·run_observed(until, 관찰자)   반복 호출 = 이어서 진행
+  ├─ 모델 사건 + 1일 관측 사건(관찰자 호출, Break = 일시정지) + 종료 시각(일시정지)
+  ├─ 1차 pass 완료 ─▶ 측정 FF로 본 pass 생성
+  └─ 마지막 lot 완료 사건 ─▶ Drain 보고 ─▶ stop ─▶ finished, results()
+progress()·lots()·tools()·tool_groups()   어느 시점이든 읽기 전용
+reset(Config) ─▶ 시각 0
 report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 ```
 
@@ -43,8 +49,8 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 - `Model`: `type Event`, `init(sched)`(t = 0, 1회), `handle(event, sched)`(`sched.now()` = 사건 시각).
 - `Scheduler`: `now()`, `schedule_at(t, e)`(t < now면 panic, 인과성 위반), `schedule_in(d, e)` = `schedule_at(now + d, e)`, `stop()`(현재 사건 처리 후 실행 종료, 대기 사건 유지). `schedule_in(0, e)`는 현재 시각에 이미 예약된 사건 뒤에 처리된다.
 - `Simulation::new(model)`: 시계 0, `init` 호출.
-- `run()`: 사건을 (시각, 순번) 순으로 꺼내 now = 사건 시각 → `handle` → 처리 수 + 1. 모델이 `stop`하면 `Stopped`, 사건이 없으면 `Exhausted`로 종료. 다시 호출하면 남은 사건부터 이어진다.
-- `run_observed(interval, 관찰자)`: `run`에 관측 사건열(now + k·interval)을 시각 순으로 병합. 관측 시각 이하 사건을 모두 처리한 뒤 now = 관측 시각으로 관찰자(모델, 시각)를 호출하고, `Break`이면 `Interrupted`로 종료.
+- `run(until)`: 사건을 (시각, 순번) 순으로 꺼내 now = 사건 시각 → `handle` → 처리 수 + 1. 다음 사건이 `until`보다 늦으면 now = max(now, `until`) 후 `Reached`, 모델이 `stop`하면 `Stopped`, 사건이 없으면 `Exhausted`로 종료. 다시 호출하면 남은 사건부터 이어진다. `until = Time::MAX`는 종료 시각 없음.
+- `run_observed(until, interval, 관찰자)`: `run`에 관측 사건열(interval의 배수, `until` 이하)을 시각 순으로 병합. 관측 시각 이하 사건을 모두 처리한 뒤 now = 관측 시각으로 관찰자(모델, 시각)를 호출하고, `Break`이면 `Interrupted`로 종료. 첫 관측은 now 다음 배수라 중간에 멈췄다 이어도 관측 격자가 같다.
 - `events_processed()`: 처리한 모델 사건 수(관측 제외).
 
 ## 3. 입력 데이터(`asd`, `data`)
@@ -152,15 +158,26 @@ report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 
 ### 4.4 진행·종료
 
-- `run_observed(데이터, 설정, 관찰자)`: QTS이고 FF가 없으면 FF 사전 실행(통과 0, 8.3) 후 본 실행(통과 1). 각 통과는 `Simulation::run_observed(1 d)`로 모델 사건과 1일 관측 사건을 시각 순으로 처리하고, 관측마다 `Progress{pass, passes, now, horizon, wip}`를 전달. 관찰자가 `Break`하면 취소 오류. `run` = 관찰자 없는 `run_observed`.
+- `Simulation::new(데이터, 설정)`: 데이터셋(`Arc`, 시뮬레이션 간 공유)으로 `Fab`을 만들고 시각 0에서 시작. QTS이고 FF가 없으면 2 pass: 설정 전체를 먼저 검증(FF 자리는 미측정 값)하고, 1차 pass는 CQT 규칙·Stopping을 뺀 설정(8.3).
+- `run_observed(until, 관찰자)`: 현재 pass를 des-core `run_observed(종료 시각, 1 d)`로 진행하고 관측마다 `Progress{pass, passes, now, horizon, released, completed, wip, finished}`를 전달. 종료 시각은 마지막 pass에만 `until`(없으면 무한), 1차 pass는 끝까지 진행해 측정 FF(9.1)로 본 pass를 만든다. `Reached`·`Interrupted`(관찰자 `Break`)는 일시정지, 반환값은 현재 `Progress`. 다시 호출하면 이어서 진행하고, 끝난 실행은 그대로 반환. `run(until)` = 관찰자 없는 `run_observed`.
+- 결정성: 일시정지·상태 조회는 사건 처리 순서와 통계를 바꾸지 않는다(상태 조회는 읽기 전용, 툴 상태는 `state_at(now)` 계산, 시간 집계 갱신 없음) → 한 번에 실행한 결과와 같다.
 - 완료: horizon 기간 종료 처리 후(투입 종료) WIP = 0이 되는 사건(마지막 lot 완료, horizon 시점에 이미 0이면 그 기간 종료)에서 Drain 창 보고, 완료 시각 기록, `stop`. 이후 사건은 처리하지 않는다.
-- 기한: 완료 전에 `Deadline` 사건을 처리하면 `stop` 후 미완료 오류(미완 lot 수).
+- 기한: 완료 전에 `Deadline` 사건을 처리하면 `stop` 후 미완료 오류(미완 lot 수). 실패를 기록해 이후 `run`도 같은 오류를 돌려준다(상태 조회는 가능).
+- `reset(설정)`: 같은 데이터셋으로 `new`와 같다. 설정 오류면 기존 상태 유지.
 
 ### 4.5 결과·오류
 
 - `Results`: `periods`(보고 기간 + Drain), `released`·`completed`(투입·완료 lot 수, 정상 종료 시 같음), `end`(완료 시각), `events`(완료까지 처리한 모델 사건 수), `step_flow_factors`(9.1). 부품·TG·영역은 이름으로 기록.
 - `Results::digest()`: postcard 인코딩의 FNV-1a 64비트 해시(16진). 같으면 결과가 비트 단위로 같다(네이티브·wasm 대조).
-- `Error`: horizon ≤ 0, 부하 계수 ≤ 0·비유한, 부하 계수로 투입 간격 0, lot 유형이 없는 (부품, 우선순위), 목록형 투입이 종료 시각 전에 끝남, 종료 시각을 덮는 보고 기간 없음, 전략 설정 오류(8.8), 취소, 종료 + 365 d 미완료.
+- `Error`: horizon ≤ 0, 부하 계수 ≤ 0·비유한, 부하 계수로 투입 간격 0, lot 유형이 없는 (부품, 우선순위), 목록형 투입이 종료 시각 전에 끝남, 종료 시각을 덮는 보고 기간 없음, 전략 설정 오류(8.8), 종료 + 365 d 미완료, 끝나기 전 `results()`, 시각이 아닌 수(`time`: 유한, |ms| < 2^63, ms 반올림).
+
+### 4.6 상태 조회·바인딩
+
+- `progress()`: 현재 pass의 `Progress`.
+- `lots()`: 살아 있는 lot을 투입 순번(`id`) 순으로. 현재 스텝(이동 중이면 향하는 스텝)의 인덱스·이름·TG, 상태(moving·queued·processing), 공정 중인 툴(툴 job에서 역산), 진행 중인 CQT 구간의 종료 스텝과 기한(진입 시각 + 한도).
+- `tools()`: 툴 순번(TG 순, TG 내 위치 순) 순으로 TG, `state_at(now)`의 상태(6.4의 상태 판정), 현재 setup 이름, job의 lot id.
+- `tool_groups()`: TG 순으로 이름, 영역, 툴 수, 대기 lot 수, 상태별 툴 수.
+- JS(`fab-wasm`)·Python(`smt2020-python`)은 위 메서드를 그대로 위임하고 값을 serde 스키마로 변환한다. 설정은 미지 필드를 오류로 읽는다(JS는 JSON 값을 거침: serde-wasm-bindgen의 구조체 역직렬화가 알려진 속성만 읽기 때문). 관찰자: `false`(JS)·`False`(Python)만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 관측마다 다시 잡아 관찰자 호출·신호(Ctrl-C) 확인.
 
 ## 5. 모델 상태
 
@@ -423,7 +440,7 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 - p_k = 샘플링_k·e_k(n), FF_k = 입력 스텝 FF(측정 안 된 스텝 = 1, 유한·음수 아님 검증).
 - TT = Σ_{k=시작+1}^{종료−1} FF_k·p_k + (FF_종료 − 1)·p_종료.
 - 현 스텝 i < 종료: d_i = 구간 시작 + 한도·Σ_{k=시작+1}^{i} FF_k·p_k / TT − p_i(TT ≤ 0이면 비율 0). i ≥ 종료: d_i = 구간 시작 + 한도.
-- FF 입력: `Config::flow_factors`(이전 실행의 `Results::step_flow_factors`, 9.1). 없으면 같은 설정에서 CQT 규칙·Stopping만 뺀 사전 실행의 스텝 FF(가정: [P2]는 "long simulation runs"로만 기술).
+- FF 입력: `Config::flow_factors`(이전 실행의 `Results::step_flow_factors`, 9.1). 없으면 같은 설정에서 CQT 규칙·Stopping만 뺀 1차 pass의 스텝 FF(4.4, 가정: [P2]는 "long simulation runs"로만 기술).
 
 ### 8.4 Stopping([P2] §3.2)
 
@@ -522,26 +539,30 @@ start ─setup─▶ setup_end ─load─▶ load_end ─(슬롯1 대기)─▶ 
 
 | 테스트 | 내용 |
 |---|---|
-| `des-core` 단위(6) | FEL 순서(시각 → 예약 순, 1,000건), 다음 사건 시각, 정지·재개와 처리 순서, 관측 시각·가시성, 관찰자 중단, 과거 예약 panic |
+| `des-core` 단위(8) | FEL 순서(시각 → 예약 순, 1,000건), 다음 사건 시각, 정지·재개와 처리 순서, 종료 시각(그 시각 사건 포함·지난 시각·재개), 관측 시각·가시성, 실행 간 관측 격자 유지, 관찰자 중단, 과거 예약 panic |
 | `des-core` 통합(1) | 단일 서버 FIFO 출발 시각 = Lindley 재귀 d_k = max(a_k, d_{k−1}) + s, 사건 소진 종료 |
 | `asd::table`(4) | UTF-16LE·UTF-8 디코딩, 셀·주석·행 번호, 값·분포·날짜 변환, 달력 유효성 |
 | `data`(3) | 데이터셋 파일 왕복, 바이트 고정(버전 1), 거부(매직·잘림·버전·잔여·손상) |
-| `sim`(4) | 설정 직렬화(기본값·ms 반올림·이름·미지 필드 오류), 1일 관측·완료 정지, QTS FF 통과, 취소·설정 오류 |
+| `sim`(6) | 설정 직렬화(기본값·ms 반올림·이름·미지 필드 오류), 1일 관측·완료 후 정지, 일시정지 중 lot·툴·TG 상태와 재개 결과 = 한 번에 실행한 결과, reset(거부 시 유지·같은 설정 = 같은 결과·다른 seed), QTS 1차 pass·`until`은 본 실행 기준·측정 FF = 준 FF, 설정 오류(1차 pass 전에 검출) |
 | `sim::tool`(3) | cascading 시간(25 wafer·후속 lot), 슬롯2 점유 대기, 상태 집계·일시정지 |
 | `report`(5) | 측정값 결합·비율, Student t 구간, t 분위수, CSV 이름·인용, 이름 = 직렬화 형태 |
 | `rng`(2) | 스트림 재현·독립, 표본 범위 |
 | CLI `reference`(1) | `.rep` 셀(수·시간) 해석 |
-| 페이지 데이터셋(1) | `www/data/ds1–4.bin`을 현재 빌드로 디코딩, 재인코딩 바이트 동일 |
+| 페이지 데이터셋(2) | `www/data/ds1–4.bin`을 현재 빌드로 디코딩, 재인코딩 바이트 동일. DS1 5일차 상태: 한 번에 실행 = 1일 7시간·관찰자 3일·5일로 나눠 실행(진행·lot·툴·TG 동일) |
+| JS API(Node, 6) | `crates/wasm/tests/api.test.mjs`, DS1 10 d: 완료, 일시정지 중 상태 정합성(lot 수 = WIP, 대기 수, 공정 lot ↔ 툴, TG 상태 합 = 툴 수)과 재개 digest, 관찰자 예외 = 일시정지, reset, 요약·CSV, 입력 오류(미지 필드·미지 TG·NaN 시각·데이터셋) |
+| Python API(unittest, 7) | `crates/python/tests`, JS와 같은 항목 + 스레드 병렬 복제(digest) |
 | 실데이터(ignored, 10) | DS1–4 로드 값 검증(order 이름, 비활성 주기형 투입, 데이터셋 파일 왕복 포함), 페이지 데이터셋 = 원천 변환, DS1–4 2년 계획 전량 완료, DS4 180 d: BASE(QTS FF 산출) 후 QTCR + Stopping 스테퍼 5/10 + EF, QTS + CAtE(19.2, 4.8 h), CoT 10 전량 완료, FF 없는 QTS = BASE FF를 준 QTS(digest) |
 
 ```bash
 cargo test
 cargo test -p smt2020 --release -- --ignored
+node --test crates/wasm/tests/api.test.mjs
+python -m unittest discover -s crates/python/tests
 ```
 
 ## 13. 성능
 
-- 1,460 d(Drain 포함), 단일 스레드 1회: 네이티브 DS1–4 25.4·23.5·29.7·33.0 s(2.3–2.8 M 사건/s, 최대 힙 7.9–34.4 MB), wasm(Chromium) 30.6·30.5·37.8·43.0 s(네이티브의 1.20–1.30배, 선형 메모리 8–26 MB). 결과 digest는 네이티브·wasm 동일. 측정 조건·표는 README "성능 측정".
+- 1,460 d(Drain 포함), 단일 스레드 1회: 네이티브 DS1–4 25.4·23.5·29.7·33.0 s(2.3–2.8 M 사건/s, 최대 힙 7.9–34.4 MB), wasm(Chromium) 30.6·30.5·37.8·43.0 s(네이티브의 1.20–1.30배, 선형 메모리 8–26 MB). 결과 digest는 네이티브·wasm·Python 동일. 측정 조건·표는 README "성능 측정".
 - 비용 구조: 디스패칭(대기열 항목 순회·순위 키)과 미래 사건 목록 꺼내기가 대부분. 대기열 항목(5.3)과 선택당 공통 입력 1회 계산(7.4)으로 lot·route 자료의 무작위 접근을 없앴다.
 - 사건 구동 종료(4.4)는 완료일의 남은 사건을 처리하지 않아 사건 수가 이전보다 약간 적다(결과는 동일).
 - Stopping 재평가(8.4)를 제약 lot 이동마다에서 임계 해제 사건으로 바꿔 보류 lot이 많은 실행의 반복 평가를 없앴다(DS4 180 d, 스테퍼 5/10: 77.8 → 6.3 s). 판정은 같고, 한 사건에서 여러 보류 TG가 해제될 때의 디스패칭 순서만 달라 난수 배정 순서가 바뀐다(통계 동일 수준).

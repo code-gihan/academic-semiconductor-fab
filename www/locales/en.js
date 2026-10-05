@@ -179,6 +179,17 @@ export default {
   "common.on": "On",
   "common.off": "Off",
 
+  "python.heading": "Python package",
+  "python.intro":
+    "The same simulator as a Python module (Python 3.9 or later on Windows, Linux and macOS) with the four datasets: run, pause, inspect and reset simulations in your own code. Install it from this page:",
+  "python.downloads": "Or download the wheel of your platform:",
+  "python.none": "The wheels are built when the page is deployed; this copy has none.",
+  "python.windows": "Windows (x64)",
+  "python.linux": "Linux (x86-64)",
+  "python.macos": "macOS (Intel and Apple silicon)",
+  "python.quickstart": "Quick start",
+  "python.more": "Every function and option, also for JavaScript and Rust:",
+
   "footer.references": "References",
   "footer.data":
     "Data: SMT2020 testbed release 1.0 (2020), FernUniversität in Hagen. The dataset files are converted from its AutoSched AP models.",
