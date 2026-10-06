@@ -71,20 +71,13 @@ export function setupView({ status, run }) {
   /** The wasm module works: the run button and the chosen dataset. */
   function ready() {
     fields.run.disabled = false;
-    describeReplications();
     renderScenarios();
     chooseDataset();
   }
 
   function relabel() {
-    describeReplications();
     editor.render();
     renderScenarios();
-  }
-
-  function describeReplications() {
-    const threads = navigator.hardwareConcurrency || 4;
-    $("replications-hint").textContent = t("settings.replications.hint", { threads });
   }
 
   /** Shows the chosen dataset's strategy editor once its file is decoded. */

@@ -1,5 +1,6 @@
-// Page text in the chosen language. Static elements name their text with a data-i18n key and their
-// attributes with data-i18n-attr ("attribute:key", several separated by ";"); scripts call t().
+// Page text in the chosen language. Static elements name their text with a data-i18n key, their
+// attributes with data-i18n-attr ("attribute:key", several separated by ";") and an (i) button its
+// tip with data-tip (which also names the button); scripts call t().
 // English is the default; a chosen language is kept in localStorage. Every locale file has the
 // keys of locales/en.js, and a key missing from one falls back to English.
 import en from "./locales/en.js";
@@ -52,6 +53,9 @@ function apply(code) {
       const [attribute, key] = pair.split(":");
       element.setAttribute(attribute, t(key));
     }
+  }
+  for (const element of document.querySelectorAll("[data-tip]")) {
+    element.setAttribute("aria-label", t(element.dataset.tip));
   }
 }
 

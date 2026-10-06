@@ -70,9 +70,9 @@ export function showProgress(run) {
   showLive(run);
 }
 
-/** A lane's replication, after its scenario if the run has several. */
+/** A lane's run, counted from 1, after its scenario if the run has several. */
 function laneName(lane) {
-  const name = t("lane.name", { replication: lane.replication });
+  const name = t("lane.name", { run: lane.replication + 1 });
   return lane.scenario ? `${lane.scenario} · ${name}` : name;
 }
 

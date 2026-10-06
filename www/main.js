@@ -17,7 +17,7 @@ import { lanes, showProgress, startProgress } from "./progress.js";
 import { defaultPeriod, onSegmentChosen, selectedSegment, showResults } from "./results.js";
 import { setupView } from "./setup.js";
 import { sharedState } from "./share.js";
-import { hideTip } from "./tooltip.js";
+import { bindTips, hideTip } from "./tooltip.js";
 import { go, initViews } from "./views.js";
 
 const $ = (id) => document.getElementById(id);
@@ -28,6 +28,7 @@ let statusText = () => "";
 let wheels = [];
 
 initLanguage();
+bindTips();
 $("language").replaceChildren(
   ...Object.entries(LANGUAGES).map(
     ([code, name]) => new Option(name, code, false, code === language()),

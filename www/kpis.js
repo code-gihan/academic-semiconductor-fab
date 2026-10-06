@@ -4,7 +4,7 @@
 // difference and its verdict, which the Compare view's differences share.
 import { formatNumber, t } from "./i18n.js";
 import { countUp } from "./motion.js";
-import { withTooltip } from "./tooltip.js";
+import { infoButton, withTooltip } from "./tooltip.js";
 
 /** Main measures: summary fields, decimals, unit and which way is better (-1: lower). */
 export const MAIN = [
@@ -66,13 +66,8 @@ export function tile(spec, summary, { difference, note, animated, delay = 0 } = 
   value.append(number);
   if (spec.unit) value.append(element("span", "kpi-unit", t(`kpi.unit.${spec.unit}`)));
 
-  const label = t(`measure.${spec.key}`);
-  const info = element("button", "info", "i");
-  info.type = "button";
-  info.setAttribute("aria-label", t("kpi.about", { measure: label }));
-  withTooltip(info, () => t(`measure.${spec.key}.info`));
   const head = element("div", "kpi-head");
-  head.append(element("span", "kpi-label", label), info);
+  head.append(element("span", "kpi-label", t(`measure.${spec.key}`)), infoButton(() => t(`measure.${spec.key}.info`)));
 
   const card = element("article", "kpi");
   card.append(head, value);
@@ -81,7 +76,10 @@ export function tile(spec, summary, { difference, note, animated, delay = 0 } = 
     card.dataset.verdict = judged;
     card.append(delta(spec, difference, judged));
   } else if (summary.ci95 != null) {
-    card.append(element("div", "kpi-note", `± ${valueText(spec, summary.ci95)}`));
+    const interval = element("div", "kpi-note", `± ${valueText(spec, summary.ci95)}`);
+    interval.tabIndex = 0;
+    withTooltip(interval, () => t("results.ci", { runs: summary.n }));
+    card.append(interval);
   }
   if (note) card.append(element("div", "kpi-note", note));
   return card;

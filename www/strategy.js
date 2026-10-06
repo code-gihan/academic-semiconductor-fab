@@ -3,6 +3,7 @@
 // core's schema, for the tool groups of a dataset (its info). Edits change the configuration in
 // place and are reported through `changed(config)`; the core checks it before a run.
 import { formatNumber, t } from "./i18n.js";
+import { infoButton, withTooltip } from "./tooltip.js";
 
 const HOUR = 3_600_000;
 /** Ranking criteria in the order offered; {qt_within: ms} is the one with a value. */
@@ -134,7 +135,7 @@ export function strategyEditor(root, changed) {
       edit();
       drawGroups();
     });
-    return card("strategy.queueTime.label", "strategy.queueTime.hint", "[P2]", select);
+    return card("strategy.queueTime.label", "strategy.queueTime.short", "strategy.queueTime.hint", "[P2]", select);
   }
 
   function queueTimeRule() {
@@ -188,7 +189,7 @@ export function strategyEditor(root, changed) {
         ]),
       ),
     );
-    return card("ranking.heading", "ranking.hint", null, builder, help, filters, groupTable);
+    return card("ranking.heading", "ranking.short", "ranking.hint", null, builder, help, filters, groupTable);
   }
 
   function drawBuilder() {
@@ -196,6 +197,7 @@ export function strategyEditor(root, changed) {
     draft.forEach((criterion, index) => {
       const kind = criterionKind(criterion);
       const item = el("li", { class: "chip" });
+      withTooltip(item, () => t(`criterion.${kind}.hint`));
       if (kind === "qt_within") {
         const input = el("input", { type: "number", min: "0.1", step: "any", class: "short" });
         input.value = String(criterion.qt_within / HOUR);
@@ -362,6 +364,7 @@ export function strategyEditor(root, changed) {
     const batches = info.tool_groups.filter((group) => group.batching).map((group) => group.name);
     return card(
       "batch.heading",
+      "batch.short",
       "batch.hint",
       null,
       el("label", { class: "check" }, on, t("batch.label"), input, t("batch.unit")),
@@ -398,7 +401,8 @@ export function strategyEditor(root, changed) {
     }
     stoppingTable = el("div");
     drawStopping();
-    return card("strategy.stopping.label", "stopping.hint", "[P2]", el("label", { class: "check" }, on, t("stopping.enable")), presets, stoppingTable);
+    const enable = el("label", { class: "check" }, on, t("stopping.enable"));
+    return card("strategy.stopping.label", "stopping.short", "stopping.hint", "[P2]", enable, presets, stoppingTable);
   }
 
   function drawStopping() {
@@ -475,7 +479,7 @@ export function strategyEditor(root, changed) {
   function engineeringCard() {
     const engineering = info.parts.some((part) => part.engineering);
     if (!engineering) {
-      return card("strategy.engineering.label", "engineering.absent", "[P1]");
+      return card("strategy.engineering.label", "engineering.absent", null, "[P1]");
     }
     const rule = config.engineering ?? "base";
     const kind = typeof rule === "string" ? rule : Object.keys(rule)[0];
@@ -548,7 +552,7 @@ export function strategyEditor(root, changed) {
       draw();
     });
     draw();
-    return card("strategy.engineering.label", "strategy.engineering.hint", "[P1]", select, details);
+    return card("strategy.engineering.label", "strategy.engineering.short", "strategy.engineering.hint", "[P1]", select, details);
   }
 
   // ---- super hot reservation ----
@@ -560,19 +564,20 @@ export function strategyEditor(root, changed) {
       config.reserve_super_hot = on.checked;
       edit();
     });
-    return card("strategy.superHot.short", "strategy.superHot.hint", null, el("label", { class: "check" }, on, t("strategy.superHot.label")));
+    const reserve = el("label", { class: "check" }, on, t("strategy.superHot.label"));
+    return card("strategy.superHot.short", "strategy.superHot.line", "strategy.superHot.hint", null, reserve);
   }
 
   return { show, render };
 }
 
-/** A card of the editor: heading, explanation (with its paper) and content. */
-function card(title, hint, paper, ...content) {
-  const text = el("p", { class: "hint" }, t(hint));
-  if (paper) {
-    text.append(" ", el("a", { href: paper === "[P1]" ? "#ref-p1" : "#ref-p2" }, paper));
-  }
-  return el("section", { class: "card" }, el("h3", {}, t(title)), text, ...content);
+/** A card of the editor: its title with the (i) of `tip` and its paper, a line of what it does
+ * (`short`), then the content; `tip` and `paper` are left out when null. */
+function card(title, short, tip, paper, ...content) {
+  const heading = el("h3", {}, t(title));
+  if (tip) heading.append(infoButton(() => t(tip)));
+  if (paper) heading.append(el("a", { class: "paper", href: paper === "[P1]" ? "#ref-p1" : "#ref-p2" }, paper));
+  return el("section", { class: "card" }, heading, el("p", { class: "hint" }, t(short)), ...content);
 }
 
 /** `control` under its label. */

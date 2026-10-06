@@ -1,5 +1,7 @@
 // The page's tooltip: one element, shown beside what is pointed at, focused or tapped, and kept
-// inside the window.
+// inside the window; and the (i) buttons that explain a heading or a field with it.
+import { t } from "./i18n.js";
+
 const tooltip = document.getElementById("tooltip");
 
 /** Shows `text()` (lines) next to `element` while it is pointed at, focused or tapped. */
@@ -17,6 +19,24 @@ export function withTooltip(element, text) {
       else hideTip();
     }
   });
+}
+
+/** An (i) button explaining something with `text()`, which also names it for screen readers. */
+export function infoButton(text) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "info";
+  button.textContent = "i";
+  button.setAttribute("aria-label", text());
+  withTooltip(button, text);
+  return button;
+}
+
+/** The (i) buttons of the page's markup: `data-tip` names their text (i18n names them too). */
+export function bindTips() {
+  for (const button of document.querySelectorAll("[data-tip]")) {
+    withTooltip(button, () => t(button.dataset.tip));
+  }
 }
 
 /** Hides the tooltip (another view shows, say). */

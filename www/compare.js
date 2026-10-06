@@ -7,7 +7,7 @@ import { barChart } from "./charts.js";
 import { download } from "./files.js";
 import { formatNumber, t } from "./i18n.js";
 import { lookup, verdict } from "./kpis.js";
-import { DAY, segmentKey, segmentLabel, segmentTitle } from "./labels.js";
+import { periodLabel, segmentKey, segmentLabel, segmentTitle } from "./labels.js";
 import { reveal } from "./motion.js";
 
 /** Measures compared: label key, scope, item, kind, measure, decimals and which way is better
@@ -92,10 +92,7 @@ function render(animated) {
   );
   const periodChoice = select(
     t("results.period"),
-    baseline.done[0].results.periods.map(({ name, start, end }) => [
-      name,
-      t("results.periodOption", { name, start: formatNumber(start / DAY, 0), end: formatNumber(end / DAY, 0) }),
-    ]),
+    baseline.done[0].results.periods.map((each) => [each.name, periodLabel(each)]),
     period,
     (value) => {
       shown.period = value;

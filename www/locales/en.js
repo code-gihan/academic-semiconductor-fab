@@ -91,7 +91,6 @@ export default {
   "measure.vl1h": "CQT violations over 1 h",
   "measure.avl": "Mean excess over the limit (AVL)",
   "measure.aont": "Mean slack under the limit (AONT)",
-  "kpi.about": "About {measure}",
   "kpi.unit.percent": "%",
   "kpi.unit.days": "days",
   "kpi.unit.lots": "lots",
@@ -116,7 +115,7 @@ export default {
 
   "scenarios.heading": "Compare strategies",
   "scenarios.intro":
-    "Save strategies under a name, then run them all with the run settings above and the same random numbers, and compare them replication by replication. The first one is the baseline.",
+    "Save strategies under a name, then run them all with the run settings above and the same random numbers, and compare them run by run. The first one is the baseline.",
   "scenarios.name": "Name of the strategy",
   "scenarios.add": "Save the strategy",
   "scenarios.empty": "No strategies saved yet. Or load the demo: the Home view's race, [P2]'s three rules on DS2.",
@@ -131,7 +130,8 @@ export default {
   "scenarios.tooFew": "Save at least two strategies to compare.",
   "scenarios.invalid": "“{name}” is not valid: {message}",
   "scenarios.demo": "Load the demo",
-  "scenarios.demoLoaded": "Demo loaded: the Home view's race, DS2 for two years, 3 replications per rule. Press Run and compare.",
+  "scenarios.demoLoaded":
+    "Demo loaded: the Home view's race, DS2 for two years, 3 runs per rule. Press Run and compare.",
   "scenarios.share": "Copy a share link",
   "share.copied": "Link copied: it opens this page with these settings and {count} strategies.",
   "share.made": "Link made for these settings and {count} strategies: copy it below.",
@@ -145,20 +145,20 @@ export default {
   "compare.baseline": "Baseline",
   "compare.scenario": "Strategy",
   "compare.measure": "Measure",
-  "compare.cqtLitho": "CQT violations, Litho (%)",
-  "compare.cqtRest": "CQT violations, rest (%)",
+  "compare.cqtLitho": "CQT violations, through steppers (%)",
+  "compare.cqtRest": "CQT violations, others (%)",
   "compare.avl": "Mean excess over the limit (h)",
   "compare.tableHint":
-    "Each strategy ran with the same random numbers as the baseline, replication by replication. Δ is the mean difference to the baseline ± the half-width of its 95% confidence interval: green or red when the interval excludes 0 (better or worse beyond chance).",
+    "Each strategy ran with the baseline's random numbers, run by run. Δ: the mean difference to the baseline ± its 95% interval; green or red when the interval excludes 0.",
   "compare.chart": "By strategy",
   "compare.segments": "The baseline's {count} most violated CQT segments (%)",
   "compare.segmentsHint": "Share of completions over the limit per strategy, and Δ to the baseline.",
-  "compare.same": "Identical to the baseline in every replication (same digests): {names}. The strategy changed no decision in this fab.",
+  "compare.same":
+    "Identical to the baseline in every run (same fingerprints): {names}. The strategy changed no decision in this fab.",
   "view.python": "Python",
   "intro.local":
-    "The discrete-event simulator is written in Rust and runs here as WebAssembly, one replication per CPU thread. Nothing is uploaded.",
-  "setup.intro":
-    "Choose a dataset and the run settings, define the operating strategy on the right, then run.",
+    "The discrete-event simulator is written in Rust and runs here as WebAssembly, one run per CPU thread. Nothing is uploaded.",
+  "setup.intro": "Pick a dataset and the run settings, set the strategy on the right, then run.",
 
   "dataset.heading": "Dataset",
   "dataset.ds1.name": "DS1 · HV/LM",
@@ -181,22 +181,21 @@ export default {
     "All four: 105 tool groups in 11 areas, 10,000 wafer starts a week (400 production lots of 25 wafers) and an initial WIP.",
 
   "settings.heading": "Run settings",
-  "settings.explain": "What the settings mean",
-  "settings.horizon.label": "End time (days)",
+  "settings.horizon.label": "Simulated days",
   "settings.horizon.hint":
-    "Simulated days from 2018-01-01. Lots released before the end time are then completed.",
+    "Days simulated from 2018-01-01. Lots released before the end are then completed.",
   "settings.warmUp.label": "Warm-up (days)",
   "settings.warmUp.placeholder": "dataset: 365",
   "settings.warmUp.dataset": "dataset (365 days)",
   "settings.warmUp.hint":
-    "Days whose statistics are discarded. Given, the results report WarmUp and Period_1 (from the warm-up to the end time), so shorter runs measure a steady fab. Empty: the dataset's periods, a one-year warm-up and then a period per year.",
-  "settings.replications.label": "Replications",
+    "Days whose statistics are discarded, so that the measured period sees a steady fab. Empty: the dataset's periods, a one-year warm-up and then a period per year.",
+  "settings.replications.label": "Runs",
   "settings.replications.hint":
-    "Independent runs with different random numbers, {threads} at a time on this device. Results show their mean and 95% confidence interval.",
+    "Independent runs of the same settings, each with its own random numbers (replications). Results show their mean and 95% interval; as many run at a time as this device has CPU threads.",
   "settings.seed.label": "Random seed",
   "settings.seed.hint":
-    "Runs with the same seed and replication number draw the same random numbers, so strategies are compared under equal conditions.",
-  "settings.load.label": "Load factor",
+    "Runs with the same seed and run number draw the same random numbers, so strategies are compared under equal conditions.",
+  "settings.load.label": "Load (× plan)",
   "settings.load.hint": "Scales the release rate: 1 is the planned 10,000 wafers a week, 0.9 is 90%.",
 
   "strategy.heading": "Operating strategy",
@@ -207,8 +206,8 @@ export default {
   "strategy.queueTime.qtcr": "QTCR: queue time critical ratio",
   "strategy.queueTime.qts": "QTS: queue time scheduling",
   "strategy.queueTime.hint":
-    "Ranked before FIFO or CR at every tool group without its own ranking below. QTCR serves first the lots whose time left to the limit is short against their remaining work; QTS gives every step a deadline from flow factors measured in a pre-run, so a replication takes about twice as long.",
-  "strategy.stopping.label": "Stopping",
+    "Ranked before FIFO or CR at every tool group without its own ranking below. QTCR serves first the lots whose time left to the limit is short against their remaining work; QTS gives every step a deadline from flow factors measured in a pre-run, so a run takes about twice as long.",
+  "strategy.stopping.label": "Hold before CQT segments (stopping)",
   "strategy.stopping.high": "[P2] high (90/130 · 90/220)",
   "strategy.stopping.medium": "[P2] medium (60/95 · 70/150)",
   "strategy.stopping.small": "[P2] small (50/85 · 55/125)",
@@ -329,7 +328,7 @@ export default {
   "run.start": "Run simulation",
   "run.cancel": "Cancel",
   "run.duration":
-    "A 730-day replication takes about 15–25 s on one core of a recent desktop (QTS about twice as long); replications running side by side can each take longer.",
+    "A 730-day run takes about 15–25 s on one core of a recent desktop (QTS about twice as long); runs side by side can each take longer.",
 
   "status.loadingWasm": "Loading the simulator…",
   "status.wasmFailed":
@@ -342,11 +341,10 @@ export default {
   "status.invalid": "The configuration is not valid: {message}",
   "error.noFile": "Choose a dataset file first.",
   "error.fetch": "Could not load {file} (HTTP {status}).",
-  "error.worker": "A Web Worker failed: {message}",
 
   "progress.heading": "Run",
   "progress.empty": "No run yet: set up a scenario and press Run simulation.",
-  "progress.done": "Replications done: {done}/{count}",
+  "progress.done": "Runs done: {done} of {count}",
   "progress.day": "day {day} of {days}",
   "progress.drain": "finishing released lots ({wip} left)",
   "progress.preRun": "QTS pre-run",
@@ -354,7 +352,7 @@ export default {
   "progress.cqt": "CQT {share}% over",
   "progress.elapsed": "{time} elapsed",
   "progress.remaining": "about {time} left",
-  "lane.name": "Replication {replication}",
+  "lane.name": "Run {run}",
   "lane.waiting": "waiting for a free CPU thread",
   "lane.starting": "starting",
   "lane.done": "done in {time}",
@@ -366,31 +364,29 @@ export default {
   "live.wip": "WIP (lots)",
   "live.cqt": "CQT over the limit so far (%)",
   "live.hint":
-    "A tile per tool group, by area: its fill is the share of tools busy (setup, load, processing, unload), the red bar at its top the share down or in PM, the number the lots queued. Point at a tile for details; choose a replication above to follow it.",
+    "A tile per tool group, by area: its fill is the share of tools busy (setup, load, processing, unload), the red bar on top the share down or in PM, the number the lots queued. Point at a tile for details; choose a run above to follow it.",
   "tip.tools": "{tools} tools · {queue} lots queued",
   "tip.busy": "busy: setup {setup}, process {process}, load {load}, unload {unload}",
   "tip.idle": "idle {idle} · down {down} · PM {pm}",
 
   "results.heading": "Results",
   "results.empty": "No results yet: they appear here when a run is done.",
-  "results.period": "Report period",
-  "results.periodOption": "{name} · days {start}–{end}",
+  "results.period": "Period",
   "results.periodHint":
-    "WarmUp: the warm-up (the first year, or the warm-up setting). Period_n: from the warm-up's end through year n + 1, cut at the end time; with a warm-up setting, Period_1 runs to the end time. Drain: lots completed after the end time.",
+    "Warm-up: days whose statistics are discarded (the first year, or the warm-up setting). Measured: from the warm-up's end to the end time, a further year at a time in longer runs. After the end: lots completed after the end time.",
   "results.downloadJson": "Download JSON",
   "results.downloadCsv": "Download CSV",
   "results.ci":
-    "Values are means over the replications; ± is the half-width of their 95% confidence interval (Student t).",
+    "± is the half-width of the 95% confidence interval of the mean over {runs} runs (Student t).",
   "results.kinds":
     "Lot kinds: PRL production, PHL production hot, SHL super hot, ERL engineering, EHL engineering hot.",
   "results.more": "More measures",
-  "results.tables": "Tables of every measure",
   "results.reproduce.title": "Reproducibility and performance",
   "results.reproduce.text":
-    "Equal digests mean bit-identical results: a replication's config from the JSON download, run with smt2020 run --config, gives the same digest.",
-  "results.digest": "Replication {replication}: {digest} ({time})",
+    "Equal fingerprints (digests) mean bit-identical results: a run's configuration from the JSON download, run with smt2020 run --config, gives the same fingerprint.",
+  "results.digest": "Run {run} (replication {replication}): {digest} ({time})",
   "results.performance":
-    "Replications: {count} · workers: {workers} · total {time} · {perReplication} per replication · {events} million events/s · peak memory {memory} MB",
+    "Runs: {count} · workers: {workers} · total {time} · {perReplication} per run · {events} million events/s · peak memory {memory} MB",
 
   "kpi.completed": "Lots completed",
   "kpi.wip": "Mean WIP (lots)",
@@ -399,17 +395,17 @@ export default {
   "kpi.erlCt": "Cycle time, ERL (days)",
   "kpi.cqt": "CQT violations (%)",
 
-  "chart.kinds": "Average cycle time by lot kind (days)",
-  "chart.cqt": "CQT intervals over the limit (%)",
-  "chart.toolGroups": "Tool time by state (%), busiest tool groups first",
+  "chart.kinds": "Cycle time by lot kind (days)",
+  "chart.cqt": "CQT violations (%)",
+  "chart.toolGroups": "Tool time by state (%), busiest first",
   "chart.areas": "Utilization by area (%)",
   "chart.all": "Show all {count}",
   "chart.top": "Show the top {count}",
   "chart.failed": "The charts could not be loaded ({message}).",
-  "chart.segments": "CQT segments over the limit (%), most violations first",
+  "chart.segments": "Segments with the most violations (%)",
   "chart.segmentsHint":
-    "Choose a segment: where its waits go appears below, and its violations in the details further down.",
-  "chart.breakdown": "Where the segment's waits go (hours per visit of each step)",
+    "Ranked by violations (share × completions). Choose a segment: its steps' times show below, and its violations one by one in Inside a run.",
+  "chart.breakdown": "Where the chosen segment's time goes (hours per visit)",
   "breakdown.vl": "over the limit",
   "breakdown.ok": "within the limit",
   "part.transport": "Transport",
@@ -418,26 +414,26 @@ export default {
   "chart.daily": "Day by day",
   "chart.dailyMeasure": "Measure",
   "chart.dailyHint":
-    "Mean of the replications per day, with its 95% confidence interval as a band. CQT intervals count on the day their exit step starts.",
-  "daily.cqt.vl_pct": "CQT intervals over the limit (%)",
+    "Mean of the runs per day, with its 95% interval as a band. A CQT segment counts on the day its exit step starts.",
+  "daily.cqt.vl_pct": "CQT violations (%)",
   "daily.fab.wip": "WIP (lots)",
   "daily.fab.completed": "Lots completed",
-  "daily.cqt.completed": "CQT intervals completed",
-  "segment.label": "{route} {entry}–{exit} · {from} → {to}",
-  "segment.title": "{route}: {entry} ({from}) → {exit} ({to}), limit {limit}",
+  "daily.cqt.completed": "CQT segments completed",
+  "segment.label": "{product} · {entry}–{exit} · {from} → {to}",
+  "segment.title": "{product}: step {entry} ({from}) → step {exit} ({to}), limit {limit}",
   "step.label": "{step} · {group}",
   "unit.hours": "{value} h",
   "time.day": "day {day}",
   "time.at": "day {day} {clock}",
 
-  "details.heading": "Inside a replication",
+  "details.heading": "Inside a run",
   "details.intro":
-    "The CQT violations one by one, a tool group day by day, the events of a window and the history of a lot. Replication 0 recorded them while it ran; another replication is replayed first, which is the same run (its digest is checked).",
-  "details.replication": "Replication",
+    "One run up close: its violations by segment and week and one by one, a tool group day by day, the events of a window and a lot's history. The first run recorded them while it ran; another run is first run again, which gives the same results (its fingerprint is checked).",
+  "details.replication": "Run",
   "details.queued": "Waiting for a free CPU thread…",
-  "details.starting": "Replaying…",
-  "details.replaying": "Replaying: day {day} of {days}…",
-  "details.mismatch": "the replay differs from the run (digest)",
+  "details.starting": "Running it again to record…",
+  "details.replaying": "Running it again to record: day {day} of {days}…",
+  "details.mismatch": "the re-run differs from the run (fingerprint)",
   "details.none": "None.",
   "details.heatmap": "Violations by segment and time",
   "details.heatmapDays":
@@ -490,7 +486,7 @@ export default {
   "details.shares": "Tool time (%)",
   "details.events": "Events of a window",
   "details.eventsHint":
-    "Every arrival, job, breakdown and PM at a tool group within up to a week, from a replay of the run up to the window's end.",
+    "Every arrival, job, breakdown and PM at a tool group within up to a week, from running the run again up to the window's end.",
   "details.from": "From day",
   "details.length": "Length",
   "details.days": "{days} d",
@@ -539,7 +535,7 @@ export default {
   "table.cqt.title": "Critical queue time intervals",
   "table.cqt.item": "Intervals",
   "table.cqt.note":
-    "%VL: completed intervals over the limit; > 1 h, 2 h, 4 h: over by more than that. AVL and AONT: mean excess and mean slack per completed interval. Litho: intervals through the steppers.",
+    "%VL: completed segments over the limit; > 1 h, 2 h, 4 h: over by more than that. AVL and AONT: mean excess and mean slack per completed segment. Through steppers: the segments with stepper steps (Litho in [P2]).",
   "table.area.title": "Areas",
   "table.area.item": "Area",
   "table.area.note":
@@ -572,9 +568,9 @@ export default {
   "col.unload": "Unload",
   "col.idle": "Idle",
 
-  "cqt.litho": "Litho",
-  "cqt.rest": "Rest",
-  "cqt.total": "Total",
+  "cqt.litho": "Through steppers",
+  "cqt.rest": "Others",
+  "cqt.total": "All",
 
   "common.on": "On",
   "common.off": "Off",
@@ -598,4 +594,35 @@ export default {
   "footer.animation": "Animation: anime.js 4.5.0, MIT license.",
   "footer.charts": "Charts: Apache ECharts 6.1.0 with ZRender, Apache License 2.0 and BSD 3-Clause.",
   "footer.type": "Type: IBM Plex Sans and IBM Plex Mono, SIL Open Font License 1.1.",
+
+  "strategy.short": "Combine the papers' rules with your own.",
+  "strategy.queueTime.short":
+    "The papers' CQT-aware dispatching, at every tool group without its own ranking.",
+  "ranking.short":
+    "Which lot each tool group serves first: build a ranking, tick tool groups, apply.",
+  "batch.short": "Start a diffusion batch below its minimum size when a lot's CQT slack runs low.",
+  "stopping.short": "Hold lots before a CQT segment while its tool groups are crowded.",
+  "strategy.engineering.short": "How production and engineering lots share the fab.",
+  "strategy.superHot.line": "A tool of a super hot lot's next step waits for it.",
+  "tab.cqt": "CQT violations",
+  "tab.lots": "Lots and days",
+  "tab.tools": "Tools",
+  "tab.run": "Inside a run",
+  "tab.data": "All measures",
+  "period.warmUp": "Warm-up · days {start}–{end}",
+  "period.measured": "Measured · days {start}–{end}",
+  "period.drain": "After the end · days {start}–{end}",
+  "chart.cqtHint":
+    "Share of the completed CQT segments whose last step started after the limit: through the steppers, the others, and all.",
+  "chart.breakdownHint":
+    "For each step of the segment: transport, queue and processing time of the visits that ended over the limit, and of those within it.",
+  "chart.toViolations": "Its violations",
+  "chart.toolGroupsHint": "Each tool group's time by state over the period, the busiest first.",
+  "chart.areasHint":
+    "Share of each area's tool time that is busy (setup, load, processing, unload) over the period.",
+  "kind.short.PRL": "Regular (PRL)",
+  "kind.short.PHL": "Hot (PHL)",
+  "kind.short.SHL": "Super hot (SHL)",
+  "kind.short.ERL": "Eng. regular (ERL)",
+  "kind.short.EHL": "Eng. hot (EHL)",
 };

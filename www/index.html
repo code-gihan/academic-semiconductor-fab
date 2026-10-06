@@ -178,36 +178,26 @@
             <legend><span class="step-number" aria-hidden="true">2</span><span data-i18n="settings.heading"></span></legend>
             <div class="fields">
               <div class="field">
-                <label for="horizon" data-i18n="settings.horizon.label"></label>
+                <span class="field-head"><label for="horizon" data-i18n="settings.horizon.label"></label><button class="info" type="button" data-tip="settings.horizon.hint">i</button></span>
                 <input id="horizon" name="horizon" type="number" min="1" step="any" value="730" required>
               </div>
               <div class="field">
-                <label for="warm-up" data-i18n="settings.warmUp.label"></label>
+                <span class="field-head"><label for="warm-up" data-i18n="settings.warmUp.label"></label><button class="info" type="button" data-tip="settings.warmUp.hint">i</button></span>
                 <input id="warm-up" name="warmUp" type="number" min="1" step="any" data-i18n-attr="placeholder:settings.warmUp.placeholder">
               </div>
               <div class="field">
-                <label for="replications" data-i18n="settings.replications.label"></label>
+                <span class="field-head"><label for="replications" data-i18n="settings.replications.label"></label><button class="info" type="button" data-tip="settings.replications.hint">i</button></span>
                 <input id="replications" name="replications" type="number" min="1" max="1000" step="1" value="4" required>
               </div>
               <div class="field">
-                <label for="seed" data-i18n="settings.seed.label"></label>
+                <span class="field-head"><label for="seed" data-i18n="settings.seed.label"></label><button class="info" type="button" data-tip="settings.seed.hint">i</button></span>
                 <input id="seed" name="seed" type="number" min="0" step="1" value="1" required>
               </div>
               <div class="field">
-                <label for="load" data-i18n="settings.load.label"></label>
+                <span class="field-head"><label for="load" data-i18n="settings.load.label"></label><button class="info" type="button" data-tip="settings.load.hint">i</button></span>
                 <input id="load" name="load" type="number" min="0.01" step="any" value="1" required>
               </div>
             </div>
-            <details class="explain-all">
-              <summary data-i18n="settings.explain"></summary>
-              <dl class="explanations">
-                <dt data-i18n="settings.horizon.label"></dt><dd data-i18n="settings.horizon.hint"></dd>
-                <dt data-i18n="settings.warmUp.label"></dt><dd data-i18n="settings.warmUp.hint"></dd>
-                <dt data-i18n="settings.replications.label"></dt><dd id="replications-hint"></dd>
-                <dt data-i18n="settings.seed.label"></dt><dd data-i18n="settings.seed.hint"></dd>
-                <dt data-i18n="settings.load.label"></dt><dd data-i18n="settings.load.hint"></dd>
-              </dl>
-            </details>
           </fieldset>
         </form>
         <div class="actions">
@@ -215,8 +205,7 @@
           <output id="status" aria-live="polite"></output>
         </div>
         <section id="scenarios-panel" class="card scenarios">
-          <h2><span class="step-number" aria-hidden="true">4</span><span data-i18n="scenarios.heading"></span></h2>
-          <p class="hint" data-i18n="scenarios.intro"></p>
+          <h2><span class="step-number" aria-hidden="true">4</span><span data-i18n="scenarios.heading"></span><button class="info" type="button" data-tip="scenarios.intro">i</button></h2>
           <div class="row">
             <input id="scenario-name" type="text" maxlength="60" data-i18n-attr="placeholder:scenarios.name;aria-label:scenarios.name">
             <button id="scenario-add" type="button" data-i18n="scenarios.add"></button>
@@ -239,8 +228,8 @@
 
       <div class="setup-main">
         <div class="setup-head">
-          <h2><span class="step-number" aria-hidden="true">3</span><span data-i18n="strategy.heading"></span></h2>
-          <p class="hint" data-i18n="strategy.intro"></p>
+          <h2><span class="step-number" aria-hidden="true">3</span><span data-i18n="strategy.heading"></span><button class="info" type="button" data-tip="strategy.intro">i</button></h2>
+          <p class="hint" data-i18n="strategy.short"></p>
         </div>
         <div id="strategy" class="strategy"></div>
         <details id="config-json" class="card">
@@ -271,12 +260,11 @@
         <ol id="lanes" class="lanes"></ol>
         <div id="live" hidden>
           <div class="panel-head">
-            <h3 data-i18n="live.heading"></h3>
+            <h3><span data-i18n="live.heading"></span><button class="info" type="button" data-tip="live.hint">i</button></h3>
             <span id="live-caption" class="hint"></span>
           </div>
           <div id="live-stats" class="stats"></div>
-          <div id="fab-map" class="fab-map" role="img" aria-labelledby="live-hint"></div>
-          <p class="hint" id="live-hint" data-i18n="live.hint"></p>
+          <div id="fab-map" class="fab-map" role="img" data-i18n-attr="aria-label:live.hint"></div>
         </div>
       </div>
     </section>
@@ -290,43 +278,50 @@
             <div class="toolbar">
               <select id="scenario" hidden data-i18n-attr="aria-label:compare.scenario"></select>
               <label for="period" data-i18n="results.period"></label>
-              <select id="period" aria-describedby="period-hint"></select>
+              <select id="period"></select>
+              <button class="info" type="button" data-tip="results.periodHint">i</button>
               <button id="download-json" type="button" data-i18n="results.downloadJson"></button>
               <button id="download-csv" type="button" data-i18n="results.downloadCsv"></button>
             </div>
           </div>
           <dl id="run-setup" class="chips"></dl>
-          <p class="hint" id="period-hint" data-i18n="results.periodHint"></p>
           <div id="kpis" class="kpis"></div>
           <details class="more-measures">
             <summary data-i18n="results.more"></summary>
             <dl id="kpi-details" class="stats-grid"></dl>
           </details>
-          <p class="hint" data-i18n="results.ci"></p>
-          <div id="charts" class="charts"></div>
-          <details>
-            <summary data-i18n="results.tables"></summary>
-            <p class="hint" data-i18n="results.kinds"></p>
+          <div id="analysis-tabs" class="tablist" role="tablist" data-i18n-attr="aria-label:results.heading">
+            <button type="button" role="tab" id="tab-cqt" data-tab="cqt" aria-controls="panel-cqt" aria-selected="true" data-i18n="tab.cqt"></button>
+            <button type="button" role="tab" id="tab-lots" data-tab="lots" aria-controls="panel-lots" aria-selected="false" tabindex="-1" data-i18n="tab.lots"></button>
+            <button type="button" role="tab" id="tab-tools" data-tab="tools" aria-controls="panel-tools" aria-selected="false" tabindex="-1" data-i18n="tab.tools"></button>
+            <button type="button" role="tab" id="tab-run" data-tab="run" aria-controls="panel-run" aria-selected="false" tabindex="-1" data-i18n="tab.run"></button>
+            <button type="button" role="tab" id="tab-data" data-tab="data" aria-controls="panel-data" aria-selected="false" tabindex="-1" data-i18n="tab.data"></button>
+          </div>
+          <div id="panel-cqt" class="tabpanel charts" role="tabpanel" aria-labelledby="tab-cqt"></div>
+          <div id="panel-lots" class="tabpanel charts" role="tabpanel" aria-labelledby="tab-lots" hidden></div>
+          <div id="panel-tools" class="tabpanel charts" role="tabpanel" aria-labelledby="tab-tools" hidden></div>
+          <div id="panel-run" class="tabpanel" role="tabpanel" aria-labelledby="tab-run" hidden>
+            <div id="details" hidden>
+              <div class="panel-head">
+                <h3><span data-i18n="details.heading"></span><button class="info" type="button" data-tip="details.intro">i</button></h3>
+                <div class="toolbar">
+                  <span id="details-replication"></span>
+                  <output id="details-status" aria-live="polite"></output>
+                </div>
+              </div>
+              <div id="details-body" class="details"></div>
+            </div>
+          </div>
+          <div id="panel-data" class="tabpanel" role="tabpanel" aria-labelledby="tab-data" hidden>
             <div id="tables"></div>
-          </details>
-          <details>
-            <summary data-i18n="results.reproduce.title"></summary>
-            <p class="hint" data-i18n="results.reproduce.text"></p>
-            <ol id="digests"></ol>
-            <p class="hint" id="performance"></p>
-          </details>
-        </div>
-      </div>
-      <div id="details" class="panel" hidden>
-        <div class="panel-head">
-          <h2 data-i18n="details.heading"></h2>
-          <div class="toolbar">
-            <span id="details-replication"></span>
-            <output id="details-status" aria-live="polite"></output>
+            <section class="table">
+              <h3 data-i18n="results.reproduce.title"></h3>
+              <p class="hint" data-i18n="results.reproduce.text"></p>
+              <ol id="digests"></ol>
+              <p class="hint" id="performance"></p>
+            </section>
           </div>
         </div>
-        <p class="hint" data-i18n="details.intro"></p>
-        <div id="details-body" class="details"></div>
       </div>
     </section>
 

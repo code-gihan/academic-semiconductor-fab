@@ -1,13 +1,14 @@
-// The details of a finished run's replication: its CQT violations by segment and week and one by
-// one, a tool group day by day, the events of a window and the history of a violating lot.
-// Replication 0 records its violations and tool group days as it runs; the others, the event
-// windows and the lot histories come from replays on the worker pool, which run the same as the
-// run (deterministic; a replay's digest must equal the run's).
+// The details of one run (replication) of a finished run: its CQT violations by segment and week
+// and one by one, a tool group day by day, the events of a window and the history of a violating
+// lot. The first run records its violations and tool group days as it runs; the others, the
+// event windows and the lot histories come from re-runs on the worker pool, which run the same
+// as the run (deterministic; a re-run's digest must equal the run's).
 import { chartGroup, heatmap, lineChart, timeline } from "./charts.js";
 import { download } from "./files.js";
 import { formatNumber, t } from "./i18n.js";
-import { DAY, HOUR, at, hours, segmentLabel, segmentTitle, stepLabel } from "./labels.js";
+import { DAY, HOUR, at, hours, kindLabel, segmentLabel, segmentTitle, stepLabel } from "./labels.js";
 import * as pool from "./pool.js";
+import { infoButton } from "./tooltip.js";
 
 /** Rows of a table page; segments in the heatmap; replications whose records are kept. */
 const PAGE = 25;
@@ -218,7 +219,7 @@ function render() {
   $("details-replication").replaceChildren(
     select(
       t("details.replication"),
-      run.done.map((done, index) => [String(index), t("lane.name", { replication: done.config.replication })]),
+      run.done.map((done, index) => [String(index), t("lane.name", { run: done.config.replication + 1 })]),
       String(view.replication),
       (value) => {
         view = { ...view, replication: Number(value), page: 0, window: null, draft: null, eventPage: 0, trace: null };
@@ -268,7 +269,8 @@ function heatmapCard(violations) {
   });
   const total = (values) => values.reduce((sum, value) => sum + value, 0);
   const rows = [...counts].sort((a, b) => total(b[1]) - total(a[1])).slice(0, SEGMENTS);
-  if (rows.length === 0) return card("details.heatmap", el("p", { class: "hint" }, t("details.none")));
+  const tip = () => t(bin === DAY ? "details.heatmapDays" : "details.heatmapWeeks", { count: SEGMENTS });
+  if (rows.length === 0) return card("details.heatmap", tip, el("p", { class: "hint" }, t("details.none")));
   const chart = heatmap({
     label: t("details.heatmap"),
     rows: rows.map(([segment]) => segmentLabel(info, segment)),
@@ -292,11 +294,7 @@ function heatmapCard(violations) {
       $("details-violations").scrollIntoView({ block: "start" });
     },
   });
-  return card(
-    "details.heatmap",
-    el("p", { class: "hint" }, t(bin === DAY ? "details.heatmapDays" : "details.heatmapWeeks", { count: SEGMENTS })),
-    chart,
-  );
+  return card("details.heatmap", tip, chart);
 }
 
 /** The rows of the violations that pass the filters, in the chosen order. */
@@ -345,7 +343,7 @@ function violationsCard(violations, rows) {
     ),
     select(
       t("details.kind"),
-      [["", t("details.allKinds")], ...[...new Set(violations.kind)].sort().map((kind) => [kind, kind])],
+      [["", t("details.allKinds")], ...[...new Set(violations.kind)].sort().map((kind) => [kind, kindLabel(kind)])],
       view.kind,
       (value) => {
         view = { ...view, kind: value, page: 0 };
@@ -408,7 +406,7 @@ function violationsCard(violations, rows) {
         "tr",
         { class: row === view.trace ? "chosen" : "" },
         el("th", { scope: "row" }, lot),
-        el("td", { class: "text" }, violations.kind[row]),
+        el("td", { class: "text" }, kindLabel(violations.kind[row])),
         el("td", { class: "text" }, info.parts[violations.part[row]].name),
         el("td", { class: "text" }, segmentLabel(info, violations.segment[row])),
         el("td", {}, at(violations.entered[row])),
@@ -420,7 +418,7 @@ function violationsCard(violations, rows) {
   }
   const result = card(
     "details.violations",
-    el("p", { class: "hint" }, t("details.violationsHint")),
+    () => t("details.violationsHint"),
     filters,
     el(
       "div",
@@ -482,7 +480,7 @@ function toolGroupCard(days) {
         ];
   return card(
     "details.toolGroup",
-    el("p", { class: "hint" }, t("details.toolGroupHint")),
+    () => t("details.toolGroupHint"),
     el(
       "div",
       { class: "row" },
@@ -512,7 +510,6 @@ function eventsCard(violations, rows) {
     draft.from = Math.max(0, Math.round(Number(from.value) * DAY));
   });
   const content = [
-    el("p", { class: "hint" }, t("details.eventsHint")),
     el(
       "div",
       { class: "row" },
@@ -556,7 +553,7 @@ function eventsCard(violations, rows) {
       content.push(progressLine(state));
     }
   }
-  const result = card("details.events", ...content);
+  const result = card("details.events", () => t("details.eventsHint"), ...content);
   result.id = "details-events";
   return result;
 }
@@ -702,7 +699,7 @@ function traceCard(violations) {
       { class: "hint" },
       t("details.traceOf", {
         lot,
-        kind: violations.kind[row],
+        kind: kindLabel(violations.kind[row]),
         part: info.parts[violations.part[row]].name,
         segment: segmentTitle(info, violations.segment[row]),
         wait: hours(exit - entered),
@@ -801,7 +798,7 @@ function traceCard(violations) {
       ),
     );
   }
-  const result = card("details.trace", ...content);
+  const result = card("details.trace", null, ...content);
   result.id = "details-trace";
   return result;
 }
@@ -970,8 +967,11 @@ function button(text, onClick, className) {
   return result;
 }
 
-function card(title, ...content) {
-  return el("section", { class: "card" }, el("h3", {}, t(title)), ...content);
+/** A card of the details: its title with the (i) of `tip()`, if any, then `content`. */
+function card(title, tip, ...content) {
+  const heading = el("h3", {}, t(title));
+  if (tip) heading.append(infoButton(tip));
+  return el("section", { class: "card" }, heading, ...content);
 }
 
 /** An element with attributes and children (strings become text). */
