@@ -73,10 +73,17 @@
   --warning: #d03b3b;
   --better: #0b6b2e;
   --worse: #b42318;
-  /* The race's rules: BASE in grey, then the CQT rules. */
+  /* Strategies: a baseline (the race's BASE) in grey, then the others. */
   --rule-base: #8c8c8c;
   --rule-1: #2a78d6;
   --rule-2: #1baf7a;
+  --rule-3: #eb6834;
+  --rule-4: #4a3aa7;
+  --rule-5: #e87ba4;
+  /* A lot on its queue-time clock, in both schemes. */
+  --on-track: #32a67d;
+  --at-risk: #bd821a;
+  --over-limit: #c83846;
   --radius: 6px;
   --radius-sm: 4px;
   --page: 78rem;
@@ -122,6 +129,9 @@
     --rule-base: #8a8a8a;
     --rule-1: #3987e5;
     --rule-2: #199e70;
+    --rule-3: #d9662f;
+    --rule-4: #9085e9;
+    --rule-5: #d55181;
   }
 }
 
@@ -757,14 +767,14 @@ details.card > summary {
 
 .clock-run {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--on-track);
   stroke-linecap: round;
   stroke-width: 4;
   transition: stroke 0.25s;
 }
 
 .clock.late .clock-run {
-  stroke: var(--warning);
+  stroke: var(--over-limit);
 }
 
 .clock-hours {
@@ -1590,7 +1600,7 @@ table.groups tr.default th {
   font-weight: 600;
 }
 
-/* ---- run: progress, lanes, live fab ---- */
+/* ---- run: progress, lanes, queue time live ---- */
 
 .track,
 .lane-bar {
@@ -1655,7 +1665,9 @@ table.groups tr.default th {
   background: var(--text-2);
 }
 
-#live {
+.live {
+  display: grid;
+  gap: 0.9rem;
   margin-top: 1.5rem;
 }
 
@@ -1676,71 +1688,44 @@ table.groups tr.default th {
   font-variant-numeric: tabular-nums;
 }
 
-.fab-map {
+/* The clocks: counts by state (their dots are the legend), the chart, the limits left out. */
+.clocks .stats {
+  margin-bottom: 0.5rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--swatch);
+  vertical-align: 0.05em;
+}
+
+#clocks-more {
+  min-height: 1.2em;
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+}
+
+/* A one-time note just above the chart it explains. */
+.coach {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.9rem 1.4rem;
-  margin-bottom: 0.75rem;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  margin-bottom: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.8125rem;
 }
 
-.area {
-  display: grid;
-  gap: 0.3rem;
-}
-
-.area-name {
-  color: var(--muted);
-  font-size: 0.6875rem;
-}
-
-.tiles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  max-width: 14rem;
-}
-
-.tile {
-  position: relative;
-  width: 1.5rem;
-  height: 1.5rem;
-  overflow: hidden;
-  border-radius: 2px;
-  background: var(--track);
-}
-
-.tile-busy {
-  position: absolute;
-  inset: 0;
-  background: var(--process);
-  transform: scaleY(var(--busy, 0));
-  transform-origin: bottom center;
-  transition: transform 0.25s ease-out;
-}
-
-.tile-out {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 3px;
-  background: var(--down);
-  transform: scaleX(var(--out, 0));
-  transform-origin: left center;
-  transition: transform 0.25s ease-out;
-}
-
-.tile-queue {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: var(--text);
-  font-size: 0.5625rem;
-  font-weight: 600;
-  text-shadow:
-    0 0 2px var(--card),
-    0 0 2px var(--card);
+.coach p {
+  flex: 1 1 18rem;
+  margin: 0;
 }
 
 /* ---- results ---- */

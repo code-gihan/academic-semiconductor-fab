@@ -1,10 +1,10 @@
-//! The fab's state at the simulation time: its lots, tools and tool groups.
+//! The fab's state at the simulation time: its lots, tools, tool groups and CQT segments.
 
 use des_core::Time;
 use serde::Serialize;
 
 use super::fab::{Fab, LotState};
-use super::stats::LotKind;
+use super::stats::{CqtReport, LotKind};
 use super::tool::{STATES, ToolState};
 
 /// A lot in the fab.
@@ -60,6 +60,32 @@ pub struct ToolGroupStatus {
     pub load: u32,
     pub unload: u32,
     pub idle: u32,
+}
+
+/// A CQT segment: the lots its clock runs for and its completions so far.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SegmentStatus {
+    /// Lots from the end of the entrance step until the exit step starts, by id.
+    pub lots: Vec<SegmentLot>,
+    /// Completions since time 0; reporting periods do not reset them.
+    pub cqt: CqtReport,
+}
+
+/// A lot in a CQT segment.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SegmentLot {
+    /// [`LotStatus::id`].
+    pub id: u64,
+    pub kind: LotKind,
+    /// The step the lot moves to, waits at or is processed at, and where it is there.
+    pub step: usize,
+    pub state: LotState,
+    /// End of the entrance step: the exit step must start by this time plus the limit.
+    pub entered: Time,
+    /// Queue-time slack ([`Criterion::QtWithin`](super::Criterion::QtWithin)): that latest
+    /// start − now − the expected work from the lot's step until the exit step starts. Negative
+    /// when the lot is expected to miss the limit.
+    pub slack: Time,
 }
 
 impl Fab {
@@ -124,6 +150,43 @@ impl Fab {
                     .collect(),
             })
             .collect()
+    }
+
+    /// Every CQT segment at `now`, in dataset order.
+    pub(super) fn segment_statuses(&self, now: Time) -> Vec<SegmentStatus> {
+        let mut segments: Vec<SegmentStatus> = self
+            .segment_totals()
+            .iter()
+            .map(|&cqt| SegmentStatus {
+                lots: Vec::new(),
+                cqt,
+            })
+            .collect();
+        for lot in self.lots.iter().filter(|lot| lot.alive) {
+            let Some(segment) = &lot.segment else {
+                continue;
+            };
+            // The wait ended when the exit step started.
+            if lot.step == segment.exit && lot.state == LotState::Processing {
+                continue;
+            }
+            let remaining = &self.routes.info[lot.route].remaining;
+            let before_exit =
+                remaining[lot.step].at(lot.wafers) - remaining[segment.exit].at(lot.wafers);
+            segments[segment.id].lots.push(SegmentLot {
+                id: lot.serial,
+                kind: lot.kind,
+                step: lot.step,
+                state: lot.state,
+                entered: segment.entered,
+                slack: ((segment.entered + segment.limit - now) as f64 - before_exit).round()
+                    as Time,
+            });
+        }
+        for segment in &mut segments {
+            segment.lots.sort_unstable_by_key(|lot| lot.id);
+        }
+        segments
     }
 
     /// Every tool group at `now`, in dataset order.

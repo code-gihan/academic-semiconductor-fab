@@ -12,7 +12,7 @@ export function segmentKey(info, index) {
 }
 
 /** The products made on route `route`: their names, or the route's if none. */
-function routeName(info, route) {
+export function routeName(info, route) {
   const parts = info.parts.filter((part) => part.route === route).map((part) => part.name);
   return parts.length > 0 ? parts.join("/") : info.routes[route].name;
 }

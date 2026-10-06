@@ -56,6 +56,38 @@ class SimulationTest(unittest.TestCase):
         self.assertEqual(simulation.run(), self.finished)
         self.assertEqual(smt2020.digest(simulation.results()), smt2020.digest(self.results))
 
+    def test_segments_show_the_lots_on_their_clocks_and_their_completions_so_far(self):
+        info = self.dataset.info()
+        simulation = smt2020.Simulation(self.dataset, self.config)
+        progress = simulation.run(until=2 * DAY + 0.5 * HOUR)
+        segments = simulation.segments()
+        self.assertEqual(len(segments), len(info["segments"]))
+        # Every lot in a segment until its exit step starts, with its deadline.
+        waiting = {
+            lot["id"]: lot
+            for lot in simulation.lots()
+            if lot["cqt_exit"] is not None
+            and not (lot["step"] == lot["cqt_exit"] and lot["state"] == "processing")
+        }
+        in_segments = [
+            (lot, info["segments"][index])
+            for index, segment in enumerate(segments)
+            for lot in segment["lots"]
+        ]
+        self.assertTrue(in_segments)
+        self.assertEqual(len(in_segments), len(waiting))
+        for lot, segment in in_segments:
+            status = waiting[lot["id"]]
+            self.assertEqual(
+                (lot["kind"], lot["step"], lot["state"]),
+                (status["kind"], status["step"], status["state"]),
+            )
+            self.assertEqual(status["cqt_exit"], segment["exit"])
+            self.assertEqual(lot["entered"] + segment["limit"], status["cqt_deadline"])
+            self.assertLessEqual(lot["slack"], status["cqt_deadline"] - progress["now"])
+        for count, total in (("completed", "cqt_completed"), ("violated", "cqt_violated")):
+            self.assertEqual(sum(segment["cqt"][count] for segment in segments), progress[total])
+
     def test_an_exception_of_the_observer_pauses_the_run(self):
         simulation = smt2020.Simulation(self.dataset, self.config)
 

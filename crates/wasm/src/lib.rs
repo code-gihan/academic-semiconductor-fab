@@ -135,6 +135,12 @@ impl Simulation {
         to_js(&self.0.tool_groups())
     }
 
+    /// Every CQT segment, in the order of the dataset info's segments: the lots in it and its
+    /// completions so far.
+    pub fn segments(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.0.segments())
+    }
+
     /// Results of the finished run.
     pub fn results(&self) -> Result<JsValue, JsValue> {
         to_js(&self.0.results().map_err(error)?)

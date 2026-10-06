@@ -109,6 +109,7 @@
           </div>
           <div class="race-controls">
             <output id="race-status" aria-live="polite"></output>
+            <a id="race-clocks" class="more" href="#run" hidden data-i18n="race.clocks"></a>
             <button id="race-stop" type="button" hidden data-i18n="race.stop"></button>
           </div>
         </div>
@@ -258,13 +259,17 @@
         <p id="run-empty" class="hint" data-i18n="progress.empty"></p>
         <div class="track"><span id="progress-fill" class="track-fill"></span></div>
         <ol id="lanes" class="lanes"></ol>
-        <div id="live" hidden>
-          <div class="panel-head">
-            <h3><span data-i18n="live.heading"></span><button class="info" type="button" data-tip="live.hint">i</button></h3>
-            <span id="live-caption" class="hint"></span>
-          </div>
-          <div id="live-stats" class="stats"></div>
-          <div id="fab-map" class="fab-map" role="img" data-i18n-attr="aria-label:live.hint"></div>
+        <div id="live" class="live" hidden>
+          <figure id="clocks-card" class="chart clocks">
+            <figcaption><span class="caption-title"><span data-i18n="clocks.heading"></span><button class="info" type="button" data-tip="clocks.hint">i</button></span><span id="live-caption" class="hint"></span></figcaption>
+            <div id="clock-stats" class="stats"></div>
+            <div id="clocks"></div>
+            <p id="clocks-more" class="hint"></p>
+          </figure>
+          <figure class="chart">
+            <figcaption><span class="caption-title"><span data-i18n="live.lines"></span><button class="info" type="button" data-tip="live.linesHint">i</button></span></figcaption>
+            <div id="live-lines"></div>
+          </figure>
         </div>
       </div>
     </section>

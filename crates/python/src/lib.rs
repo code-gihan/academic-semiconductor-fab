@@ -173,6 +173,12 @@ impl Simulation {
         to_py(py, &self.0.tool_groups())
     }
 
+    /// Every CQT segment, in the order of the dataset info's segments: the lots in it and its
+    /// completions so far.
+    fn segments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, &self.0.segments())
+    }
+
     /// Results of the finished run.
     fn results<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         to_py(py, &self.0.results().map_err(runtime_error)?)

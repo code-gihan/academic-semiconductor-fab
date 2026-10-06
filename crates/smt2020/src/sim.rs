@@ -36,7 +36,7 @@ pub use stats::{
     CqtReport, CqtSegmentReport, CqtStepReport, CqtTimes, DayReport, FLOW_FACTOR_PERCENTILES,
     FlowFactors, LotKind, LotReport, PeriodReport, Results, StateTimes, ToolGroupReport,
 };
-pub use status::{LotStatus, ToolGroupStatus, ToolStatus};
+pub use status::{LotStatus, SegmentLot, SegmentStatus, ToolGroupStatus, ToolStatus};
 pub use strategy::MAX_CRITERIA;
 pub(crate) use strategy::STEPPERS;
 pub use tool::ToolState;
@@ -350,8 +350,9 @@ const DRAIN_LIMIT: Time = 365 * DAY;
 ///
 /// [`run`](Self::run) advances it up to a time or to the end; [`run_observed`](Self::run_observed)
 /// also shows its [`Progress`] once per simulated day and pauses where the observer breaks off.
-/// Between runs, [`progress`](Self::progress), [`lots`](Self::lots), [`tools`](Self::tools) and
-/// [`tool_groups`](Self::tool_groups) read the fab's state, and [`reset`](Self::reset) starts over;
+/// Between runs, [`progress`](Self::progress), [`lots`](Self::lots), [`tools`](Self::tools),
+/// [`tool_groups`](Self::tool_groups) and [`segments`](Self::segments) read the fab's state, and
+/// [`reset`](Self::reset) starts over;
 /// the finished run has its [`results`](Self::results). Pausing leaves the results unchanged.
 ///
 /// QTS without flow factors runs in two passes: the [`Config::first_pass`] measures the flow
@@ -526,6 +527,11 @@ impl Simulation {
     /// Every tool group, in dataset order.
     pub fn tool_groups(&self) -> Vec<ToolGroupStatus> {
         self.engine.model().tool_group_statuses(self.engine.now())
+    }
+
+    /// Every CQT segment, in [`DatasetInfo::segments`](crate::DatasetInfo::segments) order.
+    pub fn segments(&self) -> Vec<SegmentStatus> {
+        self.engine.model().segment_statuses(self.engine.now())
     }
 
     /// Results of the finished run.
@@ -1001,6 +1007,46 @@ mod tests {
         // In the fab: 11.2 h, 1.2 h and 1.2 h; the run ends at midnight with an empty day 1.
         assert!((days[0].wip - 13.6 / 24.0).abs() < 1e-12);
         assert_eq!(days[1], DayReport::default());
+    }
+
+    #[test]
+    fn segments_show_their_lots_and_completions_so_far() {
+        let mut sim = Simulation::new(Arc::new(tiny_batch()), Config::new(DAY)).unwrap();
+        // At 5 h the first lot waits in the furnace's queue: it entered at 12 min, 2 h 48 min
+        // ago past its limit; nothing has completed the segment yet.
+        sim.run(Some(5 * HOUR)).unwrap();
+        let segments = sim.segments();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            segments[0].lots,
+            [SegmentLot {
+                id: 0,
+                kind: LotKind::Prl,
+                step: 1,
+                state: LotState::Queued,
+                entered: 12 * MINUTE,
+                slack: 12 * MINUTE + 2 * HOUR - 5 * HOUR,
+            }]
+        );
+        assert_eq!(segments[0].cqt, CqtReport::default());
+        // The second lot's etch ends at 10 h 12 min: both start the furnace and leave the clock;
+        // the first one over the limit.
+        sim.run(Some(10 * HOUR + 12 * MINUTE)).unwrap();
+        let segment = &sim.segments()[0];
+        assert!(segment.lots.is_empty());
+        assert_eq!((segment.cqt.completed, segment.cqt.violated), (2, 1));
+        // The totals stay after the reporting periods, and match the run's.
+        sim.run(None).unwrap();
+        let segment = &sim.segments()[0];
+        let progress = sim.progress();
+        assert_eq!(
+            (segment.cqt.completed, segment.cqt.violated),
+            (progress.cqt_completed, progress.cqt_violated)
+        );
+        assert_eq!(
+            segment.cqt,
+            sim.results().unwrap().periods[0].cqt_segments[0].cqt
+        );
     }
 
     #[test]

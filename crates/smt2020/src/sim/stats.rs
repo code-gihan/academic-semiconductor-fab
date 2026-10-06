@@ -296,6 +296,8 @@ pub(super) struct Stats {
     segments: Vec<SegmentStats>,
     /// Every CQT completion of the run, never reset (days, progress).
     pub cqt_total: CqtReport,
+    /// Every completion of each CQT segment of the run, never reset (segment statuses).
+    pub segment_totals: Vec<CqtReport>,
     /// Per route and step: sum of step cycle time over expected duration, and visits.
     steps: Vec<Vec<(f64, u64)>>,
 }
@@ -318,6 +320,7 @@ impl Stats {
                 })
                 .collect(),
             cqt_total: CqtReport::default(),
+            segment_totals: vec![CqtReport::default(); routes.segments.len()],
             steps: data
                 .routes
                 .iter()
@@ -371,6 +374,7 @@ impl Stats {
         visits: &[Visit],
     ) -> bool {
         self.cqt_total.add(wait, limit);
+        self.segment_totals[segment].add(wait, limit);
         let stats = &mut self.segments[segment];
         let violated = stats.cqt.add(wait, limit);
         for visit in visits {

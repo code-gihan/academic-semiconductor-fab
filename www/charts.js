@@ -9,6 +9,8 @@ const still = matchMedia("(prefers-reduced-motion: reduce)");
 /** Height of a bar row or a timeline lane, and the bar rows shown before a chart scrolls. */
 const ROW = 24;
 const ROWS = 30;
+/** Width (px) below which the clocks write their words above their rows. */
+const NARROW = 560;
 /** The library once loading has started, the charts drawn, and the groups made. */
 let library = null;
 const live = new Set();
@@ -257,7 +259,8 @@ export function liveLines({ series, max, shade, x, y, tick = y, label, height = 
         axisTick: { show: false },
         splitLine: { show: false },
       },
-      yAxis: { ...valueAxis(colours), min: 0, axisLabel: { color: colours.muted, formatter: tick } },
+      // A quarter of room above the highest line, for the shade's label.
+      yAxis: { ...valueAxis(colours), min: 0, boundaryGap: [0, "25%"], axisLabel: { color: colours.muted, formatter: tick } },
       series: series.map((line, index) => ({
         type: "line",
         name: line.label,
@@ -286,6 +289,185 @@ export function liveLines({ series, max, shade, x, y, tick = y, label, height = 
     set(next) {
       points = next;
       instance?.setOption({ series: points.map((data) => ({ data })) });
+    },
+  };
+}
+
+/**
+ * Lots on queue-time clocks, `count` rows of a limit each: across, the share of the limit a lot
+ * has used (the limit at 1; lots past `max` as arrows at the end) in the colour of its `token`
+ * (on-track, at-risk or over-limit). `x(share)` writes the axis and `column` names the texts
+ * beside the rows; `rowTitle(row)` and `lotTitle(row, lot)` write the tooltips. Returns {box,
+ * set(rows)}: `set` draws rows [{label, text, lots: [{id, at, token}]}]. A narrow chart writes a
+ * row's label and text above its clock. While pointed at, the chart holds its picture, so that a
+ * lot's tooltip can be read; the latest rows show when left.
+ */
+export function liveClocks({ count, max, x, column, rowTitle, lotTitle, label }) {
+  /** The latest rows, and those drawn. */
+  let rows = [];
+  let shown = [];
+  let instance = null;
+  let held = false;
+  /** Whether the chart is narrow: its clocks then sit low in their rows, under their words. */
+  let narrow = false;
+  const tokens = ["on-track", "at-risk", "over-limit"];
+  const box = chart(
+    (width) => (width < NARROW ? count * 40 : count * ROW) + 46,
+    (colours, width) => {
+      narrow = width < NARROW;
+      const left = categoryAxis(colours, labels(), labelWidth(width));
+      left.axisLabel.show = !narrow;
+      return {
+        ...base(colours, label),
+        animation: false,
+        grid: { left: 4, right: 4, top: 22, bottom: 24 },
+        tooltip: {
+          ...tooltipOf(colours),
+          trigger: "item",
+          formatter: ({ data }) => {
+            const row = shown[data.row];
+            return html(data.lot == null ? rowTitle(row) : lotTitle(row, row.lots[data.lot]));
+          },
+        },
+        xAxis: {
+          type: "value",
+          min: 0,
+          max,
+          interval: 1,
+          axisLabel: { color: colours.muted, formatter: x, alignMinLabel: "left", alignMaxLabel: "right" },
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { show: false },
+        },
+        yAxis: [
+          { ...left, position: "left" },
+          {
+            ...categoryAxis(colours, texts(), 64),
+            position: "right",
+            name: column,
+            nameLocation: "start",
+            nameGap: 6,
+            nameTextStyle: { color: colours.muted, fontSize: 11, align: narrow ? "right" : "left" },
+            axisLabel: { show: !narrow, color: colours.muted, fontSize: 12 },
+          },
+          { type: "value", show: false, min: -0.5, max: count - 0.5, inverse: true },
+        ],
+        series: [
+          // Each row's clock, up to the limit and past it; a narrow chart's words above it.
+          {
+            type: "custom",
+            yAxisIndex: 2,
+            encode: { y: 0 },
+            z: 0,
+            data: tracks(),
+            renderItem: (params, api) => {
+              const row = shown[api.value(0)];
+              const [start, middle] = api.coord([0, api.value(0) + centre()]);
+              const [limit] = api.coord([1, 0]);
+              const [end] = api.coord([max, 0]);
+              const band = api.size([0, 1])[1];
+              const height = Math.min(14, band * (narrow ? 0.35 : 0.56));
+              const top = middle - height / 2;
+              const children = [
+                { type: "rect", shape: { x: start, y: top, width: limit - start, height, r: 2 }, style: { fill: colours.track } },
+                { type: "rect", shape: { x: limit, y: top, width: end - limit, height, r: 2 }, style: { fill: colours.kind("over-limit"), opacity: 0.1 } },
+              ];
+              if (narrow) {
+                const words = { y: top - 4, verticalAlign: "bottom", font: `12px ${colours.font}` };
+                children.push(
+                  { type: "text", style: { ...words, text: row.label, x: start, fill: colours.text, width: end - start - 56, overflow: "truncate" } },
+                  { type: "text", style: { ...words, text: row.text, x: end, align: "right", fill: colours.muted } },
+                );
+              }
+              return { type: "group", children };
+            },
+          },
+          // The limit, across the rows.
+          {
+            type: "custom",
+            yAxisIndex: 2,
+            silent: true,
+            z: 1,
+            data: [[0]],
+            renderItem: (params, api) => {
+              const [at] = api.coord([1, 0]);
+              const area = params.coordSys;
+              return {
+                type: "line",
+                shape: { x1: at, y1: area.y, x2: at, y2: area.y + area.height },
+                style: { stroke: colours.muted, lineWidth: 1, lineDash: [3, 3] },
+              };
+            },
+          },
+          ...tokens.map((token) => ({
+            type: "scatter",
+            yAxisIndex: 2,
+            z: 2,
+            symbolSize: 7,
+            itemStyle: { color: colours.kind(token), borderColor: colours.card, borderWidth: 1 },
+            emphasis: { scale: 1.6 },
+            data: dots(token),
+          })),
+        ],
+      };
+    },
+    (drawn) => {
+      instance = drawn;
+      // Held while pointed at.
+      box.onpointerenter = () => {
+        held = true;
+      };
+      box.onpointerleave = () => {
+        held = false;
+        draw();
+      };
+    },
+  );
+
+  /** Where a row's clock sits, from the middle of the row (in rows). */
+  function centre() {
+    return narrow ? 0.15 : 0;
+  }
+
+  function labels() {
+    return Array.from({ length: count }, (_, index) => shown[index]?.label ?? "");
+  }
+
+  function texts() {
+    return Array.from({ length: count }, (_, index) => shown[index]?.text ?? "");
+  }
+
+  function tracks() {
+    return shown.map((_, index) => ({ value: [index], row: index }));
+  }
+
+  /** The lots of a token as points over their row's clock, spread by id so that few overlap;
+   * those past the end as arrows at the end. */
+  function dots(token) {
+    const spread = narrow ? 0.3 : 0.5;
+    return shown.flatMap((row, index) =>
+      row.lots.flatMap((lot, position) => {
+        if (lot.token !== token) return [];
+        const y = index + centre() + (((lot.id * 2_654_435_761) % 997) / 997 - 0.5) * spread;
+        const past = lot.at > max ? { symbol: "triangle", symbolRotate: -90 } : {};
+        return [{ value: [Math.min(lot.at, max), y], row: index, lot: position, ...past }];
+      }),
+    );
+  }
+
+  function draw() {
+    shown = rows;
+    instance?.setOption({
+      yAxis: [{ data: labels() }, { data: texts() }, {}],
+      series: [{ data: tracks() }, {}, ...tokens.map((token) => ({ data: dots(token) }))],
+    });
+  }
+
+  return {
+    box,
+    set(next) {
+      rows = next;
+      if (!held) draw();
     },
   };
 }
@@ -421,15 +603,18 @@ export function timeline({ lanes, from, until, time, kinds, lines = [], label })
 }
 
 /**
- * A box `height` px high with the chart `build(colours, width, echarts)` gives (an ECharts
- * option); `ready(instance, echarts)` adds events once it is drawn. It is drawn when the box first
- * has a width (with its entrance if `animate`), again for a new width or colour scheme, and let go
- * when the box leaves the page.
+ * A box `height` px high (or `height(width)` px at its width) with the chart `build(colours,
+ * width, echarts)` gives (an ECharts option); `ready(instance, echarts)` adds events once it is
+ * drawn. It is drawn when the box first has a width (with its entrance if `animate`), again for a
+ * new width or colour scheme, and let go when the box leaves the page.
  */
 function chart(height, build, ready, animate = false) {
   const box = document.createElement("div");
   box.className = "chart-box";
-  box.style.height = `${height}px`;
+  const size = (width) => {
+    box.style.height = `${typeof height === "function" ? height(width) : height}px`;
+  };
+  size(0);
   loadCharts().then((echarts) => {
     const entry = { instance: null, width: 0 };
     // Each drawing is a new instance at the box's width in the current colours: an updated one
@@ -438,6 +623,7 @@ function chart(height, build, ready, animate = false) {
     const draw = () => {
       const first = !entry.instance;
       entry.instance?.dispose();
+      size(entry.width);
       entry.instance = echarts.init(box);
       const option = build(palette(), entry.width, echarts);
       if (!(first && animate)) option.animation = false;

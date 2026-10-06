@@ -373,6 +373,11 @@ impl Fab {
         &self.stats.cqt_total
     }
 
+    /// Every completion of each CQT segment so far, in dataset order.
+    pub(super) fn segment_totals(&self) -> &[CqtReport] {
+        &self.stats.segment_totals
+    }
+
     /// Records the event `entry` describes now, if recording events. The entry is made only
     /// then: unrecorded runs pay one check per event.
     #[inline]

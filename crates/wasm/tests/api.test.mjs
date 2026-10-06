@@ -71,6 +71,34 @@ test("a paused run shows the fab and resumes to the same results", () => {
   assert.equal(digest(simulation.results()), digest(results));
 });
 
+test("segments show the lots on their clocks and their completions so far", () => {
+  const info = dataset.info();
+  const simulation = new Simulation(dataset, config);
+  const progress = simulation.run(2 * DAY + 0.5 * HOUR);
+  const segments = simulation.segments();
+  assert.equal(segments.length, info.segments.length);
+  // Every lot in a segment until its exit step starts, with its deadline.
+  const waiting = simulation
+    .lots()
+    .filter((lot) => lot.cqt_exit !== null && !(lot.step === lot.cqt_exit && lot.state === "processing"));
+  const byId = new Map(waiting.map((lot) => [lot.id, lot]));
+  const inSegments = segments.flatMap((segment, index) =>
+    segment.lots.map((lot) => ({ ...lot, segment: info.segments[index] })),
+  );
+  assert.ok(inSegments.length > 0);
+  assert.equal(inSegments.length, waiting.length);
+  for (const lot of inSegments) {
+    const status = byId.get(lot.id);
+    assert.deepEqual([lot.kind, lot.step, lot.state], [status.kind, status.step, status.state]);
+    assert.equal(status.cqt_exit, lot.segment.exit);
+    assert.equal(lot.entered + lot.segment.limit, status.cqt_deadline);
+    assert.ok(lot.slack <= status.cqt_deadline - progress.now);
+  }
+  const total = (count) => segments.reduce((sum, segment) => sum + count(segment.cqt), 0);
+  assert.equal(total((cqt) => cqt.completed), progress.cqt_completed);
+  assert.equal(total((cqt) => cqt.violated), progress.cqt_violated);
+});
+
 test("an error thrown by the observer pauses the run", () => {
   const simulation = new Simulation(dataset, config);
   assert.throws(

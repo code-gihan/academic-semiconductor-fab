@@ -229,6 +229,32 @@ class ToolGroupStatus(TypedDict):
     unload: int
     idle: int
 
+class CqtReport(TypedDict):
+    """CQT segment completions (exit step started); violation and slack are totals in ms."""
+
+    completed: int
+    violated: int
+    violated_1h: int
+    violated_2h: int
+    violated_4h: int
+    violation: int
+    slack: int
+
+class SegmentLot(TypedDict):
+    id: int
+    kind: Literal["PRL", "PHL", "SHL", "ERL", "EHL"]
+    step: int
+    state: Literal["moving", "queued", "processing"]
+    entered: int
+    slack: int
+    """Latest start of the exit step (entered + limit) − now − expected work until it."""
+
+class SegmentStatus(TypedDict):
+    lots: list[SegmentLot]
+    """Lots from the end of the entrance step until the exit step starts, by id."""
+    cqt: CqtReport
+    """Completions since time 0 (not reset by reporting periods)."""
+
 class Summary(TypedDict):
     period: str
     scope: str
@@ -306,6 +332,8 @@ class Simulation:
         """Every tool, by id."""
     def tool_groups(self) -> list[ToolGroupStatus]:
         """Every tool group, in dataset order."""
+    def segments(self) -> list[SegmentStatus]:
+        """Every CQT segment, in the order of the dataset info's segments."""
     def results(self) -> Results:
         """Results of the finished run (RuntimeError before)."""
 

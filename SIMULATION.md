@@ -14,7 +14,7 @@
 | `crates/smt2020/src/rng.rs` | 용도별 난수 스트림 |
 | `crates/smt2020/src/sim.rs` | `Config`, `Simulation`(단계 실행·pass·상태·결과), `Progress`, `time`, `Error` |
 | `sim/fab.rs` | 모델 `Fab`: 사건 처리, 투입·이동, 대기열 항목, job, 고장·PM, 예약, Stopping 집계, 기간, 종료 |
-| `sim/status.rs` | 현재 상태: `LotStatus`, `ToolStatus`, `ToolGroupStatus` |
+| `sim/status.rs` | 현재 상태: `LotStatus`, `ToolStatus`, `ToolGroupStatus`, `SegmentStatus`·`SegmentLot` |
 | `sim/dispatch.rs` | 툴 순서, lot 선택·순위 키, 배치 구성, Stopping 보류 표시 |
 | `sim/tool.rs` | 툴: job 단계 시간표, cascading 슬롯, 일시정지·재개, 상태 시간 집계 |
 | `sim/routes.rs` | route 사전 계산: 기대 스텝시간, 잔여 작업, RPT, CQT litho 여부·구간 TG, 배치 호환 키, setup 구성원 |
@@ -35,7 +35,7 @@ run(until)·run_observed(until, 관찰자)   반복 호출 = 이어서 진행
   ├─ 모델 사건 + 1일 관측 사건(관찰자 호출, Break = 일시정지) + 종료 시각(일시정지)
   ├─ 1차 pass 완료 ─▶ 측정 FF로 본 pass 생성
   └─ 마지막 lot 완료 사건 ─▶ Drain 보고 ─▶ stop ─▶ finished, results()
-progress()·lots()·tools()·tool_groups()   어느 시점이든 읽기 전용
+progress()·lots()·tools()·tool_groups()·segments()   어느 시점이든 읽기 전용
 reset(Config) ─▶ 시각 0
 report::summarize(&[Results]) ─▶ 측정값별 평균·표준편차·95% CI
 report::compare(&[Results], &[Results]) ─▶ 복제 짝 차이 평균·95% CI
@@ -181,6 +181,7 @@ report::compare(&[Results], &[Results]) ─▶ 복제 짝 차이 평균·95% CI
 - `lots()`: 살아 있는 lot을 투입 순번(`id`) 순으로. 현재 스텝(이동 중이면 향하는 스텝)의 인덱스·이름·TG, 상태(moving·queued·processing), 공정 중인 툴(툴 job에서 역산), 진행 중인 CQT 구간의 종료 스텝과 기한(진입 시각 + 한도).
 - `tools()`: 툴 순번(TG 순, TG 내 위치 순) 순으로 TG, `state_at(now)`의 상태(6.4의 상태 판정), 현재 setup 이름, job의 lot id.
 - `tool_groups()`: TG 순으로 이름, 영역, 툴 수, 대기 lot 수, 상태별 툴 수.
+- `segments()`: 구간 index 순으로, 구간 시계가 도는 lot(시작 스텝 종료 ~ 종료 스텝 작업 시작 전, 종료 스텝 공정 중인 lot 제외)을 id 순으로: 종류, 현재 스텝·상태, 진입 시각, 여유(진입 + 한도 − now − 잔여 작업(현재 스텝) + 잔여 작업(종료 스텝), ms 반올림, 대기열 항목의 여유와 같은 식). 구간별 완료 누적(`CqtReport`, 시각 0부터, 기간 리셋 없음: 통계의 구간별 총계를 완료마다 더함).
 - `records()`, `recording()`, `flow_factors()`: 9.5.
 - `Dataset::info()`(`info.rs`): 영역, TG(이름, 영역 index, 툴 수, 배치·LSSU·스테퍼 여부, 데이터 순위 기준), 부품(이름, 패밀리, E 여부, route index), route(스텝 이름·TG index), CQT 구간(route·시작·종료 스텝 index, 한도, litho, 구간 TG = 시작 다음 ~ 종료 스텝의 서로 다른 TG), 보고 기간. 구간 순서 = route 순 → 시작 스텝 순(`Dataset::segments`), 이 위치가 구간 index.
 - JS(`fab-wasm`)·Python(`smt2020-python`)은 위 메서드를 그대로 위임하고 값을 serde 스키마로 변환한다. 입력은 미지 필드를 오류로 읽는다(JS는 JSON 값을 거침: serde-wasm-bindgen의 구조체 역직렬화가 알려진 속성만 읽기 때문). 관찰자: `false`(JS)·`False`(Python)만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 관측마다 다시 잡아 관찰자 호출·신호(Ctrl-C) 확인.

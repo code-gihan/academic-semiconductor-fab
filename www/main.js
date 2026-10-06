@@ -13,7 +13,7 @@ import { homeView } from "./home.js";
 import { LANGUAGES, failureText, formatDuration, initLanguage, language, setLanguage, t } from "./i18n.js";
 import { reveal, slideTo } from "./motion.js";
 import * as pool from "./pool.js";
-import { lanes, showProgress, startProgress } from "./progress.js";
+import { lanes, relabelProgress, showProgress, startProgress } from "./progress.js";
 import { defaultPeriod, onSegmentChosen, selectedSegment, showResults } from "./results.js";
 import { setupView } from "./setup.js";
 import { sharedState } from "./share.js";
@@ -64,7 +64,7 @@ $("language").addEventListener("change", (event) => {
   home.relabel();
   setStatus(statusText);
   showWheels();
-  if (active) showProgress(active);
+  relabelProgress();
   if (finished) {
     showScenarios();
     showResults(shownScenario().view, $("period").value, false);
@@ -141,8 +141,9 @@ function start(batch) {
     scenarios: batch.scenarios.map((scenario) => ({ ...scenario, done: [] })),
     lanes: lanes(batch.scenarios.map((scenario) => scenario.name), replications),
     finished: 0,
-    /** Lane shown in the live fab map. */
+    /** Lane shown on the clocks of the Run view, and whether a click chose it. */
     follow: null,
+    chosen: false,
     started: performance.now(),
     frame: 0,
   };
@@ -177,11 +178,8 @@ function start(batch) {
         },
         onProgress: (message) => {
           lane.progress = message.progress;
-          lane.toolGroups = message.toolGroups;
-          // The fab map follows the first running lane with progress until it is done.
-          if (run.follow === null || run.lanes[run.follow].state === "done") {
-            run.follow = run.lanes.findIndex((each) => each.state === "running" && each.toolGroups);
-          }
+          lane.segments = message.segments;
+          refollow(run);
           redraw(run);
         },
         onDone: (message) => {
@@ -215,16 +213,31 @@ function redraw(run) {
   });
 }
 
-/** Follows a lane with progress in the fab map. */
+/** Follows a lane with progress on the clocks, chosen by a click. */
 function follow(run, index) {
-  if (run !== active || !run.lanes[index].toolGroups) return;
+  if (run !== active || !run.lanes[index].segments) return;
   run.follow = index;
+  run.chosen = true;
   showProgress(run);
+}
+
+/** The clocks keep a chosen lane until it is done, and otherwise follow a running lane in its
+ * final pass (a QTS pre-run runs other rules), or any running lane until there is one. */
+function refollow(run) {
+  const current = run.lanes[run.follow];
+  const final = (lane) =>
+    lane.state === "running" && lane.segments && lane.progress.pass === lane.progress.passes - 1;
+  if (current && current.state !== "done" && (run.chosen || final(current))) return;
+  run.chosen = false;
+  const index = run.lanes.findIndex(final);
+  run.follow = index >= 0 ? index : run.lanes.findIndex((lane) => lane.state === "running" && lane.segments);
 }
 
 function finish(run) {
   const seconds = (performance.now() - run.started) / 1000;
+  run.seconds = seconds;
   cancelAnimationFrame(run.frame);
+  showProgress(run);
   active = null;
   setRunning(false);
   setStatus(() => t("status.done", { time: formatDuration(seconds) }));
@@ -292,6 +305,7 @@ function stop(render) {
   if (run) {
     pool.cancel(run);
     cancelAnimationFrame(run.frame);
+    run.seconds = (performance.now() - run.started) / 1000;
     active = null;
   }
   setRunning(false);

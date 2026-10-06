@@ -12,7 +12,7 @@ import { explain } from "./explainer.js";
 import { failureText, formatDuration, formatNumber, t } from "./i18n.js";
 import { MAIN, lookup, tile, valueText, verdict } from "./kpis.js";
 import { glide, reveal, still } from "./motion.js";
-import { laneFraction } from "./progress.js";
+import { grow, laneFraction, shareSoFar } from "./progress.js";
 import { RACE } from "./presets.js";
 import { defaultPeriod } from "./results.js";
 import { describe } from "./setup.js";
@@ -21,8 +21,6 @@ const DAY = 86_400_000;
 const $ = (id) => document.getElementById(id);
 /** Colour tokens of the rules, in race order: BASE in grey, then the CQT rules. */
 const KINDS = ["rule-base", "rule-1", "rule-2"];
-/** CQT completions a rule needs before its share so far shows (its first hours are noise). */
-const FIRST_SHARE = 1000;
 const CQT = MAIN[0];
 
 /**
@@ -102,7 +100,7 @@ export function homeView({ start, stop }) {
       scenarios,
       view: "home",
     });
-    $("race-stop").hidden = false;
+    showControls(true);
     renderLanes();
     reveal([$("race-chart-card")]);
     setStatus(() => t("race.running"));
@@ -116,7 +114,7 @@ export function homeView({ start, stop }) {
     race.chart = liveLines({
       series: race.names.map((name, index) => ({ label: name, kind: KINDS[index] })),
       max: days(race.horizon),
-      shade: { to: days(race.warmUp), label: t("race.warmUp") },
+      shade: { to: days(race.warmUp), label: t("chart.warmUp") },
       x: (day) => t("time.day", { day: formatNumber(day, 0) }),
       y: (share) => `${formatNumber(share, 1)}%`,
       tick: (share) => `${formatNumber(share, 0)}%`,
@@ -137,7 +135,7 @@ export function homeView({ start, stop }) {
     RACE.rules.forEach((_, index) => {
       const lanes = lanesOf(run, index);
       showLane(items[index], lanes);
-      grow(index, lanes);
+      grow(race.points[index], shareSoFar(lanes));
     });
     race.chart.set(race.points);
     const done = run.lanes.filter((lane) => lane.state === "done").length;
@@ -157,7 +155,7 @@ export function homeView({ start, stop }) {
     track.setAttribute("aria-valuenow", String(Math.round(100 * fraction)));
     item.querySelector(".race-phase").textContent = phase(lanes);
     // Until its runs report, the paper's value stays.
-    const share = soFar(lanes);
+    const share = shareSoFar(lanes);
     if (!share) return;
     item.dataset.value = "live";
     glide(item.querySelector(".race-number"), share.value, (value) => formatNumber(value, 1));
@@ -179,26 +177,6 @@ export function homeView({ start, stop }) {
     });
   }
 
-  /** CQT completions over the limit so far, over the rule's runs in their final pass: {day,
-   * value (%)}, once there are enough. */
-  function soFar(lanes) {
-    const final = lanes.filter((lane) => lane.progress && lane.progress.pass === lane.progress.passes - 1);
-    const completed = final.reduce((sum, lane) => sum + lane.progress.cqt_completed, 0);
-    if (completed < FIRST_SHARE) return null;
-    const violated = final.reduce((sum, lane) => sum + lane.progress.cqt_violated, 0);
-    const day = mean(final.map((lane) => Math.min(lane.progress.now, race.horizon) / DAY));
-    return { day, value: (100 * violated) / completed };
-  }
-
-  /** The rule's line grows by its share so far, at most a point per simulated day. */
-  function grow(index, lanes) {
-    const share = soFar(lanes);
-    const line = race.points[index];
-    if (share && (line.length === 0 || share.day >= line.at(-1)[0] + 1)) {
-      line.push([share.day, share.value]);
-    }
-  }
-
   /** The race is done: the main measures of its last reported period, the rule with the fewest
    * CQT violations shown against BASE. */
   function finish(run, finished) {
@@ -218,7 +196,7 @@ export function homeView({ start, stop }) {
     const seconds = (scenario) => Math.max(...scenario.done.map((replication) => replication.seconds));
     race.run = null;
     race.result = { seconds: scenarios.map(seconds), summaries, differences, shown: best };
-    $("race-stop").hidden = true;
+    showControls(false);
     showFinal();
     renderResult(true);
     showButton();
@@ -346,6 +324,12 @@ export function homeView({ start, stop }) {
     if ($("race-status").textContent !== text) $("race-status").textContent = text;
   }
 
+  /** While the race runs: a link to its queue-time clocks (the Run view) and the stop. */
+  function showControls(running) {
+    $("race-clocks").hidden = !running;
+    $("race-stop").hidden = !running;
+  }
+
   /** The race button: a first race, or another. */
   function showButton() {
     button.querySelector("span").textContent = t(race?.result ? "race.again" : "race.start");
@@ -375,7 +359,7 @@ export function homeView({ start, stop }) {
     stopped(run, render) {
       if (!race || run !== race.run) return;
       race.run = null;
-      $("race-stop").hidden = true;
+      showControls(false);
       // The lanes keep where they were, still.
       for (const item of $("race-lanes").children) {
         if (item.dataset.state !== "done") item.dataset.state = "stopped";

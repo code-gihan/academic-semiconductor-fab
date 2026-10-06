@@ -1,7 +1,7 @@
 // One simulation at a time on the wasm simulator, for the pool (pool.js). Messages in:
 // {id, dataset, bytes?, config, recording?, until?, live}; the bytes come with the first job of a
 // dataset, which the worker then keeps. Messages out, with the job's id: "progress" (with the
-// tool groups if live), then "done" or "error".
+// CQT segments if live), then "done" or "error".
 import init, { Dataset, Simulation, digest } from "./pkg/fab_wasm.js";
 
 /** Wall time between progress messages: the run pauses at the next simulated day after it. */
@@ -31,7 +31,7 @@ self.onmessage = async ({ data: job }) => {
           type: "progress",
           id: job.id,
           progress,
-          toolGroups: job.live ? simulation.toolGroups() : undefined,
+          segments: job.live ? simulation.segments() : undefined,
         });
       } while (!progress.finished && (job.until == null || progress.now < job.until));
       const results = progress.finished ? simulation.results() : null;
