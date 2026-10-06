@@ -122,7 +122,7 @@ function placeIndicator() {
 
 /**
  * Runs `batch` ({name, dataset: {key, bytes}, info, replications, scenarios: [{name, config,
- * passes, setup}], view?}) on the pool: every replication of every scenario, with the same seeds,
+ * passes, code?, setup}], view?}) on the pool: every replication of every scenario, with the same seeds,
  * so that the scenarios compare pair by pair. The Run view follows it, unless the batch names the
  * view that does (the Home view's race); its results go to the Analysis and Compare views.
  * Returns the run.
@@ -168,6 +168,7 @@ function start(batch) {
         group: run,
         dataset: run.dataset,
         config: { ...scenario.config, replication },
+        code: scenario.code,
         // The first scenario's replication 0 records what the details show first (recording
         // leaves results unchanged); the others are replayed when asked for.
         recording: index === 0 && replication === 0 ? RECORDING : undefined,
@@ -260,6 +261,7 @@ function finish(run) {
         threads: run.threads,
         seconds,
         setup: scenario.setup,
+        code: scenario.code,
         done: scenario.done,
         summary,
         daily: daily(results),

@@ -7,6 +7,7 @@
 //! bindings: times are ms (fractional times round to whole ms), omitted configuration fields take
 //! their defaults.
 
+mod code;
 mod dispatch;
 mod fab;
 mod plan;
@@ -30,6 +31,7 @@ use crate::data::{Dataset, Rank};
 use fab::Fab;
 use strategy::Strategy;
 
+pub use code::{Admit, BatchView, Code, CqtView, GroupCount, Hooks, LotView, SegmentView, Start};
 pub use fab::LotState;
 pub use record::{EventFilter, EventKind, Events, Recording, Records, ToolGroupDays, Violations};
 pub use stats::{
@@ -109,6 +111,16 @@ impl Config {
         }
     }
 
+    /// The strategy code's priority ranks somewhere: as the queue-time rule or as a criterion.
+    fn uses_code(&self) -> bool {
+        self.queue_time == QueueTimeRule::Code
+            || self
+                .ranking
+                .values()
+                .flatten()
+                .any(|&c| c == Criterion::Code)
+    }
+
     /// QTS ranks somewhere: as the queue-time rule or as a criterion.
     fn uses_qts(&self) -> bool {
         self.queue_time == QueueTimeRule::Qts
@@ -120,8 +132,9 @@ impl Config {
     }
 
     /// The pass measuring the QTS flow factors that a QTS run without them needs first: this
-    /// configuration without its queue-time controls (rule, criteria, batch starts, stopping);
-    /// a ranking left empty falls back to the dataset's (\[P2\] §3.1, assumed).
+    /// configuration without its queue-time controls (rule, criteria, batch starts, stopping)
+    /// and without strategy code; a ranking left empty falls back to the dataset's (\[P2\] §3.1,
+    /// assumed).
     fn first_pass(&self) -> Option<Self> {
         if self.flow_factors.is_some() || !self.uses_qts() {
             return None;
@@ -133,7 +146,7 @@ impl Config {
                 let kept: Vec<Criterion> = criteria
                     .iter()
                     .copied()
-                    .filter(|criterion| !criterion.queue_time())
+                    .filter(|&criterion| !criterion.queue_time() && criterion != Criterion::Code)
                     .collect();
                 (!kept.is_empty()).then(|| (group.clone(), kept))
             })
@@ -179,7 +192,8 @@ fn deserialize_optional_time<'de, D: Deserializer<'de>>(
         .map_err(D::Error::custom)
 }
 
-/// Critical queue time dispatching of \[P2\] §3.1, ranked after least setup and before FIFO/CR.
+/// Critical queue time dispatching of \[P2\] §3.1, or the strategy code's in its place: ranked
+/// after least setup and before FIFO/CR.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueueTimeRule {
@@ -189,6 +203,8 @@ pub enum QueueTimeRule {
     Qtcr,
     /// Queue time slack, eq. (2)–(6), with [`Config::flow_factors`].
     Qts,
+    /// The strategy code's priority ([`Code::priority`]).
+    Code,
 }
 
 /// A lot ranking criterion: the lot with the smaller value goes first. The queue-time criteria
@@ -220,6 +236,9 @@ pub enum Criterion {
     /// Lots with at most this much queue-time slack first, the others alike. Slack = segment end
     /// − now − expected work before the exit step starts.
     QtWithin(#[serde(deserialize_with = "deserialize_time")] Time),
+    /// The strategy code's priority, given on the lot's arrival in the queue
+    /// ([`Code::priority`]).
+    Code,
 }
 
 impl Criterion {
@@ -237,6 +256,7 @@ impl Criterion {
             Self::Qts => "qts",
             Self::QtDeadline => "qt_deadline",
             Self::QtWithin(_) => "qt_within",
+            Self::Code => "code",
         }
     }
 
@@ -356,7 +376,8 @@ const DRAIN_LIMIT: Time = 365 * DAY;
 /// the finished run has its [`results`](Self::results). Pausing leaves the results unchanged.
 ///
 /// QTS without flow factors runs in two passes: the [`Config::first_pass`] measures the flow
-/// factors, then the configured run takes them. Only the configured run is recorded.
+/// factors, then the configured run takes them. Only the configured run is recorded, and only it
+/// asks the strategy [`Code`].
 pub struct Simulation {
     data: Arc<Dataset>,
     config: Config,
@@ -366,8 +387,12 @@ pub struct Simulation {
     engine: des_core::Simulation<Fab>,
     /// QTS flow factors the first pass measured.
     measured: Option<Vec<Vec<Option<f64>>>>,
-    /// Failure of a run that passed its deadline; every later run reports it.
+    /// Failure of a run that passed its deadline or whose code failed; every later run reports
+    /// it.
     failure: Option<Error>,
+    /// The strategy code while a first pass runs; the configured run's fab holds it then.
+    code: Option<Box<dyn Code>>,
+    hooks: Hooks,
 }
 
 impl Simulation {
@@ -383,6 +408,36 @@ impl Simulation {
         config: Config,
         recording: Recording,
     ) -> Result<Self, Error> {
+        Self::build(data, config, recording, &mut None)
+    }
+
+    /// [`with_recording`](Self::with_recording) with strategy `code` deciding what its hooks
+    /// decide. A configuration that ranks by code needs its priority.
+    pub fn with_code(
+        data: Arc<Dataset>,
+        config: Config,
+        recording: Recording,
+        code: Box<dyn Code>,
+    ) -> Result<Self, Error> {
+        Self::build(data, config, recording, &mut Some(code))
+    }
+
+    /// The simulation at time 0; `code` goes into it unless this fails.
+    fn build(
+        data: Arc<Dataset>,
+        config: Config,
+        recording: Recording,
+        code: &mut Option<Box<dyn Code>>,
+    ) -> Result<Self, Error> {
+        let hooks = code.as_ref().map_or(Hooks::default(), |code| code.hooks());
+        if code.is_some() && hooks == Hooks::default() {
+            return Err(Error("the strategy code defines no hook".into()));
+        }
+        if code.is_some() && config.uses_code() && !hooks.priority {
+            return Err(Error(
+                "the configuration ranks by code, but the strategy code has no priority".into(),
+            ));
+        }
         let first = config.first_pass();
         let fab = match &first {
             Some(first) => {
@@ -395,13 +450,20 @@ impl Simulation {
                     .collect();
                 Strategy::new(&data, &config, Some(&unmeasured))?;
                 record::Recorder::new(&data, &recording)?;
-                Fab::new(Arc::clone(&data), first, None, &Recording::default())?
+                Fab::new(
+                    Arc::clone(&data),
+                    first,
+                    None,
+                    &Recording::default(),
+                    &mut None,
+                )?
             }
             None => Fab::new(
                 Arc::clone(&data),
                 &config,
                 config.flow_factors.as_deref(),
                 &recording,
+                code,
             )?,
         };
         Ok(Self {
@@ -413,6 +475,8 @@ impl Simulation {
             engine: des_core::Simulation::new(fab),
             measured: None,
             failure: None,
+            code: code.take(),
+            hooks,
         })
     }
 
@@ -424,11 +488,35 @@ impl Simulation {
         &self.recording
     }
 
-    /// Starts over at time 0 with `config` and the same recording; on error the simulation stays
-    /// as it was.
+    /// Starts over at time 0 with `config`, the same recording and the same strategy code; on
+    /// error the simulation stays as it was.
     pub fn reset(&mut self, config: Config) -> Result<(), Error> {
-        *self = Self::with_recording(Arc::clone(&self.data), config, self.recording.clone())?;
-        Ok(())
+        // The code waits for the configured run, or that run's fab holds it.
+        let waiting = self.code.is_some();
+        let mut code = if waiting {
+            self.code.take()
+        } else {
+            self.engine.model_mut().code.take()
+        };
+        match Self::build(
+            Arc::clone(&self.data),
+            config,
+            self.recording.clone(),
+            &mut code,
+        ) {
+            Ok(simulation) => {
+                *self = simulation;
+                Ok(())
+            }
+            Err(error) => {
+                if waiting {
+                    self.code = code;
+                } else {
+                    self.engine.model_mut().code = code;
+                }
+                Err(error)
+            }
+        }
     }
 
     /// The QTS flow factors of the configured run: given, or measured by the first pass once it
@@ -458,6 +546,11 @@ impl Simulation {
         until: Option<Time>,
         mut observe: impl FnMut(&Progress) -> ControlFlow<()>,
     ) -> Result<Progress, Error> {
+        if self.config.uses_code() && !self.hooks.priority {
+            return Err(Error(
+                "the configuration ranks by code, but no strategy code was given".into(),
+            ));
+        }
         loop {
             if let Some(failure) = &self.failure {
                 return Err(failure.clone());
@@ -476,6 +569,11 @@ impl Simulation {
                 observe(&Progress::of(fab, now, pass, passes, horizon))
             });
             let fab = self.engine.model();
+            if let Some(failure) = fab.code_failure() {
+                let failure = Error(format!("strategy code: {failure}"));
+                self.failure = Some(failure.clone());
+                return Err(failure);
+            }
             match outcome {
                 Outcome::Reached | Outcome::Interrupted => return Ok(self.progress()),
                 _ if !fab.finished() => {
@@ -495,6 +593,7 @@ impl Simulation {
                         &self.config,
                         Some(&measured),
                         &self.recording,
+                        &mut self.code,
                     )?;
                     self.engine = des_core::Simulation::new(fab);
                     self.measured = Some(measured);

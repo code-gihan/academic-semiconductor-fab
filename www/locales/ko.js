@@ -193,6 +193,7 @@ export default {
   "strategy.queueTime.none": "없음 (BASE)",
   "strategy.queueTime.qtcr": "QTCR: 대기 시간 임계 비율",
   "strategy.queueTime.qts": "QTS: 대기 시간 스케줄링",
+  "strategy.queueTime.code": "코드: 직접 쓴 priority()",
   "strategy.queueTime.hint":
     "아래에서 자체 순위를 주지 않은 툴그룹마다 FIFO·CR 앞에 들어갑니다. QTCR은 남은 작업에 비해 한도까지 남은 시간이 짧은 lot을 먼저 처리하고, QTS는 사전 실행에서 잰 흐름 계수로 스텝마다 기한을 정하므로 실행 1회가 약 2배 걸립니다.",
   "strategy.stopping.label": "CQT 구간 앞 보류(Stopping)",
@@ -241,6 +242,7 @@ export default {
   "ranking.col.ranking": "순위",
   "rule.qtcr": "QTCR",
   "rule.qts": "QTS",
+  "rule.code": "코드 priority",
   "tag.batch": "배치",
   "tag.setupRuns": "setup run",
   "tag.stepper": "스테퍼",
@@ -255,6 +257,7 @@ export default {
   "criterion.qtcr": "QTCR",
   "criterion.qts": "QTS",
   "criterion.qt_deadline": "CQT 마감 빠른 순",
+  "criterion.code": "코드 priority",
   "criterion.qt_within": "CQT 여유 {hours} h 이하 먼저",
   "criterion.qt_within.prefix": "CQT 여유",
   "criterion.qt_within.suffix": "h 이하 먼저",
@@ -270,6 +273,7 @@ export default {
   "criterion.qts.hint":
     "[P2] 대기 시간 스케줄링: 잰 흐름 계수로 정한, 한도를 지키는 이 스텝의 최종 시작 시각. CQT 구간 밖 lot은 맨 뒤.",
   "criterion.qt_deadline.hint": "CQT 구간 마감(시작 + 한도)이 빠른 lot부터. CQT 구간 밖 lot은 맨 뒤.",
+  "criterion.code.hint": "전략 코드의 priority(lot, now)가 lot이 대기열에 들어올 때 돌려준 값, 작은 순.",
   "criterion.qt_within.hint":
     "CQT 여유가 이 시간 이하인 lot을 먼저 두고, 나머지는 같게 보아 다음 기준이 정합니다. 여유 = 구간 마감 − 현재 − 마지막 스텝 시작 전까지의 기대 작업.",
 
@@ -585,6 +589,9 @@ export default {
   "python.linux": "Linux (x86-64)",
   "python.macos": "macOS (Intel, Apple silicon)",
   "python.quickstart": "빠른 시작",
+  "python.code": "전략 코드",
+  "python.codeHint":
+    "페이지와 같은 함수를 snake_case 이름으로 씁니다: priority(lot, now), admit(lot, segment, now), start_batch(batch, now); lot.tool_group, lot.cqt.slack.",
   "python.config":
     "설정 화면의 JSON을 그대로 실행합니다: Python, JavaScript, 이 페이지가 같은 시뮬레이터와 같은 스키마를 씁니다.",
   "python.more": "모든 함수와 옵션(JavaScript·Rust 포함):",
@@ -621,4 +628,28 @@ export default {
   "kind.short.SHL": "슈퍼 핫(SHL)",
   "kind.short.ERL": "엔지니어링 일반(ERL)",
   "kind.short.EHL": "엔지니어링 핫(EHL)",
+
+  "code.heading": "전략 코드",
+  "code.short": "직접 쓰는 규칙: 입력하는 대로 자동완성되는 JavaScript 함수. Python에서도 같은 방식입니다.",
+  "code.hint":
+    "시뮬레이션이 부르는 함수 세 개 중 필요한 것을 정의합니다. priority(lot, now)는 코드로 순위를 매기는 대기열(CQT 디스패칭: 코드, 또는 순위에 '코드 priority'가 있는 툴그룹)에 lot이 들어올 때 순위 값을 돌려줍니다(작을수록 먼저). admit(lot, segment, now)는 lot이 지금 CQT 구간을 시작해도 되는지 정합니다(false나 시각이면 보류). startBatch(batch, now)는 최소 크기에 못 미친 배치를 지금 시작할지 정합니다(false는 대기, 시각이면 그때 다시 묻기). 시간 단위는 ms이고 MINUTE·HOUR·DAY를 쓸 수 있습니다. 코드는 이 브라우저의 시뮬레이션 워커 안에서만 실행됩니다.",
+  "code.use": "실행에 이 코드 사용",
+  "code.examples": "예제…",
+  "code.example.leastSlack": "여유 적은 lot 먼저 (priority)",
+  "code.example.stopping": "스테퍼 앞 보류 (admit)",
+  "code.example.batches": "여유로 배치 조기 시작 (startBatch)",
+  "code.write": "코드 작성",
+  "code.edit": "편집기에서 편집",
+  "code.size": "편집기(약 3 MB)는 한 번만 불러옵니다.",
+  "code.loading": "편집기 불러오는 중…",
+  "code.failed": "편집기를 불러오지 못했습니다({message}).",
+  "code.loadError": "편집기 파일이 없습니다",
+  "code.hooks": "정의된 함수: {hooks}.",
+  "code.noHooks": "priority·admit·startBatch 중 정의된 함수가 아직 없습니다.",
+  "code.unranked": "priority는 CQT 디스패칭이 '코드'이거나 순위에 '코드 priority'가 있는 툴그룹에서만 쓰입니다.",
+  "code.lines": "코드 {lines}줄",
+  "code.fromLink":
+    "공유 링크로 받은 전략 코드가 있습니다. 실행하기 전에 읽어 보세요(시나리오의 '편집'을 누르면 코드가 보입니다). 실행을 시작하면 이 브라우저의 시뮬레이션 워커 안에서 돌아갑니다.",
+  "code.allow": "읽었습니다: 허용",
+  "code.notAllowed": "공유 링크로 받은 전략 코드입니다. 먼저 '전략 코드' 카드에서 읽고 허용하세요.",
 };

@@ -15,29 +15,47 @@ pub(crate) const STEPPERS: [&str; 2] = ["LithoTrack_FE_95", "LithoTrack_FE_115"]
 /// Most criteria of a configured ranking.
 pub const MAX_CRITERIA: usize = 6;
 
-/// Stopping limits and the constrained-lot counts they apply to, per tool group.
+/// Stopping limits per tool group: constrained lots in front, and in front or upstream.
 pub(super) struct Stopping {
     limits: Vec<(i64, i64)>,
-    /// Constrained lots queued or processing at the group.
-    front: Vec<i64>,
-    /// Constrained lots that will still reach the group in their segment.
-    upstream: Vec<i64>,
-    /// Groups whose counts changed during the current event, and whether their limit was reached
-    /// before it.
-    changed: Vec<(ToolGroupId, bool)>,
 }
 
 impl Stopping {
-    pub(super) fn reached(&self, group: ToolGroupId) -> bool {
-        let (front, both) = self.limits[group];
-        self.front[group] >= front || self.front[group] + self.upstream[group] >= both
+    pub(super) fn reached(&self, counts: &SegmentCounts, group: ToolGroupId) -> bool {
+        self.reached_at(group, counts.front[group], counts.upstream[group])
+    }
+
+    fn reached_at(&self, group: ToolGroupId, front: i64, upstream: i64) -> bool {
+        let (front_limit, total_limit) = self.limits[group];
+        front >= front_limit || front + upstream >= total_limit
+    }
+}
+
+/// Constrained lots (in CQT segments) per tool group, which stopping limits and admission code
+/// read.
+pub(super) struct SegmentCounts {
+    /// Queued or processing at the group.
+    pub front: Vec<i64>,
+    /// Still to reach the group in their segment.
+    pub upstream: Vec<i64>,
+    /// Groups whose counts changed during the current event, with their counts before it.
+    changed: Vec<(ToolGroupId, i64, i64)>,
+}
+
+impl SegmentCounts {
+    pub(super) fn new(groups: usize) -> Self {
+        Self {
+            front: vec![0; groups],
+            upstream: vec![0; groups],
+            changed: Vec::new(),
+        }
     }
 
     /// Adds `delta` constrained lots in front of `group` (`front`) or upstream of it.
     pub(super) fn count(&mut self, group: ToolGroupId, front: bool, delta: i64) {
-        if !self.changed.iter().any(|&(changed, _)| changed == group) {
-            let reached = self.reached(group);
-            self.changed.push((group, reached));
+        if !self.changed.iter().any(|&(changed, _, _)| changed == group) {
+            self.changed
+                .push((group, self.front[group], self.upstream[group]));
         }
         let counts = if front {
             &mut self.front
@@ -47,12 +65,24 @@ impl Stopping {
         counts[group] += delta;
     }
 
-    /// Ends an event: true if a limit reached before it no longer is, which releases held lots.
-    pub(super) fn released(&mut self) -> bool {
-        let released = self
-            .changed
-            .iter()
-            .any(|&(group, was)| was && !self.reached(group));
+    /// Ends an event: true if a `stopping` limit reached before it no longer is, which releases
+    /// held lots; the groups with fewer lots in front or in total than before it go to `fewer`.
+    pub(super) fn settle(
+        &mut self,
+        stopping: Option<&Stopping>,
+        fewer: &mut Vec<ToolGroupId>,
+    ) -> bool {
+        let mut released = false;
+        for &(group, front, upstream) in &self.changed {
+            let (now_front, now_upstream) = (self.front[group], self.upstream[group]);
+            released |= stopping.is_some_and(|stopping| {
+                stopping.reached_at(group, front, upstream)
+                    && !stopping.reached_at(group, now_front, now_upstream)
+            });
+            if now_front < front || now_front + now_upstream < front + upstream {
+                fewer.push(group);
+            }
+        }
         self.changed.clear();
         released
     }
@@ -62,6 +92,8 @@ pub(super) struct Strategy {
     pub steppers: Vec<bool>,
     /// Ranking criteria per tool group, most significant first; release order breaks ties.
     pub ranking: Vec<Vec<Criterion>>,
+    /// Tool groups ranking by the strategy code's priority.
+    pub code_ranked: Vec<bool>,
     /// QTS flow factors per route and step (never measured counts as 1), when QTS ranks.
     pub flow_factors: Option<Vec<Vec<f64>>>,
     pub batch_start_within: Option<Time>,
@@ -184,18 +216,17 @@ impl Strategy {
                 for (name, given) in &stopping.limits {
                     limits[group_id(name)?] = pair(given);
                 }
-                let groups = data.tool_groups.len();
-                Some(Stopping {
-                    limits,
-                    front: vec![0; groups],
-                    upstream: vec![0; groups],
-                    changed: Vec::new(),
-                })
+                Some(Stopping { limits })
             }
         };
+        let code_ranked = ranking
+            .iter()
+            .map(|criteria| criteria.contains(&Criterion::Code))
+            .collect();
         Ok(Self {
             steppers,
             ranking,
+            code_ranked,
             flow_factors,
             batch_start_within: config.batch_start_within,
             stopping,
@@ -248,6 +279,7 @@ fn dataset_ranking(ranks: &[Rank], rule: QueueTimeRule) -> Vec<Criterion> {
                 QueueTimeRule::None => {}
                 QueueTimeRule::Qtcr => criteria.push(Criterion::Qtcr),
                 QueueTimeRule::Qts => criteria.push(Criterion::Qts),
+                QueueTimeRule::Code => criteria.push(Criterion::Code),
             }
         }
         criteria.push(rank.into());
@@ -298,6 +330,10 @@ mod tests {
         assert_eq!(
             dataset_ranking(&[Rank::CriticalRatio], QueueTimeRule::Qts),
             [C::Qts, C::CriticalRatio]
+        );
+        assert_eq!(
+            dataset_ranking(&ranks, QueueTimeRule::Code),
+            [C::Priority, C::LeastSetup, C::Code, C::Fifo]
         );
     }
 

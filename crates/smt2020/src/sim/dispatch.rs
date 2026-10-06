@@ -1,6 +1,6 @@
 //! Lot selection: which ready tool picks first, which lots it may take, their ranking and batch
 //! formation. Dispatching runs on events only (arrival, job end, repair, PM end, reservation
-//! release, stopping limit release, batch wake) and reads the queue entries fixed on arrival.
+//! release, released holds, wake) and reads the queue entries fixed on arrival.
 
 use std::cmp::Ordering;
 use std::mem;
@@ -8,6 +8,7 @@ use std::mem;
 use des_core::{Scheduler, Time};
 
 use super::Criterion;
+use super::code::{Admit, BatchView, GroupCount, SegmentView, Start};
 use super::fab::{Event, Fab, LotId, LotState, ToolId, Waiting};
 use super::strategy::MAX_CRITERIA;
 use crate::data::{Dist, PartId, Rule, SetupId, StepIndex, StepSetup, ToolGroupId};
@@ -45,7 +46,7 @@ impl Fab {
         if self.groups[group].queue.is_empty() || self.groups[group].ready.is_empty() {
             return;
         }
-        if self.mark_held(group) && !self.stopped.contains(&group) {
+        if self.mark_held(group, sched.now()) && !self.stopped.contains(&group) {
             self.stopped.push(group);
         }
         let mut order = mem::take(&mut self.order);
@@ -75,32 +76,102 @@ impl Fab {
             }
         }
         self.order = order;
-        // A held batch may start by queue-time slack alone: dispatch again then.
+        // A held batch or lot may go later by queue-time slack or as the code asked: dispatch
+        // again then.
         let state = &mut self.groups[group];
-        if let Some(due) = state.batch_due.take()
+        if let Some(due) = state.due.take()
             && state.wake.is_none_or(|pending| due < pending)
         {
             state.wake = Some(due);
-            sched.schedule_at(due, Event::BatchWake(group));
+            sched.schedule_at(due, Event::Wake(group));
         }
     }
 
-    /// Stopping ([P2] §3.2): marks the lots about to enter a CQT segment while a limit of a tool
-    /// group of the segment is reached; true if any is held. The marks hold for the whole
-    /// dispatch, as job starts leave the stopping counts unchanged.
-    fn mark_held(&mut self, group: ToolGroupId) -> bool {
-        let Some(stopping) = &self.strategy.stopping else {
+    /// Stopping ([P2] §3.2) and admission code: marks the lots about to enter a CQT segment while
+    /// a limit of a tool group of the segment is reached or the code holds them; true if any is
+    /// held. The marks hold for the whole dispatch, as job starts leave the counts unchanged.
+    fn mark_held(&mut self, group: ToolGroupId, now: Time) -> bool {
+        if self.counts.is_none() {
+            return false;
+        }
+        let mut held_on = mem::take(&mut self.groups[group].held_on);
+        held_on.clear();
+        let mut any = false;
+        for index in 0..self.groups[group].queue.len() {
+            let held = self.groups[group].queue[index].entering
+                && (self.stopping_holds(group, index)
+                    || (self.hooks.admit && self.code_holds(group, index, now, &mut held_on)));
+            self.groups[group].queue[index].held = held;
+            any |= held;
+        }
+        self.groups[group].held_on = held_on;
+        any
+    }
+
+    /// Stopping: whether a limit of a tool group of the segment that the lot queued at `index`
+    /// of `group` is about to enter is reached.
+    fn stopping_holds(&self, group: ToolGroupId, index: usize) -> bool {
+        let (Some(stopping), Some(counts)) = (&self.strategy.stopping, &self.counts) else {
             return false;
         };
-        let mut held = false;
-        for waiting in &mut self.groups[group].queue {
-            waiting.held = waiting.entering
-                && self.routes.info[waiting.route].segment_groups[waiting.step]
-                    .iter()
-                    .any(|&later| stopping.reached(later));
-            held |= waiting.held;
+        let waiting = &self.groups[group].queue[index];
+        self.routes.info[waiting.route].segment_groups[waiting.step]
+            .iter()
+            .any(|&later| stopping.reached(counts, later))
+    }
+
+    /// Admission code: whether it holds the lot queued at `index` of `group`, which is about to
+    /// enter a CQT segment; the tool groups of its segment join `held_on` if so.
+    fn code_holds(
+        &mut self,
+        group: ToolGroupId,
+        index: usize,
+        now: Time,
+        held_on: &mut Vec<ToolGroupId>,
+    ) -> bool {
+        if self.code_failure().is_some() {
+            return false;
         }
-        held
+        let waiting = &self.groups[group].queue[index];
+        let lot = self.lot_view(waiting, now);
+        let segment = self.routes.segment_at[waiting.route][waiting.step].expect("CQT entrance");
+        let spec = &self.data.routes[waiting.route].steps[waiting.step];
+        let limit = spec.cqt.expect("CQT entrance").limit;
+        let groups = &self.routes.info[waiting.route].segment_groups[waiting.step];
+        let counts = self.counts.as_ref().expect("counts with admission code");
+        self.group_counts.clear();
+        self.group_counts
+            .extend(groups.iter().map(|&later| GroupCount {
+                tool_group: later,
+                front: counts.front[later] as u32,
+                total: (counts.front[later] + counts.upstream[later]) as u32,
+            }));
+        let view = SegmentView {
+            segment,
+            limit,
+            exit: self.routes.segments[segment].exit,
+            groups: &self.group_counts,
+        };
+        let code = self.code.as_deref_mut().expect("code with admit");
+        let until = match code.admit(&lot, &view, now) {
+            Ok(Admit::Now) => return false,
+            Ok(Admit::Hold) => None,
+            Ok(Admit::HoldUntil(at)) => Some(at),
+            Err(message) => {
+                Self::record_failure(&mut self.code_failure, format!("admit: {message}"));
+                return false;
+            }
+        };
+        if let Some(at) = until.filter(|&at| at > now) {
+            let due = &mut self.groups[group].due;
+            *due = Some(due.map_or(at, |due| due.min(at)));
+        }
+        for &later in groups {
+            if !held_on.contains(&later) {
+                held_on.push(later);
+            }
+        }
+        true
     }
 
     /// Puts the best lot, or the best batch, for `tool` into `selected`.
@@ -240,6 +311,7 @@ impl Fab {
                         1.0
                     }
                 }
+                Criterion::Code => waiting.code,
             });
         }
         push(waiting.serial as f64);
@@ -247,9 +319,9 @@ impl Fab {
     }
 
     /// [P2] §4.1: the best-ranked lot opens a batch filled with compatible lots in rank order up to
-    /// the maximum. It starts at the minimum, or below it once no compatible lot can still come or
-    /// one of its lots has used up its queue-time slack down to `batch_start_within`; otherwise the
-    /// next-ranked lot of another batch kind opens one.
+    /// the maximum. It starts at the minimum, or below it once no compatible lot can still come,
+    /// one of its lots has used up its queue-time slack down to `batch_start_within` or the
+    /// strategy code starts it; otherwise the next-ranked lot of another batch kind opens one.
     fn form_batch(
         &mut self,
         group: ToolGroupId,
@@ -259,6 +331,7 @@ impl Fab {
         candidates.sort_by(|a, b| compare(&a.0, &b.0));
         let queue = &self.groups[group].queue;
         let within = self.strategy.batch_start_within;
+        let ask = self.hooks.start_batch && self.code_failure().is_none();
         let mut tried = Vec::new();
         let mut started = false;
         // When a batch held here may start by queue-time slack alone.
@@ -277,6 +350,9 @@ impl Fab {
             let mut wafers = 0;
             // When the slack of one of the batch's lots first reaches the threshold.
             let mut urgent_from = Time::MAX;
+            // For the code: the earliest arrival and the least slack of the batch's lots.
+            let mut oldest = Time::MAX;
+            let mut slack: Option<f64> = None;
             for &(_, index) in &candidates[first..] {
                 let waiting = &queue[index];
                 if waiting.batch == Some(key) && wafers + waiting.wafers <= size.max {
@@ -284,6 +360,13 @@ impl Fab {
                     wafers += waiting.wafers;
                     if let (Some(within), Some(cqt)) = (within, &waiting.cqt) {
                         urgent_from = urgent_from.min(cqt.within_from(within));
+                    }
+                    if ask {
+                        oldest = oldest.min(waiting.queued_at);
+                        if let Some(cqt) = &waiting.cqt {
+                            let left = cqt.slack(now);
+                            slack = Some(slack.map_or(left, |least| least.min(left)));
+                        }
                     }
                 }
             }
@@ -295,9 +378,37 @@ impl Fab {
                 break;
             }
             due = due.min(urgent_from);
+            if ask && self.code_failure().is_none() {
+                let batch = BatchView {
+                    tool_group: group,
+                    route: head.route,
+                    step: head.step,
+                    lots: self.selected.len() as u32,
+                    wafers,
+                    min: size.min,
+                    max: size.max,
+                    oldest,
+                    slack,
+                };
+                let code = self.code.as_deref_mut().expect("code with start_batch");
+                match code.start_batch(&batch, now) {
+                    Ok(Start::Now) => {
+                        started = true;
+                        break;
+                    }
+                    Ok(Start::WaitUntil(at)) if at > now => due = due.min(at),
+                    Ok(Start::Wait | Start::WaitUntil(_)) => {}
+                    Err(message) => {
+                        Self::record_failure(
+                            &mut self.code_failure,
+                            format!("start_batch: {message}"),
+                        );
+                    }
+                }
+            }
         }
         if due < Time::MAX {
-            let held = &mut self.groups[group].batch_due;
+            let held = &mut self.groups[group].due;
             *held = Some(held.map_or(due, |held| held.min(due)));
         }
         started
@@ -366,6 +477,7 @@ mod tests {
             dedicated: None,
             batch: None,
             cqt: None,
+            code: 0.0,
             entering: false,
             held: false,
         }
@@ -389,6 +501,7 @@ mod tests {
             &Config::new(DAY),
             None,
             &Recording::default(),
+            &mut None,
         )
         .unwrap();
         let ranking = Ranking {

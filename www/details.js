@@ -89,14 +89,15 @@ function replayConfig(index) {
     : done.config;
 }
 
-/** Runs `job` ({config, recording, until?}) on the pool for `state`, which is queued, then
- * running (with its progress), then ready (`ready(message)` reads the worker's message) or
- * failed. */
+/** Runs `job` ({config, recording, until?}) with the scenario's strategy code on the pool for
+ * `state`, which is queued, then running (with its progress), then ready (`ready(message)` reads
+ * the worker's message) or failed. */
 function record(state, job, ready) {
   state.status = "queued";
   pool.submit({
     group: run.details,
     dataset: run.dataset,
+    code: run.code,
     ...job,
     onStart: () => {
       state.status = "running";

@@ -4,7 +4,7 @@ SMT2020 반도체 FAB 테스트베드(데이터셋 4종) 시뮬레이터. DES �
 
 https://code-gihan.github.io/academic-semiconductor-fab/
 
-현재: 구현 단계 1–17 완료([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
+현재: 구현 단계 1–18 완료([구현 단계](#구현-단계)). 이하 사용법과 구현 명세. 엔진 구동 원리·상태 전이·메커니즘 상세는 [SIMULATION.md](SIMULATION.md).
 
 ## Quick Start
 
@@ -17,11 +17,12 @@ https://code-gihan.github.io/academic-semiconductor-fab/
    - 결과(마지막 보고 기간 = 2년차): CQT 위반이 가장 적은 규칙(규칙 선택 가능)의 BASE 대비 감소율, 주요 KPI 타일 4개(CQT %VL, PRL ACT, TH, PRL %ONTIME): 평균, 기준 대비 짝 차이와 판정(95% 구간이 0을 제외하면 개선·악화, 포함하면 뚜렷한 차이 없음, 1회면 판정 없음), 지표 설명 툴팁. 결과는 분석·비교 보기에도 들어간다.
 
 1. 설정: 왼쪽에 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`)과 실행 설정(모의 일수, 웜업(비우면 데이터셋 기간), 실행 횟수, seed, 부하 배수), 오른쪽에 운영 전략(카드마다 한 줄 요약 + ⓘ, 순위 기준 칩은 가리키면 설명).
-   - CQT 디스패칭(논문 QTCR·QTS, 자체 순위 없는 툴그룹에 적용).
+   - CQT 디스패칭(논문 QTCR·QTS 또는 전략 코드의 priority, 자체 순위 없는 툴그룹에 적용).
    - 툴그룹별 lot 순위: 기준 조합(최대 6개, 순서 변경, `qt_within`은 시간 입력)을 만들어 체크한 툴그룹에 적용. 표는 CQT 구간 툴그룹만·영역·이름으로 거르고, 툴그룹의 현재 순위(데이터셋 또는 자체)를 보여 주며 클릭하면 조합으로 불러온다.
    - 배치 조기 시작(CQT 여유 h), CQT 구간 앞 보류(Stopping: 구간 툴그룹별 한도·기본값, [P2] Table 3 프리셋), 엔지니어링 lot(EF·CAtE 구간·CoT 임계 직접 입력과 [P1] 값, 엔지니어링 lot 없는 데이터셋은 안내), 슈퍼 핫 예약.
+   - 전략 코드: JavaScript 함수 `priority(lot, now)`·`admit(lot, segment, now)`·`startBatch(batch, now)` 중 필요한 것을 쓴다([전략 코드](#전략-코드)). 편집기는 Monaco(처음 열 때만 약 3 MB)이고 `www/strategy.d.ts` 타입으로 자동완성·도움말·오류(checkJs)를 보인다. 예제 3종(여유 적은 lot 먼저(priority, 고르면 CQT 디스패칭 = 코드), 스테퍼 앞 보류(admit), 여유로 배치 조기 시작(startBatch)), 정의된 함수 표시, 실행 사용 여부. 코드는 시뮬레이션 워커 안에서만 실행한다(오류는 함수·줄과 함께 상태에 표시). 공유 링크에 담긴 코드는 읽고 허용하기 전에는 실행하지 않는다.
    - 설정 JSON: 보기·복사·붙여넣어 적용(Python·CLI와 같은 스키마). 적용·실행 전에 코어가 설정을 검증해 오류를 보여 준다.
-   - 전략 비교: 편집한 전략을 이름으로 저장(브라우저 보관, 첫 번째 = 기준)하고 편집기로 다시 불러온다. 실행하고 비교 = 모든 전략을 같은 실행 설정·seed·실행 번호로 실행. 데모 = 홈 레이스(DS2 730 d, 3회: BASE·QTCR·QTS). 공유 링크: 데이터셋(동봉분)·실행 설정·전략을 JSON → deflate-raw → base64url로 `#share=`에 담고, 링크를 열면 그대로 불러온다(서버 전송 없음).
+   - 전략 비교: 편집한 전략(코드 포함)을 이름으로 저장(브라우저 보관, 첫 번째 = 기준)하고 편집기로 다시 불러온다. 실행하고 비교 = 모든 전략을 같은 실행 설정·seed·실행 번호로 실행. 데모 = 홈 레이스(DS2 730 d, 3회: BASE·QTCR·QTS). 공유 링크: 데이터셋(동봉분)·실행 설정·전략을 JSON → deflate-raw → base64url로 `#share=`에 담고, 링크를 열면 그대로 불러온다(서버 전송 없음).
    - 넓은 화면은 왼쪽 열이 고정되고, 좁은 화면은 1열(전략 뒤에 실행 버튼, 아래에 고정).
 2. 진행: 실행은 워커 풀(Web Worker 최대 `navigator.hardwareConcurrency`개)이 하나씩 맡는다(2 pass 실행(QTS 흐름 계수 측정)을 먼저 배정). 전체(완료 실행, 경과·남은 시간(진행률 비례 추정))와 실행별(대기, 모의 일자(Drain 잔여 WIP, QTS 사전·본 실행), 완료 시간) 진행 막대. 실행 중 설정 잠금(실행 탭 표시), 취소는 워커 종료. 실행이 끝나면 분석 보기(전략이 여럿이면 비교 보기)로 넘어간다. 홈 레이스는 홈에 머문다. 설명은 ⓘ, 갱신은 약 250 ms(벽시계)마다.
    - 큐타임 시계: 따라가는 실행(최종 pass의 실행 중 실행, 없으면 실행 중인 아무 실행, 완료되면 다른 실행, 클릭하면 끝날 때까지 그 실행)의 CQT 구간 안 lot. 행 = 한도(두 툴그룹 사이 같은 한도의 구간, 제품 무관) 중 지금까지 위반이 많은 10개(오른쪽 = 누적 위반율, 나머지는 아래 한 줄), 점 = lot(가로 = 한도 사용 비율, 점선 = 한도, 2배 넘으면 끝의 화살표), 색 = 여유·위험(여유 < 0: 남은 시간 < 종료 스텝 전 남은 기대 작업)·한도 초과. 위에 상태별 lot 수와 지금까지 위반율. 점·행 툴팁(lot·제품·스텝·상태·시간, 한도·제품·지금·누적), 가리키는 동안 그림 고정. 첫 표시 때 한 줄 안내(닫으면 브라우저에 보관). 좁은 화면은 행 이름을 시계 위에 쓴다.
@@ -63,6 +64,13 @@ results = simulation.results()
 summary = smt2020.summarize([results])  # 측정값별 평균·95% 신뢰구간
 simulation.reset({**simulation.config(), "queue_time": "qts"})  # 다른 전략으로 시각 0부터
 
+# 전략 코드: 메서드 priority·admit·start_batch 중 필요한 것(전략 코드 절)
+class LeastSlack:
+    def priority(self, lot, now):  # 대기열 도착 때 1회, 작을수록 먼저
+        return now + lot.cqt.slack if lot.cqt else float("inf")
+
+coded = smt2020.Simulation(dataset, {"horizon": 730 * DAY, "queue_time": "code"}, code=LeastSlack())
+
 # 같은 실행을 기록과 함께(digest 동일): 위반 lot, 툴그룹 일별 상태
 recorded = smt2020.Simulation(dataset, {"horizon": 730 * DAY, "queue_time": "qtcr"},
                               {"violations": True, "tool_groups": True})
@@ -102,6 +110,9 @@ const results = simulation.results();
 const table = csv(summarize([results])); // 측정값별 평균·95% 신뢰구간의 CSV
 const fingerprint = digest(results); // 같으면 결과가 비트 단위로 같다
 simulation.free(); // wasm 메모리 해제
+// 전략 코드: 함수 priority·admit·startBatch 중 필요한 것(전략 코드 절)
+const code = { priority: (lot, now) => (lot.cqt ? now + lot.cqt.slack : Infinity) };
+const coded = new Simulation(dataset, { horizon: 730 * DAY, queue_time: "code" }, null, code);
 ```
 
 - 복제는 `replication`만 다르게 워커마다 실행하고 결과 배열을 `summarize`·`csv`에 넘긴다(`www/main.js`·`www/worker.js`).
@@ -249,10 +260,12 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 | CoT | P1 §V | LithoTrack_FE_95·115만. 대기 EL ≥ 한계(100·50·25·10)면 그 수만큼 EL 우선. 그 외 PL 우선, PL 없으면 EL(가정) |
 | 기준 목록 | 확장 | TG별 기준 1–6개(`ranking`, 서로 다름, 앞이 우선, 동률은 lot 번호, CAtE·CoT 유형 키 뒤). 기준(작을수록 우선): `priority`·`least_setup`·`fifo`·`critical_ratio`(= rank_HP·RSETUP·FIFO·CR), `due_date`(납기), `shortest_step`(현 스텝 기대 시간), `least_remaining`(잔여 기대 작업), `qtcr`·`qts`(위 식), `qt_deadline`(C_s + CQT), `{"qt_within": h}`(QT 여유 ≤ h인 lot 먼저, 나머지 동률). QT 기준은 구간 밖 lot을 맨 뒤로. 목록 없는 TG = 데이터 순위 + `queue_time` |
 | QT 배치 시작 | 확장 | `batch_start_within` = h: 최소 미만 배치도 후보 lot 하나의 QT 여유가 h 이하가 되면 시작. 보류 시 그 시각에 깨우기 사건 예약 |
+| 전략 코드 | 확장 | 사용자 함수: `priority`(기준 `code`·`queue_time: "code"`의 순위 값), `admit`(CQT 구간 진입 보류), `start_batch`(최소 미만 배치 시작). [전략 코드](#전략-코드) |
 
 - QTCR·QTS의 p_k = CR과 같은 기대 스텝시간.
 - QT 여유 = C_s + CQT − t − 종료 스텝 시작까지의 기대 작업(Σ_{k=i..n−1} p_k, 종료 스텝 대기 중 0). 음수면 이미 늦음.
 - [P2] complex CQT(441 구간)는 추가 구간의 CQT 값이 미공개라 재현 불가, default만 재현.
+- Stopping 보류가 풀리는 사건에서 보류 TG는 TG index 순으로 다시 디스패칭한다(보류가 생긴 순서와 무관).
 
 ## API
 
@@ -262,7 +275,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 |---|---|---|---|
 | 데이터셋 | `Dataset::from_bytes`·`to_bytes`, `asd::{load, load_with_orders, orders}` | `new Dataset(bytes)` | `Dataset(bytes)`, `load_dataset(source)` |
 | 데이터셋 정보 | `Dataset::info()` | `dataset.info()` | `dataset.info()` |
-| 생성(시각 0) | `Simulation::new(Arc<Dataset>, Config)`, `with_recording(…, Recording)` | `new Simulation(dataset, config, recording?)` | `Simulation(dataset, config, recording=None)` |
+| 생성(시각 0) | `Simulation::new(Arc<Dataset>, Config)`, `with_recording(…, Recording)`, `with_code(…, Recording, Box<dyn Code>)` | `new Simulation(dataset, config, recording?, code?)` | `Simulation(dataset, config, recording=None, code=None)` |
 | 실행·일시정지 | `run(until)`, `run_observed(until, 관찰자)` | `run(until?, onProgress?)` | `run(until=None, on_progress=None)` |
 | 상태 | `progress()`, `lots()`, `tools()`, `tool_groups()`, `segments()` | `progress()`, `lots()`, `tools()`, `toolGroups()`, `segments()` | `progress()`, `lots()`, `tools()`, `tool_groups()`, `segments()` |
 | 설정·재시작 | `config()`, `reset(Config)` | `config()`, `reset(config?)` | `config()`, `reset(config=None)` |
@@ -278,8 +291,8 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 - 종료 조건: `horizon` 전에 시작하는 lot만 투입하고, 투입 lot이 전부 완료되면 끝난다(`finished`, 이후 `run`은 그대로). 종료 시각 + 365일에 lot이 남으면 실행 실패(이후 `run`도 같은 오류). 그 밖의 조건(시각, WIP, 완료 수 등)은 `until`·관찰자로 일시정지해 판단한다.
 - 상태: 진행·일시정지 중 언제든 읽는다. 아래 [진행·상태·결과](#진행상태결과).
 - `results()`: 끝난 실행의 결과(전에는 오류). `reset(config)`: 같은 데이터셋으로 시각 0부터(설정을 생략하면 같은 설정, 거부되면 그대로 유지).
-- 운영 전략은 설정(`queue_time`, `ranking`, `batch_start_within`, `stopping`, `engineering`, `reserve_super_hot`)으로 정하고 `reset`으로 바꾼다. 실행 중 변경은 없다(대기열 항목이 도착 시 순위 입력을 고정).
-- QTS(규칙 또는 `qts` 기준) + `flow_factors` 없음: 같은 설정에서 QT 규칙·QT 기준·QT 배치 시작·Stopping을 뺀 1차 실행이 FF를 측정한 뒤 본 실행(진행 `pass` 0/2 → 1/2). `until`·결과는 본 실행 기준이고, 설정 검증은 생성 시 함께 한다.
+- 운영 전략은 설정(`queue_time`, `ranking`, `batch_start_within`, `stopping`, `engineering`, `reserve_super_hot`)과 전략 코드(생성 인자)로 정하고, 설정은 `reset`으로 바꾼다(코드는 유지). 실행 중 설정 변경은 없다(대기열 항목이 도착 시 순위 입력을 고정).
+- QTS(규칙 또는 `qts` 기준) + `flow_factors` 없음: 같은 설정에서 QT 규칙·QT 기준·QT 배치 시작·Stopping·전략 코드를 뺀 1차 실행이 FF를 측정한 뒤 본 실행(진행 `pass` 0/2 → 1/2). `until`·결과는 본 실행 기준이고, 설정 검증은 생성 시 함께 한다.
 - 기록: `with_recording`(JS·Python은 생성자의 세 번째 인자)이 위반 구간 완료, TG 일별 상태, 사건 창을 기록한다([기록](#기록)). 결과는 바뀌지 않는다(digest 동일). 재생 = 같은 설정·복제를 기록과 함께 다시 실행(결정적이라 같은 실행), QTS는 `flow_factors()`를 설정에 넣어 1차 실행을 생략한다.
 - 병렬: JS는 Web Worker마다, Python은 스레드마다(실행 중 GIL 해제), Rust는 스레드마다(`Simulation: Send`) `Simulation`을 둔다. 데이터셋은 공유한다.
 
@@ -294,12 +307,30 @@ JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생�
 | `seed`, `replication` | 1, 0 | 난수 스트림. 같은 값이면 전략이 달라도 공통 난수 |
 | `load` | 1 | 부하 계수(투입 시각 ÷ load, 납기 오프셋 유지) |
 | `reserve_super_hot` | false | super hot lot 다음 툴 예약 |
-| `queue_time` | `"none"` | `"none"`·`"qtcr"`·`"qts"`. 기준 목록 없는 TG의 FIFO/CR 앞 |
+| `queue_time` | `"none"` | `"none"`·`"qtcr"`·`"qts"`·`"code"`(전략 코드 priority). 기준 목록 없는 TG의 FIFO/CR 앞 |
 | `flow_factors` | null | QTS FF(route × 스텝, null = 미측정 = 1). 없으면 1차 실행으로 산출 |
-| `ranking` | `{}` | TG별 기준 목록: `{"Diffusion_FE_120": [{"qt_within": 7200000}, "priority", "fifo"]}` |
+| `ranking` | `{}` | TG별 기준 목록: `{"Diffusion_FE_120": [{"qt_within": 7200000}, "priority", "fifo"]}`, 기준 `"code"` = 전략 코드 priority |
 | `batch_start_within` | null | QT 배치 시작 임계(ms) |
 | `stopping` | null | `{"limits": {"LithoTrack_FE_95": {"front": 50, "total": 85}}, "default": {"front": 1000, "total": 1000}}` |
 | `engineering` | `"base"` | `"base"`·`"engineering_first"`·`{"cate": {"production": ms, "engineering": ms}}`·`{"cot": {"trigger": 100}}` |
+
+### 전략 코드
+
+설정으로 표현하지 못하는 규칙은 함수로 쓴다. 코어(`smt2020::sim::Code`)가 정한 지점에서 부르고, JS는 함수 `priority`·`admit`·`startBatch`, Python은 메서드 `priority`·`admit`·`start_batch`, Rust는 트레이트 구현 중 필요한 것만 정의한다. 시간은 ms, 부르는 순서는 실행마다 같다(인자만으로 답하면 결과 재현).
+
+| 함수 | 부르는 때 | 답 |
+|---|---|---|
+| `priority(lot, now)` | 기준 `code`가 있는 TG(목록 또는 `queue_time: "code"`)의 대기열에 lot이 도착할 때 1회 | 수(작을수록 먼저, NaN 오류). now와 무관한 값(시각)이면 디스패칭 시점과 무관하게 같은 순서 |
+| `admit(lot, segment, now)` | CQT 구간을 시작하는 스텝에서 lot을 디스패칭할 수 있을 때마다(Stopping이 보류하지 않은 lot) | true = 시작, false = 보류, 시각 = 보류하고 그때 다시. 보류는 구간 TG의 집계가 줄 때·TG의 디스패칭마다 다시 묻는다 |
+| `start_batch(batch, now)` | 최소 크기 미만 배치가 기다릴 때(QT 배치 시작 미도달, 같은 lot이 더 올 수 있음) | true = 시작, false = 대기, 시각 = 대기하고 그때 다시 |
+
+- lot: `id`, `part`, `kind`, `priority`, `wafers`, `release`, `due`, `step`, `step_name`(JS `stepName`), `tool_group`(`toolGroup`), `remaining`(남은 기대 작업), `step_time`(`stepTime`), `cqt`(구간 밖 null/None, 안이면 `segment`(구간 index), `limit`, `entered`, `deadline`, `exit`, `before_exit`(`beforeExit`), `slack` = deadline − now − before_exit).
+- segment: 진입할 구간의 `segment`, `limit`, `exit`, `groups`(구간 툴그룹마다 `tool_group`, `front` = 그 앞 CQT lot(대기·공정), `total` = front + 아직 도달하지 않은 구간 lot; Stopping과 같은 집계).
+- batch: `tool_group`, `step`, `step_name`, `lots`, `wafers`, `min`, `max`(wafer), `oldest`(가장 이른 도착), `slack`(구간 lot의 최소 여유, 없으면 null/None).
+- 오류: 생성 시 정의한 함수 없음, 설정이 코드로 순위를 매기는데 priority 없음. 코드 없이 코드 순위 설정을 `run`하면 오류. 실행 중 함수의 오류·잘못된 답은 실행을 멈추고(`strategy code: 함수: 메시지`, 이후 `run`도 같은 오류) Python은 원래 예외를 다시 던진다. Python 함수 실행 중 Ctrl-C는 그 호출을 다시 한 뒤 다음 날 일시정지한다.
+- 같은 규칙의 설정과 같은 실행(테스트): `queue_time: "code"` + 상수 = 규칙 없음, 구간 마감을 돌려주는 priority = 기준 `qt_deadline`, 스테퍼 5/10을 검사하는 admit = 스테퍼 Stopping 5/10, 여유 1 h 이하면 true(아니면 그 시각)인 start_batch = `batch_start_within` 1 h.
+- 비용(JS, wasm): DS2 730 d priority 1,541만 회 호출에 +1.5–3 s(18.8–19.1 s, QTCR 15.8 s). 보기는 시뮬레이션당 객체 하나를 다시 채운다(호출 동안만 유효). Python은 호출마다 객체를 만들어 더 느리다.
+- 웹 페이지는 코드를 시뮬레이션 워커 안에서만 실행한다(메인 스레드는 실행하지 않고 설정만 검증). 타입은 `www/strategy.d.ts`(MINUTE·HOUR·DAY 상수 포함).
 
 ### 진행·상태·결과
 
@@ -422,7 +453,7 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 | QTS | 37.9 / 37.7 | 93.3 / 91.3 | 9.5·2.0·10.1 / 9.3·1.1·10.5 | 7.9·6.7·5.1 / 7.7·6.5·4.9 | 0.75 / 0.73 | 2.54 / 2.56 |
 
 - ONTIME 차는 part_6·9(기준 실행 잔여 편차) 영향.
-- Stopping: [P2] Table 3 small(50/85·55/125)은 default 구간에서 발동하지 않는다(BASE·QTCR·QTS 모두 Stopping 없는 실행과 digest 동일, [P2]는 complex 설정에 적용). 스테퍼 5/10이면 %VL Total BASE 15.3 → 10.2%(Litho 12.5 → 3.5), QTCR 9.4 → 7.2%이나 PRL ACT 37.9 → 92.1 d, QTCR 37.7 → 83.4 d(용량 낭비, [P2] §2.1), 전 lot 완료.
+- Stopping: [P2] Table 3 small(50/85·55/125)은 default 구간에서 발동하지 않는다(BASE·QTCR·QTS 모두 Stopping 없는 실행과 digest 동일, [P2]는 complex 설정에 적용). 스테퍼 5/10이면 %VL Total BASE 15.3 → 10.3%(Litho 12.5 → 3.6), QTCR 9.4 → 7.2%이나 PRL ACT 37.9 → 91.8 d, QTCR 37.7 → 83.4 d(용량 낭비, [P2] §2.1), 전 lot 완료.
 
 ### 운영 곡선
 
@@ -464,6 +495,7 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 - 2년(730 d, 웹 기본값) 네이티브: 12.9·12.0·15.1·16.8 s. 병렬: DS3 2년 20회 16스레드 57 s.
 - 이전 구현 대비(같은 1,460 d): 34.5·32.7·40.7·47.5 s → 25.4·23.5·29.7·33.0 s(26–31% 단축, 결과 동일). 대기열 항목(도착 시 순위 입력 고정), 선택당 공통 입력 1회 계산, LTO·단일 코드 생성 단위. Stopping 재평가를 임계 해제 사건으로 바꿔 DS4 180 d 스테퍼 5/10 실행 77.8 → 6.3 s.
 - 구현 단계 10–11의 비용(같은 세션 대조): 순위 기준 목록은 같은 속도(키 계산 인라인, 호출이면 약 50% 느림). 구간·스텝 분해·일별 결과·기록 지점은 DS2 730 d 약 2%(기록 꺼짐; 사건 항목은 기록할 때만 만든다, lot 시각표는 lot 구조체 밖). 기록 켬(위반·TG 일별)은 추가 1–2%. 결과 구조가 늘어 최대 힙 +2–3 MB, digest는 새 값(기존 측정값은 CSV 바이트 동일).
+- 전략 코드(JS): DS2 730 d priority 1,541만 회 호출, Node에서 18.8–19.1 s(QTCR 15.8 s, 규칙 없음 17.3 s). [전략 코드](#전략-코드).
 - 참고 기준(하드웨어 상이): AutoSched AP 1,460 d 1회 — DS1 36:02(lot-step 34.69 M), DS2 31:30(30.01 M), DS3 40:48(39.04 M), DS4 39:58(38.15 M).
 
 ## 구현 구조
@@ -472,9 +504,9 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프, 종료 시각, 관측 사건
 crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더·데이터셋 파일, Simulation(단계 실행·상태), 전략, 통계, 측정값·복제 요약. 바인딩 의존 없음
 crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert, run, validate
-crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, summarize, daily, csv, compare, comparisonCsv, digest. tests/(Node API 테스트)
-crates/python/    Python 포장, PyO3 cdylib(패키지 smt2020-python, maturin wheel smt2020): 같은 API + load_dataset(DS1–4 동봉), smt2020.pyi(타입), tests/(unittest)
-www/              index.html, style.css, favicon.svg, main.js(실행 조율·wheel 목록), views.js(보기), home.js(홈·레이스), explainer.js(큐타임 애니메이션), presets.js(레이스·데모 조건, [P2] 값), kpis.js(주요·상세 지표 타일, 판정), datasets.js(데이터셋 로딩·코어 검증), setup.js·strategy.js(시나리오·전략 편집기), pool.js·worker.js(워커 풀·실행·재생), progress.js(진행·큐타임 시계·전략별 위반율 선), coach.js(1회 안내), results.js(분석 개요·탭), details.js(실행 들여다보기), compare.js(비교), share.js(공유 링크), charts.js(ECharts 차트), labels.js(구간·스텝·lot 종류·기간·시각 표기), files.js(내려받기), tooltip.js(툴팁·ⓘ 버튼), tabs.js(보기 안 탭), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0 MIT, Apache ECharts 6.1.0 Apache-2.0, fonts/ IBM Plex Sans·Mono OFL-1.1), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
+crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, summarize, daily, csv, compare, comparisonCsv, digest, 전략 코드 보기(Lot·Cqt·Segment·Batch, code.rs). tests/(Node API 테스트)
+crates/python/    Python 포장, PyO3 cdylib(패키지 smt2020-python, maturin wheel smt2020): 같은 API + load_dataset(DS1–4 동봉), 전략 코드 보기(code.rs), smt2020.pyi(타입), tests/(unittest)
+www/              index.html, style.css, favicon.svg, main.js(실행 조율·wheel 목록), views.js(보기), home.js(홈·레이스), explainer.js(큐타임 애니메이션), presets.js(레이스·데모 조건, [P2] 값), kpis.js(주요·상세 지표 타일, 판정), datasets.js(데이터셋 로딩·코어 검증), setup.js·strategy.js(시나리오·전략 편집기), code.js(전략 코드 카드·편집기·예제), strategy.d.ts(전략 코드 타입), pool.js·worker.js(워커 풀·실행·재생, 전략 코드 실행), progress.js(진행·큐타임 시계·전략별 위반율 선), coach.js(1회 안내), results.js(분석 개요·탭), details.js(실행 들여다보기), compare.js(비교), share.js(공유 링크), charts.js(ECharts 차트), labels.js(구간·스텝·lot 종류·기간·시각 표기), files.js(내려받기), tooltip.js(툴팁·ⓘ 버튼), tabs.js(보기 안 탭), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0 MIT, Apache ECharts 6.1.0 Apache-2.0, fonts/ IBM Plex Sans·Mono OFL-1.1, monaco/ Monaco Editor 0.57.0 MIT(JavaScript 편집에 쓰는 파일만)), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
@@ -495,7 +527,7 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 - 전략: `enum` + `match`(고정 집합, 동적 디스패치 없음).
 - 데이터셋 파일: postcard + 매직·형식 버전. 주기형 투입은 규칙만, 목록형·WIP는 lot 레코드(DS2·4 약 20만 lot). 브라우저는 xlsx를 읽지 않는다.
 - 바인딩: 코어 메서드를 그대로 위임하고 값은 serde 스키마로 변환한다(JS: serde-wasm-bindgen JSON 호환 객체, `i64`는 경계에서 f64(2^53 ms까지 정확). 설정은 JSON 값을 거쳐 읽어 미지 필드를 검출(구조체 역직렬화는 알려진 속성만 읽음). Python: pythonize dict·list). 관찰자 반환값 `false`/`False`만 일시정지, 예외는 일시정지 후 전달. Python은 실행 중 GIL을 놓고 1일마다 다시 잡아 관찰자·Ctrl-C를 처리한다.
-- 웹 모듈: `main.js`(실행 조율, 실행 = 묶음(시나리오 × 복제), 따라가는 보기 지정 가능), `views.js`(해시 라우터, `hashchange`만), `home.js`(레이스 = 홈이 따라가는 실행, 규칙별 복제 진행 합산·결과 KPI는 코어 `summarize`·`compare`), `kpis.js`(지표 타일·판정, 분석·비교와 공용), `datasets.js`(데이터셋 파일 1회 fetch·디코딩해 `info()`, 동시 요청은 하나로, 실행 전 `new Simulation`으로 코어 검증과 pass 수), `setup.js`(시나리오 = 데이터셋·설정·복제 수, 설정 JSON), `strategy.js`(전략 편집기, 설정 객체를 직접 고침), `pool.js`·`worker.js`(작업 큐·워커), `progress.js`(진행, 큐타임 시계 = 코어 `segments()`를 한도별로 묶어 그림, 전략별 위반율 선), `coach.js`(1회 안내, 닫힘은 localStorage), `results.js`(개요·탭), `details.js`(기록·재생·상세), `charts.js`(차트), `tabs.js`(ARIA 탭: 클릭·화살표 키, 숨은 탭의 차트는 보일 때 그림), `tooltip.js`(툴팁 1개, ⓘ 버튼, 마크업의 `data-tip`), `i18n.js`(`data-i18n` 문구, `data-i18n-attr` 속성, `data-tip` 버튼 이름), `motion.js`.
+- 웹 모듈: `main.js`(실행 조율, 실행 = 묶음(시나리오 × 복제), 따라가는 보기 지정 가능), `views.js`(해시 라우터, `hashchange`만), `home.js`(레이스 = 홈이 따라가는 실행, 규칙별 복제 진행 합산·결과 KPI는 코어 `summarize`·`compare`), `kpis.js`(지표 타일·판정, 분석·비교와 공용), `datasets.js`(데이터셋 파일 1회 fetch·디코딩해 `info()`, 동시 요청은 하나로, 실행 전 `new Simulation`으로 코어 검증과 pass 수), `setup.js`(시나리오 = 데이터셋·설정·복제 수, 설정 JSON), `strategy.js`(전략 편집기, 설정 객체를 직접 고침), `code.js`(전략 코드: 원문·사용 여부·허용 상태, Monaco를 처음 열 때 AMD로 불러와 `strategy.d.ts`·checkJs로 자동완성·검사, 정의된 함수는 언어 서비스 개요로 표시, 편집기 1개를 카드마다 옮겨 붙임), `pool.js`·`worker.js`(작업 큐·워커; 워커가 코드 원문을 `new Function`으로 한 번 실행해 함수를 얻고, 오류에 원문 줄 번호를 붙임), `progress.js`(진행, 큐타임 시계 = 코어 `segments()`를 한도별로 묶어 그림, 전략별 위반율 선), `coach.js`(1회 안내, 닫힘은 localStorage), `results.js`(개요·탭), `details.js`(기록·재생·상세), `charts.js`(차트), `tabs.js`(ARIA 탭: 클릭·화살표 키, 숨은 탭의 차트는 보일 때 그림), `tooltip.js`(툴팁 1개, ⓘ 버튼, 마크업의 `data-tip`), `i18n.js`(`data-i18n` 문구, `data-i18n-attr` 속성, `data-tip` 버튼 이름), `motion.js`.
 - 웹 실행: 워커 풀(`pool.js`, 최대 `navigator.hardwareConcurrency`개)이 작업(복제 실행·재생)을 차례로 맡긴다. 워커는 디코딩한 데이터셋을 보관해 같은 데이터셋의 바이트는 처음 한 번만 받는다. SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 워커의 관찰자는 직전 보고 후 250 ms(벽시계)가 지난 첫 1일 관측에서 일시정지하고, 워커는 진행·`segments()`를 `postMessage`한 뒤 이어 실행한다(일시정지는 결과 불변, 타이머 없음). 메인 스레드는 복제별 상태를 갱신하고 프레임마다 최대 1회(`requestAnimationFrame`) 그린다. 취소는 작업 묶음 단위 `worker.terminate()`.
 - 기록·재생: 복제 0은 위반·툴그룹 일별 기록과 함께 실행한다(결과 불변). 다른 복제는 같은 설정 + 측정된 QTS 흐름 계수로 1 pass 재생해 기록하고 digest를 비교한다. 구간 사건·lot 이력은 창 끝(`until`)까지만 재생한다. 기록은 최근 복제 3개까지 보관.
 - 애니메이션: anime.js 4.5.0(MIT, `www/vendor/`에 동봉, 외부 CDN 미사용). 보기·결과 등장(짧은 페이드), 결과 수치 증가, 실시간 수치는 현재 표시값에서 새 값으로 이어 움직임, 탭 밑줄 이동, 큐타임 그림(timeline, 홈이 보이고 페이지가 보일 때만 재생). `prefers-reduced-motion`이면 생략(최종 화면 동일, 큐타임 그림은 정지 화면).
@@ -524,6 +556,7 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 15. 첫 화면: 홈 보기([P2] 레이스, 큐타임 애니메이션), 주요 KPI 타일(분석 공용), 페이지 디자인(토큰·라이트/다크·모바일), 링크 미리보기 갱신 — 완료
 16. 용어·툴팁·분석 탭: 화면 용어(실행·결과 지문·기간·구간 이름), ⓘ 툴팁과 한 줄 요약, 분석 보기 탭 5개, 일별 비율 띠 0–100% — 완료
 17. CQT 실시간 시각화: 코어 구간 상태(`segments()`: 구간 안 lot·여유, 누적 완료·위반), 실행 보기 큐타임 시계(한도별 행, 여유·위험·초과)와 전략별 위반율 선, 1회 안내, 레이스에서 시계로 가는 링크 — 완료
+18. 전략 코드: 코어 `Code`(priority·admit·start_batch, 기준 `code`, `queue_time: "code"`, 보류·깨우기 사건), JS·Python 어댑터, 페이지 편집기(Monaco·타입·예제·검사), 워커 실행, 공유 링크 코드 허용, Stopping 재디스패칭 순서 고정 — 완료
 
 ## 로컬 빌드·테스트
 

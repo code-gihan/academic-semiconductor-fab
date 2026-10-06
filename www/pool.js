@@ -9,8 +9,8 @@ const queue = [];
 let nextId = 0;
 
 /**
- * Queues `job`: {group, dataset: {key, bytes}, config, recording?, until?, live?, onStart?,
- * onProgress?, onDone, onError}. `group` names the jobs `cancel` drops together; `onStart` is
+ * Queues `job`: {group, dataset: {key, bytes}, config, code?, recording?, until?, live?,
+ * onStart?, onProgress?, onDone, onError}. `group` names the jobs `cancel` drops together; `onStart` is
  * called when a worker takes the job.
  */
 export function submit(job) {
@@ -58,6 +58,7 @@ function dispatch() {
         dataset: job.dataset.key,
         bytes,
         config: job.config,
+        code: job.code,
         recording: job.recording,
         until: job.until,
         live: Boolean(job.live),

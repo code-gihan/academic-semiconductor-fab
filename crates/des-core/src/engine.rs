@@ -153,6 +153,11 @@ impl<M: Model> Simulation<M> {
         &self.model
     }
 
+    /// The model, to change between runs in ways that need no events.
+    pub fn model_mut(&mut self) -> &mut M {
+        &mut self.model
+    }
+
     /// Model events handled so far (throughput metric); observations do not count.
     pub fn events_processed(&self) -> u64 {
         self.events_processed

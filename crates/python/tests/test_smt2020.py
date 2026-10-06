@@ -1,5 +1,6 @@
 """The smt2020 module on the bundled DS1: python -m unittest discover -s crates/python/tests"""
 
+import math
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -253,6 +254,156 @@ class SimulationTest(unittest.TestCase):
         for recording in ({"violation": True}, {"events": {"from": DAY, "until": DAY}}):
             with self.assertRaises(ValueError):
                 smt2020.Simulation(self.dataset, self.config, recording)
+
+    def state_after(self, simulation, days):
+        """Progress, lots, tools and CQT segments of `simulation` after `days`."""
+        simulation.run(until=days * DAY)
+        return (simulation.progress(), simulation.lots(), simulation.tools(), simulation.segments())
+
+    def test_strategy_code_runs_the_papers_rules_as_the_built_in_rules_do(self):
+        info = self.dataset.info()
+        horizon = {"horizon": 30 * DAY}
+
+        # The same priority everywhere ranks nothing; the views carry the lot.
+        class Constant:
+            seen = None
+
+            def priority(self, lot, now):
+                if self.seen is None:
+                    self.seen = (lot.kind, lot.tool_group, lot.step_name, now, lot.cqt)
+                return 0
+
+        constant = Constant()
+        code_rule = smt2020.Simulation(self.dataset, {**horizon, "queue_time": "code"}, code=constant)
+        self.assertEqual(
+            self.state_after(code_rule, 5),
+            self.state_after(smt2020.Simulation(self.dataset, horizon), 5),
+        )
+        kind, group, step, now, _ = constant.seen
+        self.assertIsInstance(kind, str)
+        self.assertIsInstance(group, str)
+        self.assertIsInstance(step, str)
+        self.assertIsInstance(now, int)
+
+        # The end of the lot's segment, as code, ranks as the built-in criterion.
+        exits = {
+            info["tool_groups"][info["routes"][s["route"]]["steps"][s["exit"]]["tool_group"]]["name"]
+            for s in info["segments"]
+        }
+
+        def ranking(criterion):
+            return {**horizon, "ranking": {name: [criterion, "fifo"] for name in exits}}
+
+        class Deadline:
+            def priority(self, lot, now):
+                return lot.cqt.deadline if lot.cqt else float("inf")
+
+        self.assertEqual(
+            self.state_after(smt2020.Simulation(self.dataset, ranking("code"), code=Deadline()), 5),
+            self.state_after(smt2020.Simulation(self.dataset, ranking("qt_deadline")), 5),
+        )
+
+        # Stopping at the steppers, as admission code.
+        steppers = ("LithoTrack_FE_95", "LithoTrack_FE_115")
+        stopping = {"limits": {name: {"front": 5, "total": 10} for name in steppers}}
+
+        class Admission:
+            held = 0
+
+            def admit(self, lot, segment, now):
+                reached = any(
+                    group.front >= (5 if group.tool_group in steppers else 1000)
+                    or group.total >= (10 if group.tool_group in steppers else 1000)
+                    for group in segment.groups
+                )
+                self.held += reached
+                return not reached
+
+        admission = Admission()
+        self.assertEqual(
+            self.state_after(smt2020.Simulation(self.dataset, horizon, code=admission), 10),
+            self.state_after(smt2020.Simulation(self.dataset, {**horizon, "stopping": stopping}), 10),
+        )
+        self.assertGreater(admission.held, 0)
+
+        # Batches below their minimum start at an hour of slack, as code.
+        class Batches:
+            started = 0
+
+            def start_batch(self, batch, now):
+                if batch.slack is None:
+                    return False
+                if batch.slack <= HOUR:
+                    self.started += 1
+                    return True
+                return math.ceil(now + batch.slack - HOUR)
+
+        batches = Batches()
+        self.assertEqual(
+            self.state_after(smt2020.Simulation(self.dataset, horizon, code=batches), 10),
+            self.state_after(
+                smt2020.Simulation(self.dataset, {**horizon, "batch_start_within": HOUR}), 10
+            ),
+        )
+        self.assertGreater(batches.started, 0)
+
+    def test_strategy_code_errors_stop_the_run(self):
+        ranked = {"horizon": 30 * DAY, "queue_time": "code"}
+
+        class Failing:
+            def priority(self, lot, now):
+                return lot.cqt.slack
+
+        failing = smt2020.Simulation(self.dataset, ranked, code=Failing())
+        # The code's exception, then the run's failure.
+        with self.assertRaises(AttributeError):
+            failing.run()
+        with self.assertRaisesRegex(RuntimeError, "strategy code: priority: AttributeError"):
+            failing.run()
+
+        class Text:
+            def priority(self, lot, now):
+                return "soon"
+
+        with self.assertRaisesRegex(RuntimeError, "priority: returned str, not a number"):
+            smt2020.Simulation(self.dataset, ranked, code=Text()).run()
+        with self.assertRaisesRegex(RuntimeError, "no strategy code was given"):
+            smt2020.Simulation(self.dataset, ranked).run(until=DAY)
+
+        class AdmitOnly:
+            def admit(self, lot, segment, now):
+                return True
+
+        with self.assertRaisesRegex(ValueError, "has no priority"):
+            smt2020.Simulation(self.dataset, ranked, code=AdmitOnly())
+        with self.assertRaisesRegex(ValueError, "defines no hook"):
+            smt2020.Simulation(self.dataset, ranked, code=object())
+
+    def test_ctrl_c_in_the_strategy_code_pauses_the_run(self):
+        config = {"horizon": 3 * DAY, "queue_time": "code"}
+
+        class Wafers:
+            calls = 0
+            interrupt_at = None
+
+            def priority(self, lot, now):
+                self.calls += 1
+                if self.calls == self.interrupt_at:
+                    raise KeyboardInterrupt
+                return -lot.wafers
+
+        interrupted = Wafers()
+        interrupted.interrupt_at = 100
+        simulation = smt2020.Simulation(self.dataset, config, code=interrupted)
+        with self.assertRaises(KeyboardInterrupt):
+            simulation.run()
+        self.assertFalse(simulation.progress()["finished"])
+        simulation.run()
+        straight = smt2020.Simulation(self.dataset, config, code=Wafers())
+        straight.run()
+        self.assertEqual(
+            smt2020.digest(simulation.results()), smt2020.digest(straight.results())
+        )
 
 
 if __name__ == "__main__":

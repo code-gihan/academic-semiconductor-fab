@@ -375,6 +375,16 @@ simulation.run()  # to the end: every released lot complete
 summary = smt2020.summarize([simulation.results()])
 
 simulation.reset({**simulation.config(), "queue_time": "qts"})  # starts over with another strategy</code></pre>
+        <h3 data-i18n="python.code"></h3>
+        <pre><code>class LeastSlack:
+    def priority(self, lot, now):
+        # The latest time the lot can wait until; lots outside CQT segments after.
+        return now + lot.cqt.slack if lot.cqt else float("inf")
+
+config = {"horizon": 730 * DAY, "queue_time": "code"}
+simulation = smt2020.Simulation(dataset, config, code=LeastSlack())
+simulation.run()</code></pre>
+        <p class="hint" data-i18n="python.codeHint"></p>
         <p class="hint"><span data-i18n="python.config"></span></p>
         <p class="hint"><span data-i18n="python.more"></span> <a href="https://github.com/code-gihan/academic-semiconductor-fab#quick-start">README</a></p>
       </div>

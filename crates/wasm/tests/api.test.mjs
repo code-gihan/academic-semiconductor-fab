@@ -237,3 +237,103 @@ test("bad input is rejected", () => {
   const window = { events: { from: DAY, until: DAY } };
   assert.throws(() => new Simulation(dataset, config, window), /must end after it starts/);
 });
+
+/** The state of a simulation after `days`: progress, lots, tools and CQT segments. */
+function stateAfter(simulation, days) {
+  simulation.run(days * DAY);
+  return JSON.stringify([simulation.progress(), simulation.lots(), simulation.tools(), simulation.segments()]);
+}
+
+test("strategy code runs the papers' rules as the built-in rules do", () => {
+  const info = dataset.info();
+  const horizon = { horizon: 30 * DAY };
+  // The same priority everywhere ranks nothing; the views carry the lot.
+  let seen = null;
+  const constant = {
+    priority(lot, now) {
+      seen ??= { kind: lot.kind, toolGroup: lot.toolGroup, stepName: lot.stepName, now, cqt: lot.cqt && lot.cqt.limit };
+      return 0;
+    },
+  };
+  assert.equal(
+    stateAfter(new Simulation(dataset, { ...horizon, queue_time: "code" }, null, constant), 5),
+    stateAfter(new Simulation(dataset, horizon), 5),
+  );
+  assert.equal(typeof seen.kind, "string");
+  assert.equal(typeof seen.toolGroup, "string");
+  assert.equal(typeof seen.now, "number");
+  // The end of the lot's segment, as code, ranks as the built-in criterion.
+  const exits = [...new Set(info.segments.map((segment) => info.tool_groups[info.routes[segment.route].steps[segment.exit].tool_group].name))];
+  const ranking = (criterion) => ({ ...horizon, ranking: Object.fromEntries(exits.map((name) => [name, [criterion, "fifo"]])) });
+  const deadline = { priority: (lot) => (lot.cqt ? lot.cqt.deadline : Infinity) };
+  assert.equal(
+    stateAfter(new Simulation(dataset, ranking("code"), null, deadline), 5),
+    stateAfter(new Simulation(dataset, ranking("qt_deadline")), 5),
+  );
+  // Stopping at the steppers, as admission code.
+  const steppers = ["LithoTrack_FE_95", "LithoTrack_FE_115"];
+  const stopping = { limits: Object.fromEntries(steppers.map((name) => [name, { front: 5, total: 10 }])) };
+  let held = 0;
+  const admission = {
+    admit(lot, segment) {
+      const reached = segment.groups.some((group) => {
+        const [front, total] = steppers.includes(group.toolGroup) ? [5, 10] : [1000, 1000];
+        return group.front >= front || group.total >= total;
+      });
+      held += reached ? 1 : 0;
+      return !reached;
+    },
+  };
+  assert.equal(
+    stateAfter(new Simulation(dataset, horizon, null, admission), 10),
+    stateAfter(new Simulation(dataset, { ...horizon, stopping }), 10),
+  );
+  assert.ok(held > 0);
+  // Batches below their minimum start at an hour of slack, as code.
+  let started = 0;
+  const batches = {
+    startBatch(batch, now) {
+      if (batch.slack === null) return false;
+      if (batch.slack <= HOUR) {
+        started += 1;
+        return true;
+      }
+      return Math.ceil(now + batch.slack - HOUR);
+    },
+  };
+  assert.equal(
+    stateAfter(new Simulation(dataset, horizon, null, batches), 10),
+    stateAfter(new Simulation(dataset, { ...horizon, batch_start_within: HOUR }), 10),
+  );
+  assert.ok(started > 0);
+});
+
+test("strategy code errors stop the run", () => {
+  const ranked = { horizon: 30 * DAY, queue_time: "code" };
+  const thrower = new Simulation(dataset, ranked, null, {
+    priority(lot) {
+      return lot.cqt.slack;
+    },
+  });
+  assert.throws(() => thrower.run(), /^Error: strategy code: priority: TypeError: .*null/);
+  assert.throws(() => thrower.run(), /strategy code: priority/);
+  const text = new Simulation(dataset, ranked, null, { priority: () => "soon" });
+  assert.throws(() => text.run(), /strategy code: priority: returned string, not a number/);
+  assert.throws(() => new Simulation(dataset, ranked).run(DAY), /ranks by code, but no strategy code was given/);
+  assert.throws(() => new Simulation(dataset, ranked, null, { admit: () => true }), /has no priority/);
+  assert.throws(() => new Simulation(dataset, ranked, null, {}), /defines no hook/);
+  assert.throws(() => new Simulation(dataset, ranked, null, { priority: 1 }), /code.priority is not a function/);
+  // Methods of a class instance see it as `this`.
+  class Strategy {
+    constructor() {
+      this.calls = 0;
+    }
+    priority() {
+      this.calls += 1;
+      return 0;
+    }
+  }
+  const strategy = new Strategy();
+  new Simulation(dataset, ranked, null, strategy).run(DAY);
+  assert.ok(strategy.calls > 0);
+});

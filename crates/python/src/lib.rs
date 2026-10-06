@@ -1,14 +1,18 @@
 //! Python module `smt2020`: the `smt2020` crate's dataset, simulation and summaries, as the
 //! JavaScript module has them. Configurations, progress, states and results cross as dicts and
-//! lists of the crate's serialized schema (times in ms). A run releases the GIL, so simulations
-//! in several threads run in parallel, and Ctrl-C pauses it.
+//! lists of the crate's serialized schema (times in ms); strategy code is an object of Python
+//! methods (`code`). A run releases the GIL, so simulations in several threads run in parallel,
+//! and Ctrl-C pauses it.
+
+mod code;
 
 use std::fmt::Display;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyboardInterrupt, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pythonize::{depythonize, pythonize};
 use serde::Serialize;
@@ -64,59 +68,78 @@ fn load_dataset(source: PathBuf) -> PyResult<Dataset> {
 
 /// One run of a configuration on a dataset from time 0, advanced in steps (`smt2020::Simulation`).
 #[pyclass(module = "smt2020")]
-struct Simulation(smt2020::Simulation);
+struct Simulation {
+    simulation: smt2020::Simulation,
+    /// What its strategy code raised.
+    raised: Arc<code::Raised>,
+}
 
 #[pymethods]
 impl Simulation {
-    /// The simulation of `config` on `dataset` at time 0, recording what `recording` asks.
+    /// The simulation of `config` on `dataset` at time 0, recording what `recording` asks, with
+    /// the strategy `code`: an object with any of the methods `priority(lot, now)`,
+    /// `admit(lot, segment, now)` and `start_batch(batch, now)`.
     #[new]
-    #[pyo3(signature = (dataset, config, recording=None))]
+    #[pyo3(signature = (dataset, config, recording=None, code=None))]
     fn new(
+        py: Python<'_>,
         dataset: &Dataset,
         config: &Bound<'_, PyAny>,
         recording: Option<&Bound<'_, PyAny>>,
+        code: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let recording: Recording = match recording {
             Some(recording) => depythonize(recording).map_err(value_error)?,
             None => Recording::default(),
         };
-        smt2020::Simulation::with_recording(Arc::clone(&dataset.0), config_of(config)?, recording)
-            .map(Self)
+        let config = config_of(config)?;
+        let data = Arc::clone(&dataset.0);
+        let raised = Arc::new(code::Raised::default());
+        let simulation = match code {
+            Some(code) => {
+                let code = code::code_of(py, &dataset.0, code, Arc::clone(&raised))?;
+                smt2020::Simulation::with_code(data, config, recording, code)
+            }
+            None => smt2020::Simulation::with_recording(data, config, recording),
+        };
+        simulation
+            .map(|simulation| Self { simulation, raised })
             .map_err(value_error)
     }
 
     fn config<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, self.0.config())
+        to_py(py, self.simulation.config())
     }
 
     fn recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, self.0.recording())
+        to_py(py, self.simulation.recording())
     }
 
     /// The tables recorded so far, as dicts of columns.
     fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, self.0.records())
+        to_py(py, self.simulation.records())
     }
 
     /// The QTS flow factors of the configured run (given, or measured by the first pass), or
     /// None.
     fn flow_factors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, &self.0.flow_factors())
+        to_py(py, &self.simulation.flow_factors())
     }
 
-    /// Starts over at time 0 with `config`, or with the same configuration.
+    /// Starts over at time 0 with `config`, or with the same configuration, and the same code.
     #[pyo3(signature = (config=None))]
     fn reset(&mut self, config: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         let config = match config {
             Some(config) => config_of(config)?,
-            None => self.0.config().clone(),
+            None => self.simulation.config().clone(),
         };
-        self.0.reset(config).map_err(value_error)
+        self.simulation.reset(config).map_err(value_error)
     }
 
     /// Runs up to `until` (ms, events at it included) or to the end and returns the progress.
     /// `on_progress(progress)`, if given, is called once per simulated day: returning False pauses
-    /// the run there, and an exception pauses it and is raised on, as Ctrl-C is.
+    /// the run there, and an exception pauses it and is raised on, as Ctrl-C is. An exception of
+    /// the strategy code stops the run for good and is raised on.
     #[pyo3(signature = (until=None, on_progress=None))]
     fn run<'py>(
         &mut self,
@@ -125,12 +148,19 @@ impl Simulation {
         on_progress: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let until = until.map(sim::time).transpose().map_err(value_error)?;
-        let simulation = &mut self.0;
+        let simulation = &mut self.simulation;
+        let code_raised = &self.raised;
         let mut raised = None;
         let progress = py.detach(|| {
             simulation.run_observed(until, |progress| {
                 Python::attach(|py| {
-                    let paused = py.check_signals().and_then(|()| match &on_progress {
+                    // Ctrl-C while the code ran pauses the run here.
+                    let signals = if code_raised.interrupted.swap(false, Ordering::Relaxed) {
+                        Err(PyKeyboardInterrupt::new_err(()))
+                    } else {
+                        py.check_signals()
+                    };
+                    let paused = signals.and_then(|()| match &on_progress {
                         Some(callback) => {
                             let reply = callback.call1(py, (to_py(py, progress)?,))?;
                             Ok(reply.bind(py).extract::<bool>().is_ok_and(|go_on| !go_on))
@@ -151,37 +181,42 @@ impl Simulation {
         if let Some(error) = raised {
             return Err(error);
         }
-        to_py(py, &progress.map_err(runtime_error)?)
+        let progress = progress.map_err(|error| {
+            // The code's own exception, the first time the run reports its failure.
+            let kept = self.raised.exception.lock().expect("unpoisoned").take();
+            kept.unwrap_or_else(|| runtime_error(error))
+        })?;
+        to_py(py, &progress)
     }
 
     fn progress<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, &self.0.progress())
+        to_py(py, &self.simulation.progress())
     }
 
     /// The lots in the fab, by id.
     fn lots<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, &self.0.lots())
+        to_py(py, &self.simulation.lots())
     }
 
     /// Every tool, by id.
     fn tools<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, &self.0.tools())
+        to_py(py, &self.simulation.tools())
     }
 
     /// Every tool group, in dataset order.
     fn tool_groups<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, &self.0.tool_groups())
+        to_py(py, &self.simulation.tool_groups())
     }
 
     /// Every CQT segment, in the order of the dataset info's segments: the lots in it and its
     /// completions so far.
     fn segments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, &self.0.segments())
+        to_py(py, &self.simulation.segments())
     }
 
     /// Results of the finished run.
     fn results<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        to_py(py, &self.0.results().map_err(runtime_error)?)
+        to_py(py, &self.simulation.results().map_err(runtime_error)?)
     }
 }
 
@@ -249,6 +284,11 @@ fn smt2020_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("SECOND", SECOND)?;
     module.add_class::<Dataset>()?;
     module.add_class::<Simulation>()?;
+    module.add_class::<code::Lot>()?;
+    module.add_class::<code::Cqt>()?;
+    module.add_class::<code::Segment>()?;
+    module.add_class::<code::SegmentGroup>()?;
+    module.add_class::<code::Batch>()?;
     module.add_function(wrap_pyfunction!(load_dataset, module)?)?;
     module.add_function(wrap_pyfunction!(summarize, module)?)?;
     module.add_function(wrap_pyfunction!(daily, module)?)?;

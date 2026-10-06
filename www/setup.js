@@ -1,9 +1,11 @@
 // The Setup view: a dataset, the run settings and a strategy in the core's configuration schema
-// (times in ms), made of the dataset choice, the run settings, the strategy editor and the
-// configuration's JSON; and the scenarios to compare, strategies saved under a name and run
-// together under the same settings and random numbers. The chosen dataset's info (datasets.js)
-// builds the editor, and the core checks a configuration as a run would. Scenarios are kept in
-// the browser and travel in share links; the demo is the Home view's race.
+// (times in ms) with its strategy code, made of the dataset choice, the run settings, the
+// strategy editor and the configuration's JSON; and the scenarios to compare, strategies saved
+// under a name and run together under the same settings and random numbers. The chosen
+// dataset's info (datasets.js) builds the editor, and the core checks a configuration as a run
+// would. Scenarios are kept in the browser and travel in share links, their code allowed to run
+// by the reader; the demo is the Home view's race.
+import { lines } from "./code.js";
 import { BUNDLED, datasetName, loadDataset, passes } from "./datasets.js";
 import { Failure, failureText, t } from "./i18n.js";
 import { pulse } from "./motion.js";
@@ -33,9 +35,20 @@ export function setupView({ status, run }) {
   /** Bumped by every dataset choice, so a slower earlier load is dropped. */
   let choice = 0;
   const config = { horizon: 730 * DAY, seed: 1, load: 1, queue_time: "none", ranking: {} };
-  const editor = strategyEditor($("strategy"), showJson);
-  /** Strategies to compare: {name, strategy}. */
+  /** Strategies to compare: {name, strategy, code?, allowed?}; `allowed: false` marks code that
+   * came with a shared link and has not been allowed yet. */
   let scenarios = restore();
+  /** The strategy code: its source, whether runs use it, and whether code that came with a
+   * shared link may run (the reader allowed it). */
+  const code = { source: "", enabled: false, trusted: !scenarios.some((scenario) => scenario.allowed === false) };
+  const editor = strategyEditor($("strategy"), () => {
+    showJson();
+    // Code the reader allowed stays allowed in this browser.
+    if (code.trusted && scenarios.some((scenario) => scenario.allowed === false)) {
+      for (const scenario of scenarios) delete scenario.allowed;
+      keep();
+    }
+  });
 
   form.addEventListener("change", (event) => {
     if (event.target.name === "dataset") {
@@ -98,7 +111,7 @@ export function setupView({ status, run }) {
       if (token !== choice) return;
       current = entry;
       status(() => "");
-      editor.show(entry.info, key, config);
+      editor.show(entry.info, key, config, code);
       showJson();
     } catch (error) {
       if (token !== choice) return;
@@ -154,7 +167,7 @@ export function setupView({ status, run }) {
     config.ranking ??= {};
     delete config.replication;
     writeSettings();
-    editor.show(current.info, current.key, config);
+    editor.show(current.info, current.key, config, code);
     showJson();
     jsonStatus(() => t("json.applied"));
   }
@@ -179,12 +192,26 @@ export function setupView({ status, run }) {
       status(() => t("status.invalid", { message: error.message }));
       return;
     }
+    if (!allowed(codeOf())) return;
     const snapshot = structuredClone(config);
     const name = datasetName(current.key, current.name);
-    run(batch([{ name, config: snapshot, passes: count }]));
+    run(batch([{ name, config: snapshot, passes: count, code: codeOf() }]));
   }
 
-  /** A run of `scenarios` ({name, config, passes}) on the current dataset. */
+  /** The source of the strategy code that runs use: none unless enabled and written. */
+  function codeOf() {
+    return code.enabled && code.source.trim() ? code.source : undefined;
+  }
+
+  /** Whether code from a shared link may run; says why not otherwise. */
+  function allowed(...sources) {
+    if (code.trusted || sources.every((source) => !source)) return true;
+    status(() => t("code.notAllowed"));
+    scenarioStatus(() => t("code.notAllowed"));
+    return false;
+  }
+
+  /** A run of `scenarios` ({name, config, passes, code}) on the current dataset. */
   function batch(list) {
     const replications = Number(fields.replications.value);
     return {
@@ -192,11 +219,12 @@ export function setupView({ status, run }) {
       dataset: { key: current.id, bytes: current.bytes },
       info: current.info,
       replications,
-      scenarios: list.map(({ name, config: each, passes: count }) => ({
+      scenarios: list.map(({ name, config: each, passes: count, code: source }) => ({
         name,
         config: each,
         passes: count,
-        setup: describe(current.key, current.name, each, replications),
+        code: source,
+        setup: describe(current.key, current.name, each, replications, source),
       })),
     };
   }
@@ -215,7 +243,8 @@ export function setupView({ status, run }) {
     }
     const input = $("scenario-name");
     const name = input.value.trim() || t("scenarios.defaultName", { number: scenarios.length + 1 });
-    scenarios.push({ name, strategy: strategyOf(config) });
+    const source = codeOf();
+    scenarios.push({ name, strategy: strategyOf(config), code: source, ...(source && !code.trusted ? { allowed: false } : {}) });
     input.value = "";
     keep();
     renderScenarios();
@@ -230,6 +259,7 @@ export function setupView({ status, run }) {
       return;
     }
     readSettings();
+    if (!allowed(...scenarios.map((scenario) => scenario.code))) return;
     const settings = Object.fromEntries(RUN_KEYS.filter((key) => key in config).map((key) => [key, config[key]]));
     const list = [];
     for (const scenario of scenarios) {
@@ -241,7 +271,7 @@ export function setupView({ status, run }) {
         scenarioStatus(() => t("scenarios.invalid", { name: scenario.name, message: error.message }));
         return;
       }
-      list.push({ name: scenario.name, config: each, passes: count });
+      list.push({ name: scenario.name, config: each, passes: count, code: scenario.code });
     }
     scenarioStatus(() => "");
     run(batch(list));
@@ -253,8 +283,8 @@ export function setupView({ status, run }) {
         const edit = element("button", "link own", t("scenarios.edit"));
         edit.type = "button";
         edit.addEventListener("click", () => {
-          useStrategy(scenario.strategy);
-          if (current) editor.show(current.info, current.key, config);
+          useStrategy(scenario.strategy, scenario.code);
+          if (current) editor.show(current.info, current.key, config, code);
           showJson();
           scenarioStatus(() => t("scenarios.editing", { name: scenario.name }));
         });
@@ -269,7 +299,7 @@ export function setupView({ status, run }) {
         const title = element("strong", "", scenario.name);
         if (index === 0) title.append(element("span", "tag", t("scenarios.baseline")));
         const text = element("span", "scenario-text", "");
-        text.append(title, element("span", "hint", strategySummary(scenario.strategy)));
+        text.append(title, element("span", "hint", strategySummary(scenario.strategy, scenario.code)));
         const item = document.createElement("li");
         item.append(text, edit, remove);
         return item;
@@ -278,13 +308,15 @@ export function setupView({ status, run }) {
     $("scenarios-empty").hidden = scenarios.length > 0;
   }
 
-  /** The strategy `strategy` in the editor, the run settings kept. */
-  function useStrategy(strategy) {
+  /** The strategy `strategy` and its code `source` in the editor, the run settings kept. */
+  function useStrategy(strategy, source) {
     for (const key of Object.keys(config)) {
       if (!RUN_KEYS.includes(key)) delete config[key];
     }
     Object.assign(config, structuredClone(strategy));
     config.ranking ??= {};
+    code.source = source ?? "";
+    code.enabled = Boolean(source);
   }
 
   /** Copies a link to the page with this dataset, these settings and the scenarios (or the
@@ -297,7 +329,11 @@ export function setupView({ status, run }) {
       return;
     }
     readSettings();
-    const list = scenarios.length > 0 ? scenarios : [{ name: t("scenarios.edited"), strategy: strategyOf(config) }];
+    const list = (
+      scenarios.length > 0
+        ? scenarios
+        : [{ name: t("scenarios.edited"), strategy: strategyOf(config), code: codeOf() }]
+    ).map(({ name, strategy, code: source }) => ({ name, strategy, code: source }));
     const settings = {
       horizon: config.horizon,
       warm_up: config.warm_up ?? null,
@@ -342,10 +378,15 @@ export function setupView({ status, run }) {
     writeSettings();
     scenarios = state.scenarios
       .filter((scenario) => scenario && typeof scenario.strategy === "object")
-      .map((scenario) => ({ name: String(scenario.name ?? ""), strategy: scenario.strategy }));
+      .map((scenario) => {
+        const source = typeof scenario.code === "string" && scenario.code ? scenario.code : undefined;
+        // Code from a link runs once the reader allows it.
+        return { name: String(scenario.name ?? ""), strategy: scenario.strategy, code: source, ...(source ? { allowed: false } : {}) };
+      });
+    code.trusted = !scenarios.some((scenario) => scenario.code);
     keep();
     renderScenarios();
-    if (scenarios.length > 0) useStrategy(scenarios[0].strategy);
+    if (scenarios.length > 0) useStrategy(scenarios[0].strategy, scenarios[0].code);
     chooseDataset();
     scenarioStatus(render);
   }
@@ -391,8 +432,8 @@ function strategyOf(config) {
   return strategy;
 }
 
-/** A strategy in a line. */
-function strategySummary(strategy) {
+/** A strategy and its code in a line. */
+function strategySummary(strategy, source) {
   const parts = [t(`strategy.queueTime.${strategy.queue_time ?? "none"}`)];
   const ranked = Object.keys(strategy.ranking ?? {}).length;
   if (ranked) parts.push(t("ranking.custom", { count: ranked }));
@@ -404,11 +445,12 @@ function strategySummary(strategy) {
   }
   if ((strategy.engineering ?? "base") !== "base") parts.push(engineeringText(strategy.engineering));
   if (strategy.reserve_super_hot) parts.push(t("strategy.superHot.short"));
+  if (source) parts.push(t("code.lines", { lines: lines(source) }));
   return parts.join(" · ");
 }
 
 /** The scenario as [label key, text()] pairs; texts follow the language. */
-export function describe(key, name, config, replications) {
+export function describe(key, name, config, replications, source) {
   const ranked = Object.keys(config.ranking ?? {}).length;
   const limited = Object.keys(config.stopping?.limits ?? {}).length;
   return [
@@ -428,6 +470,7 @@ export function describe(key, name, config, replications) {
     ],
     ["strategy.engineering.label", () => engineeringText(config.engineering ?? "base")],
     ["strategy.superHot.short", () => t(config.reserve_super_hot ? "common.on" : "common.off")],
+    ["code.heading", () => (source ? t("code.lines", { lines: lines(source) }) : t("common.off"))],
     ["settings.horizon.label", () => String(config.horizon / DAY)],
     [
       "settings.warmUp.label",

@@ -30,11 +30,12 @@ Criterion = Union[
         "qtcr",
         "qts",
         "qt_deadline",
+        "code",
     ],
     dict[str, float],
 ]
 """A lot ranking criterion, smallest value first; {"qt_within": ms} ranks the lots with at most
-that much queue-time slack first."""
+that much queue-time slack first; "code" by the strategy code's priority."""
 
 class _ConfigRequired(TypedDict):
     horizon: float
@@ -49,7 +50,7 @@ class Config(_ConfigRequired, total=False):
     replication: int
     load: float
     reserve_super_hot: bool
-    queue_time: Literal["none", "qtcr", "qts"]
+    queue_time: Literal["none", "qtcr", "qts", "code"]
     flow_factors: Optional[list[list[Optional[float]]]]
     ranking: dict[str, list[Criterion]]
     """Criteria per tool group (1 to 6, distinct, most significant first); other groups rank by
@@ -255,6 +256,76 @@ class SegmentStatus(TypedDict):
     cqt: CqtReport
     """Completions since time 0 (not reset by reporting periods)."""
 
+class Cqt:
+    """The CQT segment a lot is in; times and work in ms."""
+
+    segment: int
+    """Index in the dataset info's segments."""
+    limit: int
+    entered: int
+    """End of the entrance step; the exit step must start by deadline = entered + limit."""
+    deadline: int
+    exit: int
+    before_exit: float
+    """Expected work from the lot's step until the exit step starts."""
+    slack: float
+    """deadline - now - before_exit."""
+
+class Lot:
+    """A lot as strategy code sees it; times and work in ms."""
+
+    id: int
+    part: str
+    kind: Literal["PRL", "PHL", "SHL", "ERL", "EHL"]
+    priority: int
+    wafers: int
+    release: int
+    due: int
+    step: int
+    step_name: str
+    tool_group: str
+    remaining: float
+    """Expected work from this step to the end."""
+    step_time: float
+    cqt: Optional[Cqt]
+
+class SegmentGroup:
+    """Lots in CQT segments at a tool group: queued or processing there, and those plus the ones
+    still to reach it."""
+
+    tool_group: str
+    front: int
+    total: int
+
+class Segment:
+    """The CQT segment a lot is about to start."""
+
+    segment: int
+    limit: int
+    exit: int
+    groups: list[SegmentGroup]
+
+class Batch:
+    """A batch below its minimum size; times in ms."""
+
+    tool_group: str
+    step: int
+    step_name: str
+    lots: int
+    wafers: int
+    min: int
+    max: int
+    oldest: int
+    """The earliest arrival of its lots in the queue."""
+    slack: Optional[float]
+    """The least queue-time slack of its lots in CQT segments."""
+
+Code = Any
+"""Strategy code: an object with any of the methods
+priority(lot: Lot, now: int) -> float (smaller first; where the configuration ranks by code),
+admit(lot: Lot, segment: Segment, now: int) -> bool | float (False or a time holds the lot),
+start_batch(batch: Batch, now: int) -> bool | float (True starts it, False or a time waits)."""
+
 class Summary(TypedDict):
     period: str
     scope: str
@@ -302,10 +373,15 @@ class Simulation:
     the results unchanged; QTS without flow factors measures them in a first pass."""
 
     def __init__(
-        self, dataset: Dataset, config: Config, recording: Optional[Recording] = None
+        self,
+        dataset: Dataset,
+        config: Config,
+        recording: Optional[Recording] = None,
+        code: Optional[Code] = None,
     ) -> None:
-        """The simulation of `config` on `dataset` at time 0, recording what `recording` asks
-        (ValueError if invalid). Recording leaves the results unchanged."""
+        """The simulation of `config` on `dataset` at time 0, recording what `recording` asks,
+        with the strategy `code` (ValueError if invalid). Recording leaves the results
+        unchanged."""
     def config(self) -> Config: ...
     def recording(self) -> Recording: ...
     def records(self) -> Records:

@@ -1,7 +1,9 @@
 // Strategy editor: the queue-time rule, the lot ranking per tool group, early batch starts,
 // stopping limits, the engineering rule and super hot reservation of a configuration in the
-// core's schema, for the tool groups of a dataset (its info). Edits change the configuration in
-// place and are reported through `changed(config)`; the core checks it before a run.
+// core's schema, for the tool groups of a dataset (its info), and the strategy code (code.js).
+// Edits change the configuration and the code in place and are reported through
+// `changed(config)`; the core checks them before a run.
+import { codeCard } from "./code.js";
 import { formatNumber, t } from "./i18n.js";
 import { infoButton, withTooltip } from "./tooltip.js";
 
@@ -19,6 +21,7 @@ const CRITERIA = [
   "due_date",
   "shortest_step",
   "least_remaining",
+  "code",
 ];
 /** Most criteria of a ranking (the core's MAX_CRITERIA). */
 const MAX_CRITERIA = 6;
@@ -77,12 +80,14 @@ function countOf(input) {
   return input.value !== "" && Number.isInteger(value) && value > 0 ? value : null;
 }
 
-/** The editor in `root`: `show(info, dataset, config)` edits `config` for that dataset;
- * `render()` draws it again (a new language). */
+/** The editor in `root`: `show(info, dataset, config, code)` edits `config` and the strategy
+ * `code` ({source, enabled, trusted}) for that dataset; `render()` draws it again (a new
+ * language). */
 export function strategyEditor(root, changed) {
   let info = null;
   let dataset = "";
   let config = null;
+  let code = null;
   /** The ranking the builder applies. */
   let draft = [{ qt_within: 2 * HOUR }, "priority", "fifo"];
   /** Tool groups chosen in the ranking table, by index. */
@@ -91,14 +96,16 @@ export function strategyEditor(root, changed) {
   /** Per tool group: CQT segments it serves (after their entrance step). */
   let segments = [];
   /** Parts drawn again on their own. */
+  let queueSelect;
   let builder;
   let groupTable;
   let stoppingTable;
 
-  function show(newInfo, newDataset, newConfig) {
+  function show(newInfo, newDataset, newConfig, newCode) {
     info = newInfo;
     dataset = newDataset;
     config = newConfig;
+    code = newCode;
     checked.clear();
     segments = info.tool_groups.map(() => 0);
     for (const segment of info.segments) {
@@ -116,6 +123,7 @@ export function strategyEditor(root, changed) {
       stoppingCard(),
       engineeringCard(),
       superHotCard(),
+      codeCard(code, { changed: edit, ranksByCode, useRule: useCodeRule }),
     );
   }
 
@@ -127,7 +135,8 @@ export function strategyEditor(root, changed) {
 
   function queueTimeCard() {
     const select = el("select", { "aria-label": t("strategy.queueTime.label") });
-    for (const rule of ["none", "qtcr", "qts"]) {
+    queueSelect = select;
+    for (const rule of ["none", "qtcr", "qts", "code"]) {
       select.append(new Option(t(`strategy.queueTime.${rule}`), rule, false, rule === queueTimeRule()));
     }
     select.addEventListener("change", () => {
@@ -140,6 +149,22 @@ export function strategyEditor(root, changed) {
 
   function queueTimeRule() {
     return config.queue_time ?? "none";
+  }
+
+  /** Lots rank by the code's priority somewhere: by the rule or by a ranking. */
+  function ranksByCode() {
+    return (
+      queueTimeRule() === "code" ||
+      Object.values(config.ranking).some((criteria) => criteria.includes("code"))
+    );
+  }
+
+  /** The code's priority as the queue-time rule. */
+  function useCodeRule() {
+    config.queue_time = "code";
+    queueSelect.value = "code";
+    edit();
+    drawGroups();
   }
 
   // ---- ranking per tool group ----

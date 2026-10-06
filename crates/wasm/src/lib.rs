@@ -1,6 +1,9 @@
 //! JavaScript API of the SMT2020 simulator: the `smt2020` crate's dataset, simulation and
 //! summaries. Configurations, progress, states and results cross as plain objects of the crate's
-//! serialized schema (times in ms). A run blocks its thread: pages run simulations in Web Workers.
+//! serialized schema (times in ms); strategy code is an object of JavaScript functions (`code`).
+//! A run blocks its thread: pages run simulations in Web Workers.
+
+mod code;
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -39,21 +42,28 @@ pub struct Simulation(smt2020::Simulation);
 #[wasm_bindgen]
 impl Simulation {
     /// The simulation of `config` on `dataset` at time 0, recording what `recording` (optional)
-    /// asks.
+    /// asks, with the strategy `code` (optional): an object with any of the functions
+    /// `priority(lot, now)`, `admit(lot, segment, now)` and `startBatch(batch, now)`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         dataset: &Dataset,
         config: JsValue,
         recording: JsValue,
+        code: JsValue,
     ) -> Result<Simulation, JsValue> {
         let recording = if recording.is_undefined() || recording.is_null() {
             Recording::default()
         } else {
             json_of(recording)?
         };
-        smt2020::Simulation::with_recording(Arc::clone(&dataset.0), json_of(config)?, recording)
-            .map(Simulation)
-            .map_err(error)
+        let config = json_of(config)?;
+        let data = Arc::clone(&dataset.0);
+        match code::code_of(&dataset.0, &code)? {
+            Some(code) => smt2020::Simulation::with_code(data, config, recording, code),
+            None => smt2020::Simulation::with_recording(data, config, recording),
+        }
+        .map(Simulation)
+        .map_err(error)
     }
 
     pub fn config(&self) -> Result<JsValue, JsValue> {
@@ -76,7 +86,7 @@ impl Simulation {
         to_js(&self.0.flow_factors())
     }
 
-    /// Starts over at time 0 with `config`, or with the same configuration.
+    /// Starts over at time 0 with `config`, or with the same configuration, and the same code.
     pub fn reset(&mut self, config: JsValue) -> Result<(), JsValue> {
         let config = if config.is_undefined() || config.is_null() {
             self.0.config().clone()

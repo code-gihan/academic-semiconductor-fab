@@ -6,12 +6,13 @@ use std::sync::Arc;
 
 use des_core::{DAY, Model, Scheduler, Time};
 
+use super::code::{Code, CqtView, GroupCount, Hooks, LotView};
 use super::dispatch::Key;
 use super::plan::{Plan, releases_before};
 use super::record::{Entry, EventKind, Recorder, Recording, Records};
 use super::routes::Routes;
 use super::stats::{CqtReport, Days, LotKind, PeriodReport, Results, Stats, Visit};
-use super::strategy::{Stopping, Strategy};
+use super::strategy::{SegmentCounts, Strategy};
 use super::tool::{STATES, Tool, ToolState, Work};
 use super::{Config, DRAIN_LIMIT, Error};
 use crate::data::{
@@ -47,8 +48,9 @@ pub(super) enum Event {
         pm: usize,
     },
     PmDone(ToolId),
-    /// A batch held below its minimum size may start now ([`Config::batch_start_within`]).
-    BatchWake(ToolGroupId),
+    /// The group dispatches again: a batch below its minimum size or a lot held by strategy code
+    /// may go now ([`Config::batch_start_within`], [`Code`]).
+    Wake(ToolGroupId),
     /// End of the reporting period with this index.
     PeriodEnd(usize),
     /// [`DRAIN_LIMIT`] after the horizon: the run stops unfinished.
@@ -139,9 +141,11 @@ pub(super) struct Waiting {
     pub batch: Option<usize>,
     /// Queue-time inputs of a lot in a CQT segment.
     pub cqt: Option<WaitingCqt>,
-    /// The lot enters a CQT segment here, so stopping limits apply.
+    /// The strategy code's priority, at a group that ranks by it (0 elsewhere).
+    pub code: f64,
+    /// The lot enters a CQT segment here, so stopping limits and admission code apply.
     pub entering: bool,
-    /// Held by stopping, as of the group's current dispatch.
+    /// Held by stopping or by strategy code, as of the group's current dispatch.
     pub held: bool,
 }
 
@@ -178,10 +182,14 @@ pub(super) struct Group {
     pub reservation: Option<Reservation>,
     /// CoT: engineering lots still to start in the current campaign.
     pub campaign: u32,
-    /// Earliest start of a batch held by the current dispatch for its queue-time slack alone.
-    pub batch_due: Option<Time>,
-    /// Earliest pending [`Event::BatchWake`].
+    /// Earliest time a batch or lot held by the current dispatch may go: by queue-time slack, or
+    /// as strategy code asked.
+    pub due: Option<Time>,
+    /// Earliest pending [`Event::Wake`].
     pub wake: Option<Time>,
+    /// Tool groups whose counts the lots held by admission code wait on, as of the group's
+    /// current dispatch.
+    pub held_on: Vec<ToolGroupId>,
     /// Lots queued, integrated over time since the start, up to `queue_since` (records).
     pub queue_area: f64,
     pub queue_since: Time,
@@ -234,8 +242,19 @@ pub(super) struct Fab {
     /// Releases continue until the horizon.
     releasing: bool,
     finished: Option<Time>,
-    /// Groups with lots held by stopping, dispatched again when a stopping limit is released.
+    /// Constrained lots per tool group, with stopping or admission code.
+    pub counts: Option<SegmentCounts>,
+    /// Groups with lots held by stopping or admission code, dispatched again when a stopping
+    /// limit is released or, for the code, when a count it waits on goes down.
     pub stopped: Vec<ToolGroupId>,
+    /// Groups whose counts went down in the current event.
+    fewer: Vec<ToolGroupId>,
+    /// Strategy code (configured run only), the hooks it defines and its first error.
+    pub code: Option<Box<dyn Code>>,
+    pub hooks: Hooks,
+    pub code_failure: Option<String>,
+    /// Counts of a segment's tool groups, for admission code.
+    pub group_counts: Vec<GroupCount>,
     /// Scratch buffers of dispatching; candidates index the group queue.
     pub selected: Vec<LotId>,
     pub candidates: Vec<(Key, usize)>,
@@ -245,12 +264,14 @@ pub(super) struct Fab {
 }
 
 impl Fab {
-    /// The fab of `config` at time 0 with QTS `flow_factors`, recording what `recording` asks.
+    /// The fab of `config` at time 0 with QTS `flow_factors`, recording what `recording` asks,
+    /// with the strategy `code`, which it takes unless this fails.
     pub(super) fn new(
         data: Arc<Dataset>,
         config: &Config,
         flow_factors: Option<&[Vec<Option<f64>>]>,
         recording: &Recording,
+        code: &mut Option<Box<dyn Code>>,
     ) -> Result<Self, Error> {
         if config.horizon <= 0 {
             return Err(Error("the horizon must be positive".into()));
@@ -326,6 +347,9 @@ impl Fab {
             }
         }
 
+        let hooks = code.as_ref().map_or(Hooks::default(), |code| code.hooks());
+        let counts = (strategy.stopping.is_some() || hooks.admit)
+            .then(|| SegmentCounts::new(data.tool_groups.len()));
         Ok(Self {
             stats: Stats::new(&data, &routes),
             data,
@@ -354,7 +378,13 @@ impl Fab {
             wip: 0,
             releasing: true,
             finished: None,
+            counts,
             stopped: Vec::new(),
+            fewer: Vec::new(),
+            code: code.take(),
+            hooks,
+            code_failure: None,
+            group_counts: Vec::new(),
             selected: Vec::new(),
             candidates: Vec::new(),
             order: Vec::new(),
@@ -376,6 +406,49 @@ impl Fab {
     /// Every completion of each CQT segment so far, in dataset order.
     pub(super) fn segment_totals(&self) -> &[CqtReport] {
         &self.stats.segment_totals
+    }
+
+    /// The first error of the strategy code, which stops the run.
+    pub(super) fn code_failure(&self) -> Option<&str> {
+        self.code_failure.as_deref()
+    }
+
+    /// Records the first error of the strategy code; the event ends without further calls, then
+    /// the run stops.
+    pub(super) fn record_failure(failure: &mut Option<String>, message: String) {
+        failure.get_or_insert(message);
+    }
+
+    /// `waiting` as strategy code sees it at `now`.
+    pub(super) fn lot_view(&self, waiting: &Waiting, now: Time) -> LotView {
+        let lot = &self.lots[waiting.lot];
+        LotView {
+            id: waiting.serial,
+            part: lot.part,
+            kind: waiting.kind,
+            priority: waiting.priority,
+            wafers: waiting.wafers,
+            release: lot.release,
+            due: waiting.due,
+            route: waiting.route,
+            step: waiting.step,
+            tool_group: self.data.routes[waiting.route].steps[waiting.step].tool_group,
+            remaining: waiting.remaining,
+            step_time: waiting.step_time,
+            cqt: lot
+                .segment
+                .as_ref()
+                .zip(waiting.cqt)
+                .map(|(segment, cqt)| CqtView {
+                    segment: segment.id,
+                    limit: segment.limit,
+                    entered: segment.entered,
+                    deadline: cqt.deadline,
+                    exit: segment.exit,
+                    before_exit: cqt.before_exit,
+                    slack: cqt.slack(now),
+                }),
+        }
     }
 
     /// Records the event `entry` describes now, if recording events. The entry is made only
@@ -594,7 +667,22 @@ impl Fab {
             tool_group: Some(group),
             step: Some(fab.lots[id].step),
         });
-        let waiting = self.waiting(id, now);
+        let mut waiting = self.waiting(id, now);
+        if self.strategy.code_ranked[group] && self.code_failure.is_none() {
+            let lot = self.lot_view(&waiting, now);
+            let code = self.code.as_deref_mut().expect("code with priority");
+            waiting.code = match code.priority(&lot, now) {
+                Ok(value) if !value.is_nan() => value,
+                Ok(_) => {
+                    Self::record_failure(&mut self.code_failure, "priority returned NaN".into());
+                    0.0
+                }
+                Err(message) => {
+                    Self::record_failure(&mut self.code_failure, format!("priority: {message}"));
+                    0.0
+                }
+            };
+        }
         self.groups[group].integrate_queue(now);
         self.groups[group].queue.push(waiting);
         if let Some(reservation) = &self.groups[group].reservation
@@ -647,8 +735,9 @@ impl Fab {
                 .map(|&(_, tool)| tool),
             batch: self.routes.batch_key[lot.part][lot.step],
             cqt,
+            code: 0.0,
             // A lot leaving its previous segment here is exempt.
-            entering: self.strategy.stopping.is_some()
+            entering: self.counts.is_some()
                 && step.cqt.is_some()
                 && lot
                     .segment
@@ -1121,13 +1210,13 @@ impl Fab {
         }
     }
 
-    // ---- CQT segment counts for stopping ----
+    // ---- CQT segment counts for stopping and admission code ----
 
-    /// Adds (`delta` = 1) or removes (−1) a constrained lot's contribution to the stopping counts:
+    /// Adds (`delta` = 1) or removes (−1) a constrained lot's contribution to the segment counts:
     /// in front of the group it is queued or processing at, upstream of every other group it still
     /// reaches in its segment (a moving lot also of the group it moves to); once per group.
     fn count_segment(&mut self, id: LotId, delta: i64) {
-        let Some(stopping) = &mut self.strategy.stopping else {
+        let Some(counts) = &mut self.counts else {
             return;
         };
         let lot = &self.lots[id];
@@ -1137,7 +1226,7 @@ impl Fab {
         let steps = &self.data.routes[lot.route].steps;
         let at = (lot.state != LotState::Moving).then(|| steps[lot.step].tool_group);
         if let Some(group) = at {
-            stopping.count(group, true, delta);
+            counts.count(group, true, delta);
         }
         let ahead = &steps[lot.step..=segment.exit];
         for (index, step) in ahead.iter().enumerate() {
@@ -1147,7 +1236,7 @@ impl Fab {
                     .iter()
                     .all(|earlier| earlier.tool_group != group)
             {
-                stopping.count(group, false, delta);
+                counts.count(group, false, delta);
             }
         }
     }
@@ -1304,7 +1393,7 @@ impl Model for Fab {
             Event::Repair { tool, breakdown } => self.repair(tool, breakdown, sched),
             Event::PmDue { tool, pm } => self.pm_due(tool, pm, sched),
             Event::PmDone(tool) => self.pm_done(tool, sched),
-            Event::BatchWake(group) => {
+            Event::Wake(group) => {
                 // An earlier wake may have replaced this one; dispatching again changes nothing.
                 if self.groups[group].wake == Some(sched.now()) {
                     self.groups[group].wake = None;
@@ -1315,16 +1404,29 @@ impl Model for Fab {
             // A finished run stops before its deadline.
             Event::Deadline => sched.stop(),
         }
-        // A stopping limit released by the event lets the groups holding lots dispatch again.
-        if self
-            .strategy
-            .stopping
-            .as_mut()
-            .is_some_and(Stopping::released)
-        {
-            for group in mem::take(&mut self.stopped) {
-                self.dispatch(group, None, sched);
+        // Counts that went down in the event release held lots: all of them when a stopping limit
+        // no longer holds, those of admission code waiting on these groups otherwise.
+        if let Some(counts) = &mut self.counts {
+            let mut fewer = mem::take(&mut self.fewer);
+            fewer.clear();
+            let released = counts.settle(self.strategy.stopping.as_ref(), &mut fewer);
+            if released || (self.hooks.admit && !fewer.is_empty()) {
+                // In dataset order, whatever order the groups began holding lots in.
+                let mut stopped = mem::take(&mut self.stopped);
+                stopped.sort_unstable();
+                for group in stopped {
+                    let waits = || self.groups[group].held_on.iter().any(|g| fewer.contains(g));
+                    if released || waits() {
+                        self.dispatch(group, None, sched);
+                    } else if !self.stopped.contains(&group) {
+                        self.stopped.push(group);
+                    }
+                }
             }
+            self.fewer = fewer;
+        }
+        if self.code_failure.is_some() {
+            sched.stop();
         }
     }
 }

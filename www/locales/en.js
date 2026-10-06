@@ -205,6 +205,7 @@ export default {
   "strategy.queueTime.none": "None (BASE)",
   "strategy.queueTime.qtcr": "QTCR: queue time critical ratio",
   "strategy.queueTime.qts": "QTS: queue time scheduling",
+  "strategy.queueTime.code": "Code: your priority()",
   "strategy.queueTime.hint":
     "Ranked before FIFO or CR at every tool group without its own ranking below. QTCR serves first the lots whose time left to the limit is short against their remaining work; QTS gives every step a deadline from flow factors measured in a pre-run, so a run takes about twice as long.",
   "strategy.stopping.label": "Hold before CQT segments (stopping)",
@@ -254,6 +255,7 @@ export default {
   "ranking.col.ranking": "Ranking",
   "rule.qtcr": "QTCR",
   "rule.qts": "QTS",
+  "rule.code": "Code priority",
   "tag.batch": "batch",
   "tag.setupRuns": "setup runs",
   "tag.stepper": "stepper",
@@ -268,6 +270,7 @@ export default {
   "criterion.qtcr": "QTCR",
   "criterion.qts": "QTS",
   "criterion.qt_deadline": "Earliest CQT end",
+  "criterion.code": "Code priority",
   "criterion.qt_within": "CQT slack ≤ {hours} h first",
   "criterion.qt_within.prefix": "CQT slack ≤",
   "criterion.qt_within.suffix": "h first",
@@ -285,6 +288,8 @@ export default {
     "[P2] queue time scheduling: the latest start of this step that keeps the limit, from measured flow factors; lots outside CQT segments last.",
   "criterion.qt_deadline.hint":
     "The earliest end of the CQT segment (its start plus the limit); lots outside CQT segments last.",
+  "criterion.code.hint":
+    "The value your strategy code's priority(lot, now) gave the lot when it arrived in the queue, smallest first.",
   "criterion.qt_within.hint":
     "Lots with at most this much CQT slack first, all others alike, so the next criterion decides among them. Slack: the segment's end, less now, less the expected work before its last step starts.",
 
@@ -605,6 +610,9 @@ export default {
   "python.linux": "Linux (x86-64)",
   "python.macos": "macOS (Intel and Apple silicon)",
   "python.quickstart": "Quick start",
+  "python.code": "Strategy code",
+  "python.codeHint":
+    "The page's hooks, with snake_case names: priority(lot, now), admit(lot, segment, now) and start_batch(batch, now); lot.tool_group, lot.cqt.slack.",
   "python.config":
     "A configuration from the Setup view's JSON runs as it is: Python, JavaScript and the page share one simulator and one schema.",
   "python.more": "Every function and option, also for JavaScript and Rust:",
@@ -646,4 +654,29 @@ export default {
   "kind.short.SHL": "Super hot (SHL)",
   "kind.short.ERL": "Eng. regular (ERL)",
   "kind.short.EHL": "Eng. hot (EHL)",
+
+  "code.heading": "Strategy code",
+  "code.short": "Your own rules as JavaScript functions, completed as you type; the same in Python.",
+  "code.hint":
+    "Define any of three functions, which the simulation calls. priority(lot, now) ranks a lot when it arrives in a queue that ranks by code (CQT dispatching: Code, or a ranking with Code): smaller first. admit(lot, segment, now) says whether a lot starts a CQT segment now; false or a time holds it. startBatch(batch, now) says whether a batch below its minimum size starts now; false waits, a time asks again then. Times are in ms, with MINUTE, HOUR and DAY given. The code runs only in this browser's simulation workers.",
+  "code.use": "Use this code in runs",
+  "code.examples": "Examples…",
+  "code.example.leastSlack": "Least slack first (priority)",
+  "code.example.stopping": "Stopping at the steppers (admit)",
+  "code.example.batches": "Start batches on slack (startBatch)",
+  "code.write": "Write code",
+  "code.edit": "Edit in the editor",
+  "code.size": "The editor (about 3 MB) loads once.",
+  "code.loading": "Loading the editor…",
+  "code.failed": "The editor could not be loaded ({message}).",
+  "code.loadError": "a file of the editor is missing",
+  "code.hooks": "Defines {hooks}.",
+  "code.noHooks": "Defines none of priority, admit and startBatch yet.",
+  "code.unranked": "priority ranks lots only where CQT dispatching is Code or a ranking lists Code.",
+  "code.lines": "{lines} lines of code",
+  "code.fromLink":
+    "Strategy code came with a shared link. Read it before running it (Edit shows a scenario's code): it runs in this browser's simulation workers when you start a run.",
+  "code.allow": "I have read it: allow",
+  "code.notAllowed":
+    "The strategy code came with a shared link: read it in the Strategy code card and allow it first.",
 };
