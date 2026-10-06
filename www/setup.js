@@ -1,12 +1,13 @@
 // The Setup view: a dataset, the run settings and a strategy in the core's configuration schema
 // (times in ms), made of the dataset choice, the run settings, the strategy editor and the
 // configuration's JSON; and the scenarios to compare, strategies saved under a name and run
-// together under the same settings and random numbers. Dataset files are fetched once and decoded
-// by the wasm module, for the editor (the dataset's info) and to check a configuration as a run
-// would. Scenarios are kept in the browser and travel in share links.
-import { Dataset, Simulation } from "./pkg/fab_wasm.js";
-import { t } from "./i18n.js";
+// together under the same settings and random numbers. The chosen dataset's info (datasets.js)
+// builds the editor, and the core checks a configuration as a run would. Scenarios are kept in
+// the browser and travel in share links; the demo is the Home view's race.
+import { BUNDLED, datasetName, loadDataset, passes } from "./datasets.js";
+import { Failure, failureText, t } from "./i18n.js";
 import { pulse } from "./motion.js";
+import { RACE } from "./presets.js";
 import { shareLink } from "./share.js";
 import { strategyEditor } from "./strategy.js";
 
@@ -16,27 +17,7 @@ const $ = (id) => document.getElementById(id);
 /** Configuration fields that are run settings, shared by compared scenarios; the others make a
  * strategy. */
 const RUN_KEYS = ["horizon", "warm_up", "seed", "load", "replication"];
-const BUNDLED = ["ds1", "ds2", "ds3", "ds4"];
 const STORAGE_KEY = "smt2020.scenarios";
-/** The demo: three strategies on DS1, short enough for a phone. */
-const DEMO = {
-  dataset: "ds1",
-  settings: { horizon: 120 * DAY, warm_up: 30 * DAY, seed: 1, load: 1, replications: 2 },
-  scenarios: [
-    ["demo.base", { queue_time: "none", ranking: {} }],
-    ["demo.qtcr", { queue_time: "qtcr", ranking: {} }],
-    ["demo.batch", { queue_time: "qtcr", ranking: {}, batch_start_within: 2 * HOUR }],
-  ],
-};
-
-/** A failure shown to the user: a text key and its values. */
-export class Failure extends Error {
-  constructor(key, params) {
-    super(key);
-    this.key = key;
-    this.params = params;
-  }
-}
 
 /**
  * The view; `status(render)` shows a status text, `run(batch)` starts a run of
@@ -47,8 +28,7 @@ export class Failure extends Error {
 export function setupView({ status, run }) {
   const form = $("setup");
   const fields = form.elements;
-  /** Decoded datasets by id: {id, key, name, bytes, dataset, info}. */
-  const loaded = new Map();
+  /** The chosen dataset (datasets.js). */
   let current = null;
   /** Bumped by every dataset choice, so a slower earlier load is dropped. */
   let choice = 0;
@@ -83,8 +63,8 @@ export function setupView({ status, run }) {
   $("scenario-add").addEventListener("click", addScenario);
   $("scenarios-run").addEventListener("click", compareAll);
   $("scenarios-demo").addEventListener("click", () => {
-    const scenarios = DEMO.scenarios.map(([name, strategy]) => ({ name: t(name), strategy }));
-    load({ dataset: DEMO.dataset, settings: DEMO.settings, scenarios }, () => t("scenarios.demoLoaded"));
+    const scenarios = RACE.rules.map((rule) => ({ name: t(`race.rule.${rule.key}`), strategy: rule.strategy }));
+    load({ dataset: RACE.dataset, settings: RACE.settings, scenarios }, () => t("scenarios.demoLoaded"));
   });
   $("scenarios-share").addEventListener("click", share);
 
@@ -118,17 +98,10 @@ export function setupView({ status, run }) {
       $("strategy").replaceChildren(element("p", "hint", t("error.noFile")));
       return;
     }
-    const id = key === "file" ? `file:${file.name}:${file.size}:${file.lastModified}` : key;
     const name = key === "file" ? file.name.replace(/\.bin$/i, "") : key;
     try {
-      let entry = loaded.get(id);
-      if (!entry) {
-        status(() => t("status.loadingDataset", { dataset: datasetName(key, name) }));
-        const bytes = await datasetBytes(key, file);
-        const dataset = new Dataset(new Uint8Array(bytes));
-        entry = { id, key, name, bytes, dataset, info: dataset.info() };
-        loaded.set(id, entry);
-      }
+      status(() => t("status.loadingDataset", { dataset: datasetName(key, name) }));
+      const entry = await loadDataset(key, file);
       if (token !== choice) return;
       current = entry;
       status(() => "");
@@ -193,9 +166,10 @@ export function setupView({ status, run }) {
     jsonStatus(() => t("json.applied"));
   }
 
-  /** Throws the core's objection to `candidate` on the current dataset, if any. */
+  /** Throws the core's objection to `candidate` on the current dataset, if any; returns the
+   * passes its run takes. */
   function check(candidate) {
-    new Simulation(current.dataset, { ...candidate, replication: 0 }).free();
+    return passes(current, candidate);
   }
 
   /** The run of the edited strategy. */
@@ -205,18 +179,19 @@ export function setupView({ status, run }) {
       return;
     }
     readSettings();
+    let count;
     try {
-      check(config);
+      count = check(config);
     } catch (error) {
       status(() => t("status.invalid", { message: error.message }));
       return;
     }
     const snapshot = structuredClone(config);
     const name = datasetName(current.key, current.name);
-    run(batch([{ name, config: snapshot }]));
+    run(batch([{ name, config: snapshot, passes: count }]));
   }
 
-  /** A run of `scenarios` ({name, config}) on the current dataset. */
+  /** A run of `scenarios` ({name, config, passes}) on the current dataset. */
   function batch(list) {
     const replications = Number(fields.replications.value);
     return {
@@ -224,9 +199,10 @@ export function setupView({ status, run }) {
       dataset: { key: current.id, bytes: current.bytes },
       info: current.info,
       replications,
-      scenarios: list.map(({ name, config: each }) => ({
+      scenarios: list.map(({ name, config: each, passes: count }) => ({
         name,
         config: each,
+        passes: count,
         setup: describe(current.key, current.name, each, replications),
       })),
     };
@@ -265,13 +241,14 @@ export function setupView({ status, run }) {
     const list = [];
     for (const scenario of scenarios) {
       const each = { ...structuredClone(scenario.strategy), ...settings };
+      let count;
       try {
-        check(each);
+        count = check(each);
       } catch (error) {
         scenarioStatus(() => t("scenarios.invalid", { name: scenario.name, message: error.message }));
         return;
       }
-      list.push({ name: scenario.name, config: each });
+      list.push({ name: scenario.name, config: each, passes: count });
     }
     scenarioStatus(() => "");
     run(batch(list));
@@ -437,7 +414,7 @@ function strategySummary(strategy) {
 }
 
 /** The scenario as [label key, text()] pairs; texts follow the language. */
-function describe(key, name, config, replications) {
+export function describe(key, name, config, replications) {
   const ranked = Object.keys(config.ranking ?? {}).length;
   const limited = Object.keys(config.stopping?.limits ?? {}).length;
   return [
@@ -484,25 +461,6 @@ function engineeringText(engineering) {
 
 function round(value) {
   return String(Math.round(value * 10) / 10);
-}
-
-export function datasetName(key, name) {
-  return key === "file" ? name : t(`dataset.${key}.name`);
-}
-
-/** Bytes of the chosen dataset: a file served next to the page or a local one. */
-async function datasetBytes(key, file) {
-  if (key === "file") return file.arrayBuffer();
-  const path = `data/${key}.bin`;
-  const response = await fetch(path);
-  if (!response.ok) throw new Failure("error.fetch", { file: path, status: response.status });
-  return response.arrayBuffer();
-}
-
-export function failureText(error) {
-  return error instanceof Failure
-    ? t(error.key, error.params)
-    : t("status.error", { message: error.message });
 }
 
 function element(tag, className, text) {

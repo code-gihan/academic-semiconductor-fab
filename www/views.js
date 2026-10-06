@@ -1,7 +1,7 @@
-// Views of the page, one shown at a time. The location hash names it (#setup, #run, #analysis,
-// #compare, #python), so links, bookmarks and the back button switch views; any other hash is an
-// anchor within the shown view. Reacts to hashchange only.
-const VIEWS = ["setup", "run", "analysis", "compare", "python"];
+// Views of the page, one shown at a time. The location hash names it (#home, #setup, #run,
+// #analysis, #compare, #python), so links, bookmarks and the back button switch views; any other
+// hash is an anchor within the shown view, and none is the Home view. Reacts to hashchange only.
+const VIEWS = ["home", "setup", "run", "analysis", "compare", "python"];
 let shown = null;
 let onShow = () => {};
 
@@ -24,7 +24,7 @@ export function go(view) {
 function show() {
   const hash = location.hash.slice(1);
   if (!VIEWS.includes(hash) && shown) return;
-  const view = VIEWS.includes(hash) ? hash : "setup";
+  const view = VIEWS.includes(hash) ? hash : "home";
   for (const section of document.querySelectorAll("main > .view")) {
     section.hidden = section.dataset.view !== view;
   }

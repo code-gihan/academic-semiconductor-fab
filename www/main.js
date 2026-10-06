@@ -1,20 +1,23 @@
-// SMT2020 simulator page: the Setup view describes scenarios, the worker pool runs their
-// replications (at most navigator.hardwareConcurrency at once) and the wasm module summarizes
-// them for the Analysis view, whose details show what the first scenario's replication 0 recorded
-// and replays of the others, and compares them in the Compare view. Everything reacts to events
-// (input, worker messages, hash changes); nothing polls.
+// SMT2020 simulator page: the Home view races [P2]'s rules, the Setup view describes scenarios,
+// the worker pool runs their replications (at most navigator.hardwareConcurrency at once) and the
+// wasm module summarizes them for the Analysis view, whose details show what the first
+// scenario's replication 0 recorded and replays of the others, and compares them in the Compare
+// view. Everything reacts to events (input, worker messages, hash changes, resizes); nothing
+// polls.
 import init, { csv, daily, summarize } from "./pkg/fab_wasm.js";
 import { loadCharts } from "./charts.js";
 import { renderComparison, showComparison } from "./compare.js";
 import { RECORDING, chooseSegment, renderDetails, showDetails } from "./details.js";
 import { download } from "./files.js";
-import { LANGUAGES, formatDuration, initLanguage, language, setLanguage, t } from "./i18n.js";
-import { reveal } from "./motion.js";
+import { homeView } from "./home.js";
+import { LANGUAGES, failureText, formatDuration, initLanguage, language, setLanguage, t } from "./i18n.js";
+import { reveal, slideTo } from "./motion.js";
 import * as pool from "./pool.js";
 import { lanes, showProgress, startProgress } from "./progress.js";
 import { defaultPeriod, onSegmentChosen, selectedSegment, showResults } from "./results.js";
-import { failureText, setupView } from "./setup.js";
+import { setupView } from "./setup.js";
 import { sharedState } from "./share.js";
+import { hideTip } from "./tooltip.js";
 import { go, initViews } from "./views.js";
 
 const $ = (id) => document.getElementById(id);
@@ -31,11 +34,21 @@ $("language").replaceChildren(
   ),
 );
 const setup = setupView({ status: setStatus, run: start });
+const home = homeView({ start, stop: () => stop(() => t("status.cancelled")) });
+/** The tab indicator has been placed once: later moves slide. */
+let placed = false;
 initViews((view) => {
   // A tooltip of the view left behind would stay.
-  $("tooltip").hidden = true;
-  reveal($(`view-${view}`).querySelectorAll(".panel, .card, .step"));
+  hideTip();
+  placeIndicator();
+  home.shown(view);
+  reveal($(`view-${view}`).querySelectorAll(".panel, .card, .step, .hero > *"));
 });
+// The tabs change size with the window: the indicator follows at once.
+new ResizeObserver(() => {
+  placed = false;
+  placeIndicator();
+}).observe($("tabs"));
 setStatus(() => t("status.loadingWasm"));
 loadWheels();
 // The segment chosen in the overview filters the details.
@@ -43,7 +56,11 @@ onSegmentChosen(chooseSegment);
 
 $("language").addEventListener("change", (event) => {
   setLanguage(event.target.value);
+  // The tabs' words changed width.
+  placed = false;
+  placeIndicator();
   setup.relabel();
+  home.relabel();
   setStatus(statusText);
   showWheels();
   if (active) showProgress(active);
@@ -69,6 +86,7 @@ $("download-csv").addEventListener("click", () => {
 try {
   await init();
   setup.ready();
+  home.ready();
   await openShareLink();
 } catch (error) {
   setStatus(() => t("status.wasmFailed", { message: error.message }));
@@ -85,6 +103,7 @@ async function openShareLink() {
   }
   if (!state) return;
   history.replaceState(null, "", `${location.pathname}${location.search}#setup`);
+  go("setup");
   try {
     setup.load(state, () => t("share.loaded", { count: state.scenarios.length }));
   } catch (error) {
@@ -92,16 +111,27 @@ async function openShareLink() {
   }
 }
 
+/** Slides the tab indicator under the current view's tab, at once the first time. */
+function placeIndicator() {
+  const tab = $("tabs").querySelector('a[aria-current="page"]');
+  if (!tab) return;
+  slideTo($("tab-indicator"), tab, placed);
+  placed = true;
+}
+
 /**
  * Runs `batch` ({name, dataset: {key, bytes}, info, replications, scenarios: [{name, config,
- * setup}]}) on the pool: every replication of every scenario, with the same seeds, so that the
- * scenarios compare pair by pair.
+ * passes, setup}], view?}) on the pool: every replication of every scenario, with the same seeds,
+ * so that the scenarios compare pair by pair. The Run view follows it, unless the batch names the
+ * view that does (the Home view's race); its results go to the Analysis and Compare views.
+ * Returns the run.
  */
 function start(batch) {
   const replications = batch.replications;
   const count = batch.scenarios.length * replications;
   const run = {
     name: batch.name,
+    view: batch.view ?? null,
     dataset: batch.dataset,
     info: batch.info,
     count,
@@ -122,8 +152,14 @@ function start(batch) {
   $("run-empty").hidden = true;
   startProgress(run, (index) => follow(run, index));
   showProgress(run);
-  go("run");
-  run.scenarios.forEach((scenario, index) => {
+  if (!run.view) go("run");
+  // Runs of two passes (QTS measuring its flow factors) take about twice as long: they go to the
+  // workers first, so that the run ends sooner when there are fewer workers than replications.
+  const order = run.scenarios
+    .map((_, index) => index)
+    .sort((a, b) => run.scenarios[b].passes - run.scenarios[a].passes);
+  order.forEach((index) => {
+    const scenario = run.scenarios[index];
     for (let replication = 0; replication < replications; replication++) {
       const lane = run.lanes[index * replications + replication];
       pool.submit({
@@ -165,13 +201,16 @@ function start(batch) {
     }
   });
   setStatus(() => t("status.running"));
+  return run;
 }
 
 /** Shows the run's progress at the next frame, once however many messages came. */
 function redraw(run) {
   run.frame ||= requestAnimationFrame(() => {
     run.frame = 0;
-    if (run === active) showProgress(run);
+    if (run !== active) return;
+    showProgress(run);
+    if (run.view === "home") home.update(run);
   });
 }
 
@@ -218,12 +257,9 @@ function finish(run) {
   $("analysis-body").hidden = false;
   showScenarios();
   showScenario(0, true);
-  if (finished.scenarios.length > 1) {
-    showComparison(finished, true);
-    go("compare");
-  } else {
-    go("analysis");
-  }
+  if (finished.scenarios.length > 1) showComparison(finished, true);
+  if (run.view === "home") home.finish(run, finished);
+  else go(finished.scenarios.length > 1 ? "compare" : "analysis");
 }
 
 /** The scenario choice of the Analysis view, when the run had several. */
@@ -251,18 +287,21 @@ function shownScenario() {
 
 /** Ends the active run, if any, by stopping its jobs, and shows `render()`. */
 function stop(render) {
-  if (active) {
-    pool.cancel(active);
-    cancelAnimationFrame(active.frame);
+  const run = active;
+  if (run) {
+    pool.cancel(run);
+    cancelAnimationFrame(run.frame);
     active = null;
   }
   setRunning(false);
   setStatus(render);
+  if (run) home.stopped(run, render);
 }
 
-/** While running, the setup is locked and the Run tab marked. */
+/** While running, the setup and the race are locked and the Run tab marked. */
 function setRunning(running) {
   setup.lock(running);
+  home.lock(running);
   $("cancel").disabled = !running;
   $("run-badge").hidden = !running;
 }

@@ -74,6 +74,22 @@ export function formatNumber(value, decimals) {
   return format.format(value);
 }
 
+/** A failure shown to the user: a text key and its values. */
+export class Failure extends Error {
+  constructor(key, params) {
+    super(key);
+    this.key = key;
+    this.params = params;
+  }
+}
+
+/** The text of a failure, or of any other error as a failed run. */
+export function failureText(error) {
+  return error instanceof Failure
+    ? t(error.key, error.params)
+    : t("status.error", { message: error.message });
+}
+
 /** `seconds` as m:ss, or h:mm:ss from an hour on. */
 export function formatDuration(seconds) {
   const total = Math.round(seconds);

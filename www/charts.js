@@ -1,7 +1,7 @@
 // Charts of the page, drawn by Apache ECharts (www/vendor, loaded on first use) in the colours of
-// the CSS tokens: horizontal bars with confidence intervals, lines with interval bands, heatmaps
-// and timelines. A chart follows the size of its box and the colour scheme, and its instance goes
-// when its box leaves the page; all by events.
+// the CSS tokens: horizontal bars with confidence intervals, lines with interval bands, lines that
+// grow while a run goes, heatmaps and timelines. A chart follows the size of its box and the
+// colour scheme, and its instance goes when its box leaves the page; all by events.
 import { formatNumber, t } from "./i18n.js";
 
 const dark = matchMedia("(prefers-color-scheme: dark)");
@@ -89,7 +89,8 @@ export function barChart({ rows, parts, max: given, label, onSelect, animate }) 
           name: part.label,
           stack: "bars",
           barMaxWidth: 14,
-          itemStyle: { color: colours.kind(part.kind) },
+          // Stacked parts touch: a hairline of the surface between them.
+          itemStyle: { color: colours.kind(part.kind), borderColor: colours.card, borderWidth: parts.length > 1 ? 1 : 0 },
           data: rows.map((row) => row.values[index]),
         })),
         // The chosen row's band behind its bars.
@@ -207,7 +208,7 @@ export function lineChart({ series, x, y, label, group, animate, height = 240 })
             type: "line",
             name: line.label,
             showSymbol: false,
-            lineStyle: { color: colour, width: 1.5 },
+            lineStyle: { color: colour, width: 2 },
             itemStyle: { color: colour },
             data: line.points.map(([at, value]) => [at, value]),
           },
@@ -221,6 +222,72 @@ export function lineChart({ series, x, y, label, group, animate, height = 240 })
       }),
     animate,
   );
+}
+
+/**
+ * Lines that grow while a run goes: `series` [{label, kind}] over x from 0 to `max`, a band
+ * `shade` {to, label} from 0 (the warm-up), x and y written by `x(value)` and `y(value)`, the y
+ * axis by `tick(value)`. Returns {box, set(points)}: `set` takes a list of [x, y] points per series
+ * and draws them.
+ */
+export function liveLines({ series, max, shade, x, y, tick = y, label, height = 300 }) {
+  let points = series.map(() => []);
+  let instance = null;
+  const box = chart(
+    height,
+    (colours) => ({
+      ...base(colours, label),
+      animation: false,
+      grid: { left: 4, right: 16, top: 34, bottom: 28, containLabel: true },
+      legend: legendOf(colours, series.map((line) => line.label), { top: 0 }),
+      tooltip: {
+        ...tooltipOf(colours),
+        trigger: "axis",
+        axisPointer: { type: "line", lineStyle: { color: colours.muted, width: 1 } },
+        formatter: (items) =>
+          html([x(items[0].value[0]), ...items.map((item) => `${item.seriesName}: ${y(item.value[1])}`)].join("\n")),
+      },
+      xAxis: {
+        type: "value",
+        min: 0,
+        max,
+        // The end (a horizon, rarely a round number) would crowd the last round label.
+        axisLabel: { color: colours.muted, formatter: x, hideOverlap: true, showMaxLabel: false },
+        axisLine: { lineStyle: { color: colours.line } },
+        axisTick: { show: false },
+        splitLine: { show: false },
+      },
+      yAxis: { ...valueAxis(colours), min: 0, axisLabel: { color: colours.muted, formatter: tick } },
+      series: series.map((line, index) => ({
+        type: "line",
+        name: line.label,
+        showSymbol: false,
+        lineStyle: { color: colours.kind(line.kind), width: 2, cap: "round", join: "round" },
+        itemStyle: { color: colours.kind(line.kind) },
+        emphasis: { focus: "series" },
+        data: points[index],
+        markArea:
+          index === 0 && shade
+            ? {
+                silent: true,
+                itemStyle: { color: colours.track, opacity: 0.55 },
+                label: { color: colours.muted, position: "insideTop", formatter: shade.label },
+                data: [[{ xAxis: 0 }, { xAxis: shade.to }]],
+              }
+            : undefined,
+      })),
+    }),
+    (drawn) => {
+      instance = drawn;
+    },
+  );
+  return {
+    box,
+    set(next) {
+      points = next;
+      instance?.setOption({ series: points.map((data) => ({ data })) });
+    },
+  };
 }
 
 /**
@@ -415,6 +482,7 @@ function palette() {
     line: token("line"),
     track: token("track"),
     card: token("card"),
+    raised: token("raised"),
     accent: token("accent"),
     accentSoft: token("accent-soft"),
     kind: (name) => token(name) || token("process"),
@@ -432,11 +500,12 @@ function base(colours, label) {
 function tooltipOf(colours) {
   return {
     confine: true,
-    backgroundColor: colours.text,
-    borderWidth: 0,
-    padding: [6, 9],
-    textStyle: { color: colours.card, fontSize: 12 },
-    extraCssText: "box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); max-width: 22rem; white-space: normal;",
+    backgroundColor: colours.raised,
+    borderColor: colours.line,
+    borderWidth: 1,
+    padding: [7, 10],
+    textStyle: { color: colours.text, fontSize: 12 },
+    extraCssText: "border-radius: 10px; box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.45); max-width: 22rem; white-space: normal;",
   };
 }
 

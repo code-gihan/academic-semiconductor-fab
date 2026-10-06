@@ -6,6 +6,7 @@ import { compare, comparisonCsv } from "./pkg/fab_wasm.js";
 import { barChart } from "./charts.js";
 import { download } from "./files.js";
 import { formatNumber, t } from "./i18n.js";
+import { lookup, verdict } from "./kpis.js";
 import { DAY, segmentKey, segmentLabel, segmentTitle } from "./labels.js";
 import { reveal } from "./motion.js";
 
@@ -74,12 +75,10 @@ function render(animated) {
   const { finished, period } = shown;
   const scenarios = finished.scenarios;
   const baseline = scenarios[shown.baseline];
-  const lookup = (rows) => {
-    const map = new Map(rows.filter((row) => row.period === period).map((row) => [key(row), row]));
-    return (spec) => map.get(key(spec));
-  };
-  const summaries = scenarios.map((scenario) => lookup(scenario.summary));
-  const differences = scenarios.map((_, index) => (index === shown.baseline ? null : lookup(comparisonOf(index))));
+  const summaries = scenarios.map((scenario) => lookup(scenario.summary, period));
+  const differences = scenarios.map((_, index) =>
+    index === shown.baseline ? null : lookup(comparisonOf(index), period),
+  );
 
   // Toolbar: the baseline, the period, the download.
   const baselineChoice = select(
@@ -257,11 +256,9 @@ function differenceText(row, spec) {
   const sign = row.difference > 0 ? "+" : row.difference < 0 ? "−" : "±";
   const interval = row.ci95 == null ? "" : ` ± ${formatNumber(row.ci95, spec.decimals)}`;
   const text = `Δ ${sign}${formatNumber(Math.abs(row.difference), spec.decimals)}${interval}`;
-  const significant = row.ci95 != null && Math.abs(row.difference) > row.ci95;
-  const direction = Math.sign(row.difference) * spec.better;
-  const verdict = !significant ? "" : direction > 0 ? "better" : "worse";
-  const span = el("span", { class: `difference ${verdict}` }, text);
-  span.title = t(significant ? `compare.${verdict}` : "compare.chance");
+  const judged = verdict(row, spec.better);
+  const span = el("span", { class: `difference ${judged}` }, text);
+  span.title = t(`verdict.${judged}.tip`);
   return span;
 }
 
@@ -277,10 +274,6 @@ function downloadCsv() {
     for (const row of rows) lines.push(prefix + row);
   });
   download(`${shown.finished.name}-comparison.csv`, `${lines.join("\n")}\n`, "text/csv");
-}
-
-function key(row) {
-  return `${row.scope}|${row.item ?? ""}|${row.kind ?? null}|${row.measure}`;
 }
 
 /** A CSV field, quoted if it holds a comma, quote or line break. */

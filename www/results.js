@@ -1,11 +1,12 @@
-// The overview of a finished run: its setup, the headline measures, charts and tables of a report
-// period (CQT violations per segment, where the waits of one segment go, the days), and the
-// replications' digests and run times. Values are replication means ± the half-width of their
-// 95% confidence interval.
+// The overview of a finished run: its setup, the main and detail measures (kpis.js), charts and
+// tables of a report period (CQT violations per segment, where the waits of one segment go, the
+// days), and the replications' digests and run times. Values are replication means ± the
+// half-width of their 95% confidence interval.
 import { barChart, lineChart } from "./charts.js";
 import { formatNumber, t } from "./i18n.js";
+import { DETAIL, MAIN, rowKey, stat, tile } from "./kpis.js";
 import { DAY, segmentKey, segmentLabel, segmentTitle, stepLabel } from "./labels.js";
-import { countUp, reveal } from "./motion.js";
+import { reveal } from "./motion.js";
 
 const KINDS = ["PRL", "PHL", "SHL", "ERL", "EHL"];
 /** Tool states as stacked in the tool group chart: busy, then outages, then idle. */
@@ -15,7 +16,7 @@ const TOP = 15;
 /** Parts of a CQT wait and their colours. */
 const PARTS = [
   ["queue", "warning"],
-  ["transport", "load"],
+  ["transport", "transport"],
   ["process", "process"],
 ];
 /** Day-by-day measures offered: [scope, measure, decimals]. */
@@ -24,17 +25,6 @@ const DAILY = [
   ["fab", "wip", 0],
   ["fab", "completed", 0],
   ["cqt", "completed", 0],
-];
-
-/** Headline measures, each shown when the period has it. */
-const KPIS = [
-  { label: "kpi.started", scope: "fab", measure: "started", decimals: 0 },
-  { label: "kpi.completed", scope: "fab", measure: "completed", decimals: 0 },
-  { label: "kpi.wip", scope: "fab", measure: "wip", decimals: 0 },
-  { label: "kpi.prlCt", scope: "kind", kind: "PRL", measure: "ct_mean_d", decimals: 2 },
-  { label: "kpi.prlOnTime", scope: "kind", kind: "PRL", measure: "on_time_pct", decimals: 1 },
-  { label: "kpi.erlCt", scope: "kind", kind: "ERL", measure: "ct_mean_d", decimals: 2 },
-  { label: "kpi.cqt", scope: "cqt", item: "total", measure: "vl_pct", decimals: 2 },
 ];
 
 /** Table columns: measure, label key, decimals, label values. */
@@ -132,8 +122,9 @@ export function showResults(run, period, animated) {
   shown = { run, period };
   animate = animated;
   const rows = run.summary.filter((row) => row.period === period);
-  const at = new Map(rows.map((row) => [key(row.scope, row.item, row.kind, row.measure), row]));
-  const value = (scope, item, kind, measure) => at.get(key(scope, item, kind, measure));
+  const at = new Map(rows.map((row) => [rowKey(row), row]));
+  const value = (scope, item, kind, measure) => at.get(rowKey({ scope, item, kind, measure }));
+  const measured = (spec) => value(spec.scope, spec.item, spec.kind, spec.measure);
 
   $("run-setup").replaceChildren(
     ...run.setup.map(([label, text]) => {
@@ -153,9 +144,15 @@ export function showResults(run, period, animated) {
     }),
   );
   $("kpis").replaceChildren(
-    ...KPIS.flatMap((spec) => {
-      const summary = value(spec.scope, spec.item ?? "", spec.kind ?? null, spec.measure);
-      return summary ? [kpi(t(spec.label), summary, spec.decimals, animated)] : [];
+    ...MAIN.flatMap((spec, index) => {
+      const summary = measured(spec);
+      return summary ? [tile(spec, summary, { animated, delay: index * 80 })] : [];
+    }),
+  );
+  $("kpi-details").replaceChildren(
+    ...DETAIL.flatMap((spec) => {
+      const summary = measured(spec);
+      return summary ? [stat(spec, summary)] : [];
     }),
   );
   // Lot outcomes side by side, the CQT segments and where their waits go, the days, then the
@@ -362,26 +359,6 @@ function dailyChart(run) {
   result.firstElementChild.append(choice);
   result.classList.add("wide");
   return result;
-}
-
-function key(scope, item, kind, measure) {
-  return `${scope}|${item}|${kind}|${measure}`;
-}
-
-function kpi(label, summary, decimals, animated) {
-  const card = element("div", "", "kpi");
-  const value = element("div", "", "value");
-  const format = (number) => formatNumber(number, decimals);
-  if (animated) {
-    countUp(value, summary.mean, format);
-  } else {
-    value.textContent = format(summary.mean);
-  }
-  card.append(element("div", label, "hint"), value);
-  if (summary.ci95 != null) {
-    card.append(element("div", `± ${formatNumber(summary.ci95, decimals)}`, "hint"));
-  }
-  return card;
 }
 
 /** Average cycle time per lot kind. */

@@ -21,7 +21,7 @@ const SORTS = ["excess", "early", "late"];
 const TEXT_COLUMNS = new Set(["lot", "kind", "part", "segment", "event", "step", "tool", "toolGroup"]);
 /** Parts of a lot's visit to a step and their colours. */
 const PARTS = [
-  ["transport", "load"],
+  ["transport", "transport"],
   ["queue", "warning"],
   ["process", "process"],
 ];
