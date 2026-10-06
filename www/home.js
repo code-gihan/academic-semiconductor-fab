@@ -11,7 +11,7 @@ import { loadDataset, passes } from "./datasets.js";
 import { explain } from "./explainer.js";
 import { failureText, formatDuration, formatNumber, t } from "./i18n.js";
 import { MAIN, lookup, tile, valueText, verdict } from "./kpis.js";
-import { countUp, glide, popIn, reveal, riseWords, still } from "./motion.js";
+import { glide, reveal, still } from "./motion.js";
 import { laneFraction } from "./progress.js";
 import { RACE } from "./presets.js";
 import { defaultPeriod } from "./results.js";
@@ -39,7 +39,6 @@ export function homeView({ start, stop }) {
   let ready = false;
   let locked = false;
   let visible = false;
-  let introduced = false;
   let statusText = () => "";
 
   button.addEventListener("click", begin);
@@ -157,9 +156,11 @@ export function homeView({ start, stop }) {
     track.firstElementChild.style.transform = `scaleX(${fraction})`;
     track.setAttribute("aria-valuenow", String(Math.round(100 * fraction)));
     item.querySelector(".race-phase").textContent = phase(lanes);
+    // Until its runs report, the paper's value stays.
     const share = soFar(lanes);
-    item.dataset.value = share ? "live" : "none";
-    if (share) glide(item.querySelector(".race-number"), share.value, (value) => formatNumber(value, 1));
+    if (!share) return;
+    item.dataset.value = "live";
+    glide(item.querySelector(".race-number"), share.value, (value) => formatNumber(value, 1));
     item.querySelector(".race-caption").textContent = t("race.soFar");
   }
 
@@ -292,10 +293,7 @@ export function homeView({ start, stop }) {
       values: RACE.rules.map((rule, index) => `${names[index]} ${valueText(CQT, rule.paper)}`).join(" · "),
     });
     $("race-result").hidden = false;
-    if (animated) {
-      reveal([$("race-headline"), $("race-subline")]);
-      popIn(tiles);
-    }
+    if (animated) reveal([$("race-headline"), $("race-subline"), ...tiles]);
   }
 
   /** The rules' lanes: who they are, the paper's result, and their state in the latest race. */
@@ -312,18 +310,20 @@ export function homeView({ start, stop }) {
         track.setAttribute("aria-valuemin", "0");
         track.setAttribute("aria-valuemax", "100");
         track.setAttribute("aria-label", name);
-        const value = el("div", "race-value", el("span", "race-number", "–"), el("span", "race-unit", "%"));
-        const cited = t("race.paperValue", { value: valueText(CQT, rule.paper) });
+        const number = el("span", "race-number", formatNumber(rule.paper, CQT.decimals));
+        const value = el("div", "race-value", number, el("span", "race-unit", "%"));
+        const caption = el("span", "race-caption", t("race.paper.caption"));
+        const cited = el("span", "race-cited", t("race.paperValue", { value: valueText(CQT, rule.paper) }));
         const item = el(
           "li",
           "race-lane",
           el("div", "race-who", swatch, label),
           el("div", "race-run", track, el("span", "race-phase", t("race.ready"))),
-          el("div", "race-score", value, el("span", "race-caption", t("race.cqt")), el("span", "race-cited", cited)),
+          el("div", "race-score", value, caption, cited),
         );
         item.style.setProperty("--rule", `var(--${KINDS[index]})`);
         item.dataset.state = "idle";
-        item.dataset.value = "none";
+        item.dataset.value = "paper";
         return item;
       }),
     );
@@ -385,13 +385,6 @@ export function homeView({ start, stop }) {
     shown(view) {
       visible = view === "home";
       play();
-      if (visible && !introduced) {
-        introduced = true;
-        riseWords($("hero-title"), 120);
-        for (const number of document.querySelectorAll(".facts [data-count]")) {
-          countUp(number, Number(number.dataset.count), (value) => formatNumber(value, 0), 500);
-        }
-      }
     },
   };
 }

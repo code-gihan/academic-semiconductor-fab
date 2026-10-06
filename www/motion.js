@@ -1,7 +1,7 @@
 // Motion of the page (anime.js): entrances, counts, the sliding tab indicator, live numbers that
-// glide to their new value, pops and pulses. None when the user prefers reduced motion; the
+// glide to their new value, and pulses. None when the user prefers reduced motion; the
 // page shows the same end state either way.
-import { animate, remove, spring, splitText, stagger, utils } from "./vendor/anime.esm.min.js";
+import { animate, remove, spring, stagger, utils } from "./vendor/anime.esm.min.js";
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 /** Numbers shown by elements: {value (shown now), format}; their animations target this. */
@@ -13,34 +13,15 @@ export function still() {
 }
 
 /** Fades `targets` in from below, one every `step` ms. */
-export function reveal(targets, step = 55) {
+export function reveal(targets, step = 40) {
   if (reduced.matches) return;
   remove(targets);
   animate(targets, {
     opacity: [0, 1],
-    y: [14, 0],
-    duration: 640,
+    y: [6, 0],
+    duration: 420,
     delay: stagger(step),
-    ease: "outExpo",
-  });
-}
-
-/** Raises the words of `element` one after another, after `delay` ms; its text is whole again
- * afterwards. */
-export function riseWords(element, delay = 0) {
-  if (reduced.matches) return;
-  const split = splitText(element, { words: { wrap: "clip" } });
-  animate(split.words, {
-    y: ["105%", "0%"],
-    duration: 900,
-    delay: stagger(55, { start: delay }),
-    ease: "outExpo",
-    onComplete: () => {
-      // A new language may have replaced the split text meanwhile: it stays.
-      const replaced = split.words[0]?.isConnected ? null : element.textContent;
-      split.revert();
-      if (replaced !== null) element.textContent = replaced;
-    },
+    ease: "outQuad",
   });
 }
 
@@ -55,9 +36,9 @@ export function countUp(element, value, format, delay = 0) {
   show(element, number, 0);
   animate(number, {
     value,
-    duration: 1100,
+    duration: 700,
     delay,
-    ease: "outExpo",
+    ease: "outQuart",
     onUpdate: () => show(element, number, number.value),
   });
 }
@@ -103,20 +84,7 @@ export function slideTo(indicator, tab, animated) {
     utils.set(indicator, place);
     return;
   }
-  animate(indicator, { ...place, ease: spring({ bounce: 0.25, duration: 420 }) });
-}
-
-/** Pops `targets` in, one after another: a fade, a little rise and scale. */
-export function popIn(targets, step = 70) {
-  if (reduced.matches) return;
-  remove(targets);
-  animate(targets, {
-    opacity: [0, 1],
-    scale: [0.94, 1],
-    y: [10, 0],
-    delay: stagger(step),
-    ease: spring({ bounce: 0.3, duration: 520 }),
-  });
+  animate(indicator, { ...place, ease: spring({ bounce: 0, duration: 300 }) });
 }
 
 /** A short pulse that marks a choice. */

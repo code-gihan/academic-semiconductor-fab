@@ -12,8 +12,8 @@ https://code-gihan.github.io/academic-semiconductor-fab/
 
 영어 기본, 한국어 전환(선택은 브라우저에 저장). 화면은 상단 탭의 보기 6개(홈·설정·실행·분석·비교·Python, 주소 `#home`(기본)·`#setup`·`#run`·`#analysis`·`#compare`·`#python`)로 나뉜다.
 
-0. 홈: 질문형 제목, 큐타임 한도 애니메이션(A 공정 종료 → B 대기열 → B 시작, 한도 안·초과 반복), 데이터셋 2 규모.
-   - 레이스: [P2] 실험 조건(DS2, 730 d, 데이터셋 웜업 1년, seed 1)으로 BASE·QTCR·QTS를 각 3회, 같은 난수로 동시 실행. 규칙별 진행(모의 일자, QTS 사전 실행), 지금까지의 CQT 위반율(최종 pass 복제 합산, 완료 구간 1,000개부터), 일자별 누적 위반율 선(웜업 구간 음영)과 [P2] Table 5 값.
+0. 홈: 질문형 제목, 큐타임 한도 그림(A 공정 종료 → B 대기열 → B 시작, 제때·한도 초과 반복), 데이터셋 2 규모.
+   - 레이스: [P2] 실험 조건(DS2, 730 d, 데이터셋 웜업 1년, seed 1)으로 BASE·QTCR·QTS를 각 3회, 같은 난수로 동시 실행. 규칙별 진행(모의 일자, QTS 사전 실행), 지금까지의 CQT 위반율(최종 pass 복제 합산, 완료 구간 1,000개부터), 일자별 누적 위반율 선(웜업 구간 음영)과 [P2] Table 5 값(실행 전에는 레인에 논문 값을 표시).
    - 결과(마지막 보고 기간 = 2년차): CQT 위반이 가장 적은 규칙(규칙 선택 가능)의 BASE 대비 감소율, 주요 KPI 타일 4개(CQT %VL, PRL ACT, TH, PRL %ONTIME): 평균, 기준 대비 짝 차이와 판정(95% 구간이 0을 제외하면 개선·악화, 포함하면 뚜렷한 차이 없음, 1회면 판정 없음), 지표 설명 툴팁. 결과는 분석·비교 보기에도 들어간다.
 
 1. 설정: 왼쪽에 데이터셋(DS1–4 동봉, 또는 `smt2020 convert`로 만든 로컬 `.bin`)과 실행 설정(종료 시각, 웜업(비우면 데이터셋 기간), 복제 수, seed, 부하 계수), 오른쪽에 운영 전략.
@@ -467,7 +467,7 @@ crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd
 crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert, run, validate
 crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, summarize, daily, csv, compare, comparisonCsv, digest. tests/(Node API 테스트)
 crates/python/    Python 포장, PyO3 cdylib(패키지 smt2020-python, maturin wheel smt2020): 같은 API + load_dataset(DS1–4 동봉), smt2020.pyi(타입), tests/(unittest)
-www/              index.html, style.css, favicon.svg, main.js(실행 조율·wheel 목록), views.js(보기), home.js(홈·레이스), explainer.js(큐타임 애니메이션), presets.js(레이스·데모 조건, [P2] 값), kpis.js(주요·상세 지표 타일, 판정), datasets.js(데이터셋 로딩·코어 검증), setup.js·strategy.js(시나리오·전략 편집기), pool.js·worker.js(워커 풀·실행·재생), progress.js(진행·FAB 지도), results.js(분석 개요), details.js(분석 상세), compare.js(비교), share.js(공유 링크), charts.js(ECharts 차트), labels.js(구간·스텝·시각 표기), files.js(내려받기), tooltip.js(툴팁), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0 MIT, Apache ECharts 6.1.0 Apache-2.0), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
+www/              index.html, style.css, favicon.svg, main.js(실행 조율·wheel 목록), views.js(보기), home.js(홈·레이스), explainer.js(큐타임 애니메이션), presets.js(레이스·데모 조건, [P2] 값), kpis.js(주요·상세 지표 타일, 판정), datasets.js(데이터셋 로딩·코어 검증), setup.js·strategy.js(시나리오·전략 편집기), pool.js·worker.js(워커 풀·실행·재생), progress.js(진행·FAB 지도), results.js(분석 개요), details.js(분석 상세), compare.js(비교), share.js(공유 링크), charts.js(ECharts 차트), labels.js(구간·스텝·시각 표기), files.js(내려받기), tooltip.js(툴팁), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0 MIT, Apache ECharts 6.1.0 Apache-2.0, fonts/ IBM Plex Sans·Mono OFL-1.1), data/(DS1–4 데이터셋 파일), pkg/·python/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
 ```
 
@@ -491,7 +491,8 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 - 웹 모듈: `main.js`(실행 조율, 실행 = 묶음(시나리오 × 복제), 따라가는 보기 지정 가능), `views.js`(해시 라우터, `hashchange`만), `home.js`(레이스 = 홈이 따라가는 실행, 규칙별 복제 진행 합산·결과 KPI는 코어 `summarize`·`compare`), `kpis.js`(지표 타일·판정, 분석·비교와 공용), `datasets.js`(데이터셋 파일 1회 fetch·디코딩해 `info()`, 동시 요청은 하나로, 실행 전 `new Simulation`으로 코어 검증과 pass 수), `setup.js`(시나리오 = 데이터셋·설정·복제 수, 설정 JSON), `strategy.js`(전략 편집기, 설정 객체를 직접 고침), `pool.js`·`worker.js`(작업 큐·워커), `progress.js`(진행·FAB 지도), `results.js`(개요), `details.js`(기록·재생·상세), `charts.js`(차트), `i18n.js`(`data-i18n` 문구, `data-i18n-attr` 속성), `motion.js`.
 - 웹 실행: 워커 풀(`pool.js`, 최대 `navigator.hardwareConcurrency`개)이 작업(복제 실행·재생)을 차례로 맡긴다. 워커는 디코딩한 데이터셋을 보관해 같은 데이터셋의 바이트는 처음 한 번만 받는다. SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 워커의 관찰자는 직전 보고 후 250 ms(벽시계)가 지난 첫 1일 관측에서 일시정지하고, 워커는 진행·`toolGroups()`를 `postMessage`한 뒤 이어 실행한다(일시정지는 결과 불변, 타이머 없음). 메인 스레드는 복제별 상태를 갱신하고 프레임마다 최대 1회(`requestAnimationFrame`) 그린다. 취소는 작업 묶음 단위 `worker.terminate()`.
 - 기록·재생: 복제 0은 위반·툴그룹 일별 기록과 함께 실행한다(결과 불변). 다른 복제는 같은 설정 + 측정된 QTS 흐름 계수로 1 pass 재생해 기록하고 digest를 비교한다. 구간 사건·lot 이력은 창 끝(`until`)까지만 재생한다. 기록은 최근 복제 3개까지 보관.
-- 애니메이션: anime.js 4.5.0(MIT, `www/vendor/`에 동봉, 외부 CDN 미사용). 보기 등장, 제목 단어 등장(splitText), 수치 증가, 실시간 수치는 현재 표시값에서 새 값으로 이어 움직임, 탭 표시줄 이동(spring), 큐타임 그림(timeline, 홈이 보이고 페이지가 보일 때만 재생), KPI 타일 등장. `prefers-reduced-motion`이면 생략(최종 화면 동일, 큐타임 그림은 정지 화면).
+- 애니메이션: anime.js 4.5.0(MIT, `www/vendor/`에 동봉, 외부 CDN 미사용). 보기·결과 등장(짧은 페이드), 결과 수치 증가, 실시간 수치는 현재 표시값에서 새 값으로 이어 움직임, 탭 밑줄 이동, 큐타임 그림(timeline, 홈이 보이고 페이지가 보일 때만 재생). `prefers-reduced-motion`이면 생략(최종 화면 동일, 큐타임 그림은 정지 화면).
+- 디자인: IBM Plex Sans·Mono(라틴 woff2 동봉, SIL OFL 1.1, 한글은 시스템 글꼴), 흰 바탕·1px 선·강조색 하나, 그림자·그라데이션 없음. 라이트/다크는 `prefers-color-scheme`.
 - 차트: Apache ECharts 6.1.0(`dist/echarts.esm.min.js`, Apache-2.0, ZRender BSD-3 포함, 라이선스 `www/vendor/echarts.LICENSE.txt`). 실행 시작 때 미리 불러온다(설정·실행 보기는 쓰지 않음). 색은 CSS 토큰, 상자 폭·색 구성이 바뀌면 새 인스턴스로 다시 그리고(애니메이션 없음), 상자가 페이지에서 빠지면 dispose한다(`ResizeObserver`). 확대(dataZoom), 커서 연동(`connect`), 범례 토글, 터치 툴팁. 레이스 선은 진행마다 같은 인스턴스에 데이터만 갱신한다. 범주 색(툴 상태·대기 분해·규칙)은 색각 검증(OKLab ΔE, 라이트·다크 표면)을 통과한 순서로 둔다.
 - 다국어: 언어별 문구 파일(`www/locales/*.js`, `en.js`와 같은 키, `{이름}` 자리 표시, 빠진 키는 영어). 정적 요소는 `data-i18n` 키, 동적 문구는 `t()`, 숫자는 `Intl.NumberFormat`. 상태 문구·결과는 언어 전환 시 다시 그린다. 언어 추가 = 문구 파일 + `www/i18n.js`의 `LANGUAGES`·`MESSAGES` 등록.
 - 빌드: release 프로필 `lto = true`, `codegen-units = 1`, `panic = "abort"`(네이티브 약 7% 단축, 결과 동일).

@@ -8,8 +8,8 @@ import { still } from "./motion.js";
 /** Lot positions along the picture, from its place at step A: in B's queue, at step B (user
  * units of the SVG). */
 const AT_A = 0;
-const IN_QUEUE = 160;
-const AT_B = 280;
+const IN_QUEUE = 164;
+const AT_B = 288;
 
 let timeline = null;
 
@@ -44,7 +44,7 @@ function build(svg) {
       .add(clock, { strokeDashoffset: 100 - (100 * Math.min(wait, limit)) / limit, duration: Math.min(wait, limit), ease: "linear" }, queued)
       .add(lot, { x: AT_B, duration: 520, ease: "inOutQuad" }, started)
       .add(glowB, flash, started + 420)
-      .add(badge, { opacity: [0, 1], scale: [0.8, 1], duration: 380, ease: "outBack" }, started + 420)
+      .add(badge, { opacity: [0, 1], duration: 300 }, started + 420)
       .add([lot, badge], { opacity: 0, duration: 300 }, started + 1700);
     if (badge === late) tl.call(() => ring.classList.add("late"), queued + limit);
     return started + 2000;

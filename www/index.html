@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SMT2020 Fab Simulator</title>
   <meta name="description" content="Run the SMT2020 semiconductor fab testbed in your browser: a Rust discrete-event simulator compiled to WebAssembly.">
-  <meta name="theme-color" content="#0a0e16" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#f5f7fb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141414" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta property="og:type" content="website">
   <meta property="og:title" content="SMT2020 Fab Simulator: race dispatching rules against queue-time violations">
   <meta property="og:description" content="Two years of the SMT2020 wafer fab in your browser, no install: watch BASE, QTCR and QTS race against critical queue-time violations, then build and compare your own strategies.">
@@ -23,22 +23,11 @@
   <header class="top">
     <div class="top-bar">
       <a class="brand" href="#home">
-        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-          <defs>
-            <clipPath id="logo-wafer">
-              <path d="M20.49 28.2A13 13 0 1 0 11.51 28.2Z"/>
-            </clipPath>
-          </defs>
-          <path class="logo-wafer" d="M20.49 28.2A13 13 0 1 0 11.51 28.2Z"/>
-          <g class="logo-grid" clip-path="url(#logo-wafer)">
-            <path d="M10.5 0V32M16 0V32M21.5 0V32M0 10.5H32M0 16H32M0 21.5H32"/>
-          </g>
-          <rect class="logo-die" x="16.9" y="10.9" width="4.2" height="4.2" rx="0.8"/>
+        <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+          <rect class="logo-die" x="12.5" y="7" width="4" height="4"/>
+          <path class="logo-wafer" d="M15.04 21A9.5 9.5 0 1 0 8.96 21Z"/>
         </svg>
-        <span class="brand-text">
-          <strong data-i18n="header.title"></strong>
-          <span class="brand-sub" data-i18n="header.sub"></span>
-        </span>
+        <span class="brand-name" data-i18n="header.title"></span>
       </a>
       <nav id="tabs" class="tabs" data-i18n-attr="aria-label:view.label">
         <span id="tab-indicator" class="tab-indicator" aria-hidden="true"></span>
@@ -54,10 +43,7 @@
           <span class="sr-only" data-i18n="header.language"></span>
           <select id="language"></select>
         </label>
-        <a class="source" href="https://github.com/code-gihan/academic-semiconductor-fab">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5"/></svg>
-          <span data-i18n="header.source"></span>
-        </a>
+        <a class="source" href="https://github.com/code-gihan/academic-semiconductor-fab" data-i18n="header.source"></a>
       </div>
     </div>
   </header>
@@ -67,66 +53,49 @@
     <section id="view-home" class="view home" data-view="home">
       <div class="hero">
         <div class="hero-text">
-          <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span><span data-i18n="home.eyebrow"></span></p>
-          <h1 id="hero-title" class="hero-title" data-i18n="home.title"></h1>
+          <h1 id="hero-title" data-i18n="home.title"></h1>
           <p class="hero-lead" data-i18n="home.lead"></p>
           <div class="hero-actions">
             <button id="race-start" type="button" class="primary large" disabled>
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M8 5.5v13l10.5-6.5z"/></svg>
               <span></span>
             </button>
-            <a class="button ghost large" href="#setup">
-              <span data-i18n="home.build"></span>
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
-            </a>
+            <a class="more" href="#setup" data-i18n="home.build"></a>
           </div>
           <p id="race-meta" class="hint"></p>
-          <dl class="facts">
-            <div><dt data-i18n="home.fact.tools"></dt><dd data-count="913">913</dd></div>
-            <div><dt data-i18n="home.fact.products"></dt><dd data-count="10">10</dd></div>
-            <div><dt data-i18n="home.fact.steps"></dt><dd data-count="583">583</dd></div>
-            <div><dt data-i18n="home.fact.limits"></dt><dd data-count="264">264</dd></div>
-          </dl>
+          <ul class="facts">
+            <li data-i18n="home.fact.tools"></li>
+            <li data-i18n="home.fact.products"></li>
+            <li data-i18n="home.fact.steps"></li>
+            <li data-i18n="home.fact.limits"></li>
+          </ul>
         </div>
         <figure class="explainer">
-          <svg id="explainer" viewBox="0 0 400 236" role="img" aria-labelledby="explainer-caption">
-            <defs>
-              <pattern id="explainer-dots" width="16" height="16" patternUnits="userSpaceOnUse">
-                <circle class="dot" cx="2" cy="2" r="1"/>
-              </pattern>
-            </defs>
-            <rect class="explainer-ground" width="400" height="236" fill="url(#explainer-dots)"/>
-            <line class="belt" x1="98" y1="150" x2="302" y2="150"/>
-            <rect class="queue-zone" x="170" y="126" width="100" height="48" rx="24"/>
-            <text class="queue-label" x="220" y="194" data-i18n="explainer.queue"></text>
+          <svg id="explainer" viewBox="0 0 400 200" role="img" aria-labelledby="explainer-caption">
+            <line class="belt" x1="92" y1="124" x2="308" y2="124"/>
+            <path class="queue-mark" d="M172 142v6h96v-6"/>
+            <text class="queue-label" x="220" y="166" data-i18n="explainer.queue"></text>
             <g class="tool">
-              <rect class="tool-body" x="22" y="112" width="76" height="76" rx="18"/>
-              <rect class="glow" x="22" y="112" width="76" height="76" rx="18" opacity="0"/>
-              <text class="tool-label" x="60" y="155" data-i18n="explainer.a"></text>
+              <rect class="tool-body" x="20" y="96" width="72" height="56" rx="4"/>
+              <rect class="glow" x="20" y="96" width="72" height="56" rx="4" opacity="0"/>
+              <text class="tool-label" x="56" y="129" data-i18n="explainer.a"></text>
             </g>
             <g class="tool">
-              <rect class="tool-body" x="302" y="112" width="76" height="76" rx="18"/>
-              <rect class="glow" x="302" y="112" width="76" height="76" rx="18" opacity="0"/>
-              <text class="tool-label" x="340" y="155" data-i18n="explainer.b"></text>
+              <rect class="tool-body" x="308" y="96" width="72" height="56" rx="4"/>
+              <rect class="glow" x="308" y="96" width="72" height="56" rx="4" opacity="0"/>
+              <text class="tool-label" x="344" y="129" data-i18n="explainer.b"></text>
             </g>
-            <g class="clock" transform="translate(220 64)">
-              <circle class="clock-track" r="30"/>
-              <circle class="clock-run" r="30" pathLength="100" stroke-dasharray="100" stroke-dashoffset="40" transform="rotate(-90)"/>
-              <text class="clock-limit" y="-2" data-i18n="explainer.limit"></text>
-              <text class="clock-hours" y="13" data-i18n="explainer.hours"></text>
+            <g class="clock" transform="translate(220 52)">
+              <circle class="clock-track" r="24"/>
+              <circle class="clock-run" r="24" pathLength="100" stroke-dasharray="100" stroke-dashoffset="40" transform="rotate(-90)"/>
+              <text class="clock-hours" y="5" data-i18n="explainer.hours"></text>
+              <text class="clock-limit" y="-34" data-i18n="explainer.limit"></text>
             </g>
-            <g class="lot" transform="translate(160 0)">
-              <circle cx="60" cy="150" r="11"/>
-              <path d="M56 160.4h8"/>
+            <g class="lot" transform="translate(164 0)">
+              <circle cx="56" cy="124" r="8"/>
             </g>
-            <g class="badge badge-ok" opacity="0">
-              <rect x="140" y="204" width="160" height="26" rx="13"/>
-              <text x="220" y="221" data-i18n="explainer.ok"></text>
-            </g>
-            <g class="badge badge-late" opacity="0">
-              <rect x="140" y="204" width="160" height="26" rx="13"/>
-              <text x="220" y="221" data-i18n="explainer.late"></text>
-            </g>
+            <text class="badge badge-ok" x="220" y="192" opacity="0" data-i18n="explainer.ok"></text>
+            <text class="badge badge-late" x="220" y="192" opacity="0" data-i18n="explainer.late"></text>
           </svg>
           <figcaption id="explainer-caption" data-i18n="explainer.caption"></figcaption>
         </figure>
@@ -135,13 +104,12 @@
       <section id="race" class="race panel" aria-labelledby="race-title">
         <div class="race-head">
           <div>
-            <p class="eyebrow" data-i18n="race.eyebrow"></p>
             <h2 id="race-title" data-i18n="race.title"></h2>
             <p class="hint"><span id="race-setup"></span> <a href="#ref-p2">[P2]</a></p>
           </div>
           <div class="race-controls">
             <output id="race-status" aria-live="polite"></output>
-            <button id="race-stop" type="button" class="ghost" hidden data-i18n="race.stop"></button>
+            <button id="race-stop" type="button" hidden data-i18n="race.stop"></button>
           </div>
         </div>
         <ol id="race-lanes" class="race-lanes"></ol>
@@ -152,8 +120,7 @@
         <div id="race-result" class="race-result" hidden>
           <div class="result-head">
             <div>
-              <p class="eyebrow" data-i18n="race.resultEyebrow"></p>
-              <h3 id="race-headline" class="result-title"></h3>
+              <h3 id="race-headline"></h3>
               <p id="race-subline" class="hint"></p>
             </div>
             <div class="result-switch">
@@ -163,37 +130,11 @@
           </div>
           <div id="race-kpis" class="kpis"></div>
           <p class="hint"><span id="race-paper"></span> <a href="#ref-p2">[P2]</a></p>
-          <div class="next">
-            <a class="button" href="#analysis"><span data-i18n="race.next.analysis"></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
-            <a class="button" href="#compare"><span data-i18n="race.next.compare"></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
-            <a class="button" href="#setup"><span data-i18n="race.next.setup"></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
-          </div>
-        </div>
-      </section>
-
-      <section class="features" aria-labelledby="features-title">
-        <h2 id="features-title" data-i18n="home.more"></h2>
-        <div class="feature-grid">
-          <a class="feature" href="#setup">
-            <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
-            <strong data-i18n="home.feature.setup"></strong>
-            <span data-i18n="home.feature.setup.text"></span>
-          </a>
-          <a class="feature" href="#analysis">
-            <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
-            <strong data-i18n="home.feature.analysis"></strong>
-            <span data-i18n="home.feature.analysis.text"></span>
-          </a>
-          <a class="feature" href="#compare">
-            <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M17 4v16M3 8h8M13 16h8"/></svg>
-            <strong data-i18n="home.feature.compare"></strong>
-            <span data-i18n="home.feature.compare.text"></span>
-          </a>
-          <a class="feature" href="#python">
-            <svg class="feature-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 4 4-4 4M12 16h7"/><rect x="2" y="3" width="20" height="18" rx="3"/></svg>
-            <strong data-i18n="home.feature.python"></strong>
-            <span data-i18n="home.feature.python.text"></span>
-          </a>
+          <p class="next">
+            <a class="more" href="#analysis" data-i18n="race.next.analysis"></a>
+            <a class="more" href="#compare" data-i18n="race.next.compare"></a>
+            <a class="more" href="#setup" data-i18n="race.next.setup"></a>
+          </p>
         </div>
       </section>
     </section>
@@ -357,7 +298,7 @@
           <dl id="run-setup" class="chips"></dl>
           <p class="hint" id="period-hint" data-i18n="results.periodHint"></p>
           <div id="kpis" class="kpis"></div>
-          <details class="more">
+          <details class="more-measures">
             <summary data-i18n="results.more"></summary>
             <dl id="kpi-details" class="stats-grid"></dl>
           </details>
@@ -449,6 +390,7 @@ simulation.reset({**simulation.config(), "queue_time": "qts"})  # starts over wi
     <p><span data-i18n="footer.data"></span> <a href="https://p2schedgen.fernuni-hagen.de/downloads/simulation">p2schedgen.fernuni-hagen.de</a></p>
     <p><span data-i18n="footer.animation"></span> <a href="vendor/anime.LICENSE.md">anime.js</a></p>
     <p><span data-i18n="footer.charts"></span> <a href="vendor/echarts.LICENSE.txt">Apache ECharts</a></p>
+    <p><span data-i18n="footer.type"></span> <a href="vendor/fonts/IBMPlexSans.LICENSE.txt">IBM Plex Sans</a>, <a href="vendor/fonts/IBMPlexMono.LICENSE.txt">IBM Plex Mono</a></p>
   </footer>
 
   <div id="tooltip" class="tooltip" role="tooltip" hidden></div>

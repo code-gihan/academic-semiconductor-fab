@@ -297,8 +297,9 @@ export function setupView({ status, run }) {
   /** Copies a link to the page with this dataset, these settings and the scenarios (or the
    * edited strategy). */
   async function share() {
-    if (!current) return;
-    if (!BUNDLED.includes(current.key)) {
+    // The chosen dataset, which may still be loading.
+    const key = fields.dataset.value;
+    if (!BUNDLED.includes(key)) {
       scenarioStatus(() => t("share.fileDataset"));
       return;
     }
@@ -313,7 +314,7 @@ export function setupView({ status, run }) {
     };
     let link;
     try {
-      link = await shareLink({ dataset: current.key, settings, scenarios: list });
+      link = await shareLink({ dataset: key, settings, scenarios: list });
     } catch (error) {
       scenarioStatus(() => t("share.failed", { message: error.message }));
       return;
