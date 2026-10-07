@@ -23,6 +23,9 @@ export const DETAIL = [
   { key: "vl1h", scope: "cqt", item: "total", measure: "vl1h_pct", decimals: 1, unit: "percent" },
   { key: "avl", scope: "cqt", item: "total", measure: "avl_h", decimals: 2, unit: "hours" },
   { key: "aont", scope: "cqt", item: "total", measure: "aont_h", decimals: 2, unit: "hours" },
+  { key: "t2t", scope: "amhs", measure: "t2t_pct", decimals: 1, unit: "percent" },
+  { key: "delivery", scope: "amhs", measure: "delivery_s", decimals: 1, unit: "seconds" },
+  { key: "vehicleBusy", scope: "amhs", measure: "vehicle_busy_pct", decimals: 1, unit: "percent" },
 ];
 
 /** The key of a summary or comparison row, or of a measure spec. */

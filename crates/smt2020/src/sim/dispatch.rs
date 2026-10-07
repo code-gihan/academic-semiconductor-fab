@@ -63,16 +63,20 @@ impl Fab {
                 .expect("arrived lot")
                 .setup;
             order.sort_by(|&a, &b| {
-                self.wake_setup_time(setup, self.tools[a].setup)
-                    .total_cmp(&self.wake_setup_time(setup, self.tools[b].setup))
+                self.wake_setup_time(setup, self.tools[a].next_setup)
+                    .total_cmp(&self.wake_setup_time(setup, self.tools[b].next_setup))
             });
         }
-        for &tool in &order {
-            while self.tools[tool].ready && self.select(tool, sched.now()) {
-                self.start_job(tool, sched);
-            }
-            if self.groups[group].queue.is_empty() {
-                break;
+        if self.logistics.is_some() {
+            self.assign_lots(group, &order, sched);
+        } else {
+            for &tool in &order {
+                while self.tools[tool].ready && self.select(tool, sched.now()) {
+                    self.start_job(tool, sched);
+                }
+                if self.groups[group].queue.is_empty() {
+                    break;
+                }
             }
         }
         self.order = order;
@@ -85,6 +89,60 @@ impl Fab {
             state.wake = Some(due);
             sched.schedule_at(due, Event::Wake(group));
         }
+    }
+
+    /// AMHS: one lot or batch at a time to the ready tool with the least work (jobs and
+    /// assignments), then free first, then in `order`; a tool that finds nothing to take sits out
+    /// the rest of the dispatch (what it may take only shrinks).
+    fn assign_lots(&mut self, group: ToolGroupId, order: &[ToolId], sched: &mut Scheduler<Event>) {
+        let mut idle = Vec::new();
+        while !self.groups[group].queue.is_empty() {
+            let Some(tool) = order
+                .iter()
+                .copied()
+                .filter(|&tool| self.tools[tool].ready && !idle.contains(&tool))
+                .min_by_key(|&tool| (self.load(tool), self.free_at(tool)))
+            else {
+                return;
+            };
+            if self.select(tool, sched.now()) {
+                self.assign(tool, sched);
+            } else {
+                idle.push(tool);
+            }
+        }
+    }
+
+    /// The index of the best-ranked of `entries` (index, queue entry) for `tool` at `now`, under
+    /// its group's ranking with its present setup; the first among equals.
+    pub(super) fn best_ranked<'a>(
+        &self,
+        tool: ToolId,
+        entries: impl Iterator<Item = (usize, &'a Waiting)>,
+        now: Time,
+    ) -> Option<usize> {
+        let group = self.tools[tool].group;
+        let ranking = Ranking {
+            criteria: &self.strategy.ranking[group],
+            prefer_engineering: self.strategy.prefer_engineering(
+                group,
+                now,
+                self.groups[group].campaign,
+            ),
+            setup: self.tools[tool].setup,
+            now,
+        };
+        let mut best: Option<(Key, usize)> = None;
+        for (index, waiting) in entries {
+            let key = self.key(waiting, &ranking);
+            if best
+                .as_ref()
+                .is_none_or(|(best, _)| compare(&key, best).is_lt())
+            {
+                best = Some((key, index));
+            }
+        }
+        best.map(|(_, index)| index)
     }
 
     /// Stopping ([P2] §3.2) and admission code: marks the lots about to enter a CQT segment while
@@ -191,18 +249,24 @@ impl Fab {
             }
         }
         // rule_LSSU: an unfinished setup run, hot lots included, waits for lots keeping the setup
-        // while any can come (AutoSched documentation: a minimum number of lots is ensured).
+        // while any can come (AutoSched documentation: a minimum number of lots is ensured). The
+        // setup and run are those after the lots assigned to the tool ahead.
         let state = &self.tools[tool];
-        let current = state.setup;
+        let current = state.next_setup;
         let run_holds = matches!(self.data.tool_groups[group].rule, Rule::SetupRun(_))
-            && state.run_left > 0
+            && state.next_run_left > 0
             && current.is_some_and(|setup| {
                 self.can_still_come(&self.routes.setup_members[&(group, setup)])
             });
+        // AMHS: a tool without a free port takes only the lots standing at its ports.
+        let dockable = self.dockable(tool);
         // Held lots, lots dedicated to another tool, and setup changes during a held run wait.
         let eligible = |waiting: &Waiting| {
             !waiting.held
                 && waiting.dedicated.is_none_or(|dedicated| dedicated == tool)
+                && dockable
+                    .as_ref()
+                    .is_none_or(|lots| lots.contains(&waiting.lot))
                 && !(run_holds
                     && waiting
                         .setup

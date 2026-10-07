@@ -2102,3 +2102,176 @@ footer p + p {
   pointer-events: none;
   box-shadow: 0 6px 18px -8px rgb(0 0 0 / 0.3);
 }
+
+/* ---- the Layout view: the window to record, then its replay on a canvas with its numbers and
+   legend beside it ---- */
+
+.layout-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem 1rem;
+  margin-top: 0.5rem;
+}
+
+.layout-window .field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.layout-window label {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.layout-window input[type="number"] {
+  width: 6rem;
+}
+
+.layout-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15rem;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.layout-player {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.layout-controls input[type="range"] {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  accent-color: var(--accent);
+}
+
+.layout-stage {
+  position: relative;
+  height: min(72vh, 46rem);
+  min-height: 20rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  touch-action: none;
+}
+
+.layout-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.layout-stage canvas:active {
+  cursor: grabbing;
+}
+
+.layout-zoom {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.layout-zoom button {
+  width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.layout-tip {
+  position: absolute;
+  z-index: 2;
+  max-width: 18rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--text);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-line;
+  pointer-events: none;
+}
+
+.layout-side h3 {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.layout-stats {
+  display: grid;
+  margin: 0;
+}
+
+.layout-stats div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.layout-stats dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.layout-stats dd {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.legend {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  color: var(--text-2);
+}
+
+.legend .swatch-vehicle {
+  width: 0.9rem;
+  height: 0.4rem;
+  border-radius: 1px;
+}
+
+.legend .swatch-foup,
+.legend .swatch-tool {
+  border-radius: 1px;
+}
+
+.legend .swatch-kept {
+  border: 1px solid var(--swatch);
+  border-radius: 1px;
+  background: none;
+}
+
+.clock-readout {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+@media (max-width: 60rem) {
+  .layout-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .layout-stage {
+    height: 60vh;
+  }
+}

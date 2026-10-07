@@ -34,6 +34,7 @@
         <a href="#home" data-view="home"><span data-i18n="view.home"></span></a>
         <a href="#setup" data-view="setup"><span data-i18n="view.setup"></span></a>
         <a href="#run" data-view="run"><span data-i18n="view.run"></span><span id="run-badge" class="badge" hidden></span></a>
+        <a href="#layout" data-view="layout"><span data-i18n="view.layout"></span></a>
         <a href="#analysis" data-view="analysis"><span data-i18n="view.analysis"></span></a>
         <a href="#compare" data-view="compare"><span data-i18n="view.compare"></span></a>
         <a href="#python" data-view="python"><span data-i18n="view.python"></span></a>
@@ -164,6 +165,10 @@
                 <span><strong data-i18n="dataset.ds4.name"></strong><span class="hint" data-i18n="dataset.ds4.description"></span></span>
               </label>
               <label class="choice">
+                <input type="radio" name="dataset" value="smat2022">
+                <span><strong data-i18n="dataset.smat2022.name"></strong><span class="hint" data-i18n="dataset.smat2022.description"></span></span>
+              </label>
+              <label class="choice">
                 <input type="radio" name="dataset" value="file">
                 <span><strong data-i18n="dataset.file.name"></strong><span class="hint" data-i18n="dataset.file.description"></span></span>
               </label>
@@ -172,7 +177,41 @@
               <label for="file" data-i18n="dataset.file.label"></label>
               <input id="file" name="file" type="file" accept=".bin">
             </div>
-            <p class="hint"><span data-i18n="dataset.common"></span> <a href="#ref-p1">[P1]</a></p>
+            <p class="hint"><span data-i18n="dataset.common"></span> <a href="#ref-p1">[P1]</a> <a href="#ref-p3">[P3]</a></p>
+          </fieldset>
+
+          <fieldset class="step" id="amhs-step" hidden>
+            <legend><span class="step-number" aria-hidden="true">1b</span><span data-i18n="amhs.heading"></span><button class="info" type="button" data-tip="amhs.intro">i</button></legend>
+            <div class="fields">
+              <div class="field">
+                <span class="field-head"><label for="amhs-vehicles" data-i18n="amhs.vehicles.label"></label><button class="info" type="button" data-tip="amhs.vehicles.hint">i</button></span>
+                <input id="amhs-vehicles" name="amhsVehicles" type="number" min="1" step="1" required>
+              </div>
+              <div class="field">
+                <span class="field-head"><label for="amhs-dispatch" data-i18n="amhs.dispatch.label"></label><button class="info" type="button" data-tip="amhs.dispatch.hint">i</button></span>
+                <select id="amhs-dispatch" name="amhsDispatch">
+                  <option value="nearest" data-i18n="amhs.dispatch.nearest"></option>
+                  <option value="bay" data-i18n="amhs.dispatch.bay"></option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-head"><label for="amhs-look-ahead" data-i18n="amhs.lookAhead.label"></label><button class="info" type="button" data-tip="amhs.lookAhead.hint">i</button></span>
+                <select id="amhs-look-ahead" name="amhsLookAhead">
+                  <option value="ports" data-i18n="amhs.lookAhead.ports"></option>
+                  <option value="0" data-i18n="amhs.lookAhead.none"></option>
+                  <option value="1" data-i18n="amhs.lookAhead.one"></option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-head"><label for="amhs-speeds" data-i18n="amhs.speeds.label"></label><button class="info" type="button" data-tip="amhs.speeds.hint">i</button></span>
+                <select id="amhs-speeds" name="amhsSpeeds">
+                  <option value="dataset" data-i18n="amhs.speeds.dataset"></option>
+                  <option value="paper" data-i18n="amhs.speeds.paper"></option>
+                  <option value="custom" disabled data-i18n="amhs.speeds.custom"></option>
+                </select>
+              </div>
+            </div>
+            <p class="hint"><span id="amhs-facts"></span> <a class="more" href="#layout" data-i18n="amhs.watch"></a></p>
           </fieldset>
 
           <fieldset class="step">
@@ -274,6 +313,57 @@
       </div>
     </section>
 
+    <section id="view-layout" class="view" data-view="layout" hidden>
+      <div class="panel">
+        <div class="panel-head">
+          <h2><span data-i18n="layout.heading"></span><button class="info" type="button" data-tip="layout.intro">i</button></h2>
+        </div>
+        <p id="layout-setup" class="hint"></p>
+        <form id="layout-window" class="layout-window">
+          <div class="field">
+            <label for="layout-day" data-i18n="layout.day"></label>
+            <input id="layout-day" name="day" type="number" min="1" step="1" value="2" required>
+          </div>
+          <div class="field">
+            <label for="layout-length" data-i18n="layout.length"></label>
+            <select id="layout-length" name="length">
+              <option value="900000" data-i18n="layout.length.15"></option>
+              <option value="1800000" data-i18n="layout.length.30"></option>
+              <option value="3600000" data-i18n="layout.length.60" selected></option>
+              <option value="7200000" data-i18n="layout.length.120"></option>
+            </select>
+          </div>
+          <button id="layout-record" type="submit" class="primary" disabled data-i18n="layout.record"></button>
+          <button id="layout-stop" type="button" hidden data-i18n="layout.stop"></button>
+          <output id="layout-status" aria-live="polite"></output>
+        </form>
+        <div id="layout-body" class="layout-body" hidden>
+          <div class="layout-player">
+            <div class="toolbar layout-controls">
+              <button id="layout-play" type="button" class="primary"></button>
+              <input id="layout-seek" type="range" min="0" max="1" step="1" data-i18n-attr="aria-label:layout.seek">
+              <output id="layout-clock" class="clock-readout"></output>
+              <select id="layout-speed" data-i18n-attr="aria-label:layout.speed"></select>
+              <button id="layout-fit" type="button" data-i18n="layout.fit"></button>
+            </div>
+            <div id="layout-stage" class="layout-stage">
+              <canvas id="layout-canvas" role="img" data-i18n-attr="aria-label:layout.canvas"></canvas>
+              <div class="layout-zoom">
+                <button id="layout-zoom-in" type="button" data-i18n-attr="aria-label:layout.zoomIn">+</button>
+                <button id="layout-zoom-out" type="button" data-i18n-attr="aria-label:layout.zoomOut">&minus;</button>
+              </div>
+              <div id="layout-tip" class="layout-tip" hidden></div>
+            </div>
+          </div>
+          <aside class="layout-side">
+            <dl id="layout-stats" class="layout-stats"></dl>
+            <h3 data-i18n="layout.legend"></h3>
+            <ul id="layout-legend" class="legend"></ul>
+          </aside>
+        </div>
+      </div>
+    </section>
+
     <section id="view-analysis" class="view" data-view="analysis" hidden>
       <div class="panel">
         <p id="analysis-empty" class="hint" data-i18n="results.empty"></p>
@@ -299,12 +389,14 @@
             <button type="button" role="tab" id="tab-cqt" data-tab="cqt" aria-controls="panel-cqt" aria-selected="true" data-i18n="tab.cqt"></button>
             <button type="button" role="tab" id="tab-lots" data-tab="lots" aria-controls="panel-lots" aria-selected="false" tabindex="-1" data-i18n="tab.lots"></button>
             <button type="button" role="tab" id="tab-tools" data-tab="tools" aria-controls="panel-tools" aria-selected="false" tabindex="-1" data-i18n="tab.tools"></button>
+            <button type="button" role="tab" id="tab-amhs" data-tab="amhs" aria-controls="panel-amhs" aria-selected="false" tabindex="-1" data-i18n="tab.amhs" hidden></button>
             <button type="button" role="tab" id="tab-run" data-tab="run" aria-controls="panel-run" aria-selected="false" tabindex="-1" data-i18n="tab.run"></button>
             <button type="button" role="tab" id="tab-data" data-tab="data" aria-controls="panel-data" aria-selected="false" tabindex="-1" data-i18n="tab.data"></button>
           </div>
           <div id="panel-cqt" class="tabpanel charts" role="tabpanel" aria-labelledby="tab-cqt"></div>
           <div id="panel-lots" class="tabpanel charts" role="tabpanel" aria-labelledby="tab-lots" hidden></div>
           <div id="panel-tools" class="tabpanel charts" role="tabpanel" aria-labelledby="tab-tools" hidden></div>
+          <div id="panel-amhs" class="tabpanel charts" role="tabpanel" aria-labelledby="tab-amhs" hidden></div>
           <div id="panel-run" class="tabpanel" role="tabpanel" aria-labelledby="tab-run" hidden>
             <div id="details" hidden>
               <div class="panel-head">
@@ -396,6 +488,7 @@ simulation.run()</code></pre>
     <ol class="references">
       <li id="ref-p1">[P1] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “SMT2020—A Semiconductor Manufacturing Testbed,” <i>IEEE Trans. Semicond. Manuf.</i>, 33(4), 522–531, 2020. <a href="https://doi.org/10.1109/TSM.2020.3001933">doi:10.1109/TSM.2020.3001933</a></li>
       <li id="ref-p2">[P2] D. Kopp, M. Hassoun, A. Kalir, L. Mönch, “Integrating Critical Queue Time Constraints into SMT2020 Simulation Models,” <i>Proc. Winter Simulation Conference 2020</i>, 1813–1824. <a href="https://doi.org/10.1109/WSC48552.2020.9383889">doi:10.1109/WSC48552.2020.9383889</a></li>
+      <li id="ref-p3">[P3] K. Lee, S. Song, D. Chang, S. Park, “A New AMHS Testbed for Semiconductor Manufacturing,” <i>Proc. Winter Simulation Conference 2022</i>, 3318–3325.</li>
     </ol>
     <p><span data-i18n="footer.data"></span> <a href="https://p2schedgen.fernuni-hagen.de/downloads/simulation">p2schedgen.fernuni-hagen.de</a></p>
     <p><span data-i18n="footer.animation"></span> <a href="vendor/anime.LICENSE.md">anime.js</a></p>

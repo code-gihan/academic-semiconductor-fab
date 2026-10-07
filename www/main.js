@@ -2,8 +2,9 @@
 // the worker pool runs their replications (at most navigator.hardwareConcurrency at once) and the
 // wasm module summarizes them for the Analysis view, whose details show what the first
 // scenario's replication 0 recorded and replays of the others, and compares them in the Compare
-// view. Everything reacts to events (input, worker messages, hash changes, resizes); nothing
-// polls.
+// view; the Layout view animates the setup's transport on a dataset with an AMHS layout.
+// Everything reacts to events (input, worker messages, hash changes, resizes, animation frames);
+// nothing polls.
 import init, { csv, daily, summarize } from "./pkg/fab_wasm.js";
 import { loadCharts } from "./charts.js";
 import { renderComparison, showComparison } from "./compare.js";
@@ -11,6 +12,7 @@ import { RECORDING, chooseSegment, renderDetails, showDetails } from "./details.
 import { download } from "./files.js";
 import { homeView } from "./home.js";
 import { LANGUAGES, failureText, formatDuration, initLanguage, language, setLanguage, t } from "./i18n.js";
+import { layoutView } from "./layout.js";
 import { reveal, slideTo } from "./motion.js";
 import * as pool from "./pool.js";
 import { lanes, relabelProgress, showProgress, startProgress } from "./progress.js";
@@ -34,7 +36,10 @@ $("language").replaceChildren(
     ([code, name]) => new Option(name, code, false, code === language()),
   ),
 );
-const setup = setupView({ status: setStatus, run: start });
+// The Layout view hears of setup edits once both exist.
+let layout = null;
+const setup = setupView({ status: setStatus, run: start, changed: () => layout?.changed() });
+layout = layoutView({ setup });
 const home = homeView({ start, stop: () => stop(() => t("status.cancelled")) });
 /** The tab indicator has been placed once: later moves slide. */
 let placed = false;
@@ -43,6 +48,7 @@ initViews((view) => {
   hideTip();
   placeIndicator();
   home.shown(view);
+  layout.shown(view);
   reveal($(`view-${view}`).querySelectorAll(".panel, .card, .step, .hero > *"));
 });
 // The tabs change size with the window: the indicator follows at once.
@@ -62,6 +68,7 @@ $("language").addEventListener("change", (event) => {
   placeIndicator();
   setup.relabel();
   home.relabel();
+  layout.relabel();
   setStatus(statusText);
   showWheels();
   relabelProgress();
@@ -88,6 +95,7 @@ try {
   await init();
   setup.ready();
   home.ready();
+  layout.ready();
   await openShareLink();
 } catch (error) {
   setStatus(() => t("status.wasmFailed", { message: error.message }));

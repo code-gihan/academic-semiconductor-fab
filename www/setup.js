@@ -1,13 +1,14 @@
 // The Setup view: a dataset, the run settings and a strategy in the core's configuration schema
 // (times in ms) with its strategy code, made of the dataset choice, the run settings, the
-// strategy editor and the configuration's JSON; and the scenarios to compare, strategies saved
-// under a name and run together under the same settings and random numbers. The chosen
-// dataset's info (datasets.js) builds the editor, and the core checks a configuration as a run
-// would. Scenarios are kept in the browser and travel in share links, their code allowed to run
-// by the reader; the demo is the Home view's race.
+// transport settings of a dataset with an AMHS layout, the strategy editor and the
+// configuration's JSON; and the scenarios to compare, strategies saved under a name and run
+// together under the same settings and random numbers. The chosen dataset's info (datasets.js)
+// builds the editor, and the core checks a configuration as a run would. Scenarios are kept in
+// the browser and travel in share links, their code allowed to run by the reader; the demo is
+// the Home view's race.
 import { lines } from "./code.js";
 import { BUNDLED, datasetName, loadDataset, passes } from "./datasets.js";
-import { Failure, failureText, t } from "./i18n.js";
+import { Failure, failureText, formatNumber, t } from "./i18n.js";
 import { pulse } from "./motion.js";
 import { RACE } from "./presets.js";
 import { shareLink } from "./share.js";
@@ -20,14 +21,24 @@ const $ = (id) => document.getElementById(id);
  * strategy. */
 const RUN_KEYS = ["horizon", "warm_up", "seed", "load", "replication"];
 const STORAGE_KEY = "smt2020.scenarios";
+/** Vehicle speed overrides of the transport settings (mm/s, mm/s²): Table 1 of [P3]. */
+const SPEED_KEYS = ["max_speed", "acceleration", "deceleration", "straight_speed", "curve_speed"];
+const PAPER_SPEEDS = {
+  max_speed: 5000,
+  acceleration: 2000,
+  deceleration: 3500,
+  straight_speed: 5000,
+  curve_speed: 1000,
+};
 
 /**
  * The view; `status(render)` shows a status text, `run(batch)` starts a run of
- * {name, dataset: {key, bytes}, info, replications, scenarios: [{name, config, setup}]}. `ready()`
- * is called once the wasm module works, `relabel()` after a language change and
- * `load(state, render)` with the state of a share link and the text that says so.
+ * {name, dataset: {key, bytes}, info, replications, scenarios: [{name, config, setup}]} and
+ * `changed()` hears of every edit of the dataset or configuration. `ready()` is called once the
+ * wasm module works, `relabel()` after a language change and `load(state, render)` with the
+ * state of a share link and the text that says so; `snapshot()` is the edited setup.
  */
-export function setupView({ status, run }) {
+export function setupView({ status, run, changed }) {
   const form = $("setup");
   const fields = form.elements;
   /** The chosen dataset (datasets.js). */
@@ -58,6 +69,7 @@ export function setupView({ status, run }) {
       chooseDataset();
     } else {
       readSettings();
+      readAmhs();
       showJson();
     }
   });
@@ -91,6 +103,7 @@ export function setupView({ status, run }) {
   function relabel() {
     editor.render();
     renderScenarios();
+    if (current) showAmhsFacts(current.info.layout);
   }
 
   /** Shows the chosen dataset's strategy editor once its file is decoded. */
@@ -111,6 +124,8 @@ export function setupView({ status, run }) {
       if (token !== choice) return;
       current = entry;
       status(() => "");
+      fitAmhs(config);
+      writeAmhs();
       editor.show(entry.info, key, config, code);
       showJson();
     } catch (error) {
@@ -137,11 +152,90 @@ export function setupView({ status, run }) {
     fields.load.value = String(config.load ?? 1);
   }
 
+  // ---- transport (AMHS) ----
+
+  /** Transport settings apply to a dataset with an AMHS layout only: its defaults where none are
+   * set, none for the others. */
+  function fitAmhs(candidate) {
+    if (current?.info.layout) candidate.amhs ??= {};
+    else delete candidate.amhs;
+  }
+
+  /** The transport fields into the configuration. */
+  function readAmhs() {
+    const layout = current?.info.layout;
+    if (!layout || !config.amhs) return;
+    const amhs = config.amhs;
+    const vehicles = Math.round(Number(fields.amhsVehicles.value));
+    if (vehicles >= 1 && vehicles < layout.vehicles) amhs.vehicles = vehicles;
+    else delete amhs.vehicles;
+    if (fields.amhsDispatch.value === "nearest") delete amhs.dispatch;
+    else amhs.dispatch = fields.amhsDispatch.value;
+    if (fields.amhsLookAhead.value === "ports") delete amhs.look_ahead;
+    else amhs.look_ahead = Number(fields.amhsLookAhead.value);
+    if (fields.amhsSpeeds.value === "dataset") {
+      for (const key of SPEED_KEYS) delete amhs[key];
+    } else if (fields.amhsSpeeds.value === "paper") {
+      Object.assign(amhs, PAPER_SPEEDS);
+    }
+  }
+
+  /** The configuration's transport settings into their fields, shown for a dataset with a
+   * layout. */
+  function writeAmhs() {
+    const layout = current?.info.layout;
+    $("amhs-step").hidden = !layout;
+    if (!layout) return;
+    const amhs = config.amhs ?? {};
+    fields.amhsVehicles.max = String(layout.vehicles);
+    fields.amhsVehicles.value = String(amhs.vehicles ?? layout.vehicles);
+    fields.amhsDispatch.value = amhs.dispatch ?? "nearest";
+    const lookAhead = amhs.look_ahead == null ? "ports" : String(amhs.look_ahead);
+    if (![...fields.amhsLookAhead.options].some((option) => option.value === lookAhead)) {
+      fields.amhsLookAhead.append(new Option(lookAhead, lookAhead));
+    }
+    fields.amhsLookAhead.value = lookAhead;
+    const given = SPEED_KEYS.filter((key) => amhs[key] != null);
+    fields.amhsSpeeds.value =
+      given.length === 0
+        ? "dataset"
+        : SPEED_KEYS.every((key) => amhs[key] === PAPER_SPEEDS[key])
+          ? "paper"
+          : "custom";
+    showAmhsFacts(layout);
+  }
+
+  function showAmhsFacts(layout) {
+    if (!layout) return;
+    $("amhs-facts").textContent = t("amhs.facts", {
+      vehicles: formatNumber(layout.vehicles, 0),
+      rails: formatNumber(layout.rails, 0),
+      km: formatNumber(layout.rail_length / 1000, 1),
+      zones: formatNumber(layout.zones, 0),
+      buffers: formatNumber(layout.buffers, 0),
+    });
+  }
+
+  /** The edited setup: the dataset, a copy of the configuration with its code, and their names;
+   * none while no dataset is chosen. */
+  function snapshot() {
+    if (!current) return null;
+    readSettings();
+    return {
+      entry: current,
+      config: structuredClone(config),
+      code: codeOf(),
+      dataset: datasetName(current.key, current.name),
+      strategy: strategySummary(strategyOf(config), codeOf()),
+    };
+  }
+
   function showJson() {
     if ($("config-json").open) {
       $("json-text").value = JSON.stringify(config, null, 2);
       jsonStatus(() => "");
     }
+    changed();
   }
 
   function jsonStatus(render) {
@@ -167,6 +261,7 @@ export function setupView({ status, run }) {
     config.ranking ??= {};
     delete config.replication;
     writeSettings();
+    writeAmhs();
     editor.show(current.info, current.key, config, code);
     showJson();
     jsonStatus(() => t("json.applied"));
@@ -264,6 +359,7 @@ export function setupView({ status, run }) {
     const list = [];
     for (const scenario of scenarios) {
       const each = { ...structuredClone(scenario.strategy), ...settings };
+      fitAmhs(each);
       let count;
       try {
         count = check(each);
@@ -315,6 +411,8 @@ export function setupView({ status, run }) {
     }
     Object.assign(config, structuredClone(strategy));
     config.ranking ??= {};
+    fitAmhs(config);
+    writeAmhs();
     code.source = source ?? "";
     code.enabled = Boolean(source);
   }
@@ -412,7 +510,7 @@ export function setupView({ status, run }) {
     $("scenarios-panel").inert = running;
   }
 
-  return { ready, relabel, lock, load };
+  return { ready, relabel, lock, load, snapshot };
 }
 
 /** The scenarios kept in this browser. */
@@ -445,8 +543,17 @@ function strategySummary(strategy, source) {
   }
   if ((strategy.engineering ?? "base") !== "base") parts.push(engineeringText(strategy.engineering));
   if (strategy.reserve_super_hot) parts.push(t("strategy.superHot.short"));
+  if (strategy.amhs) parts.push(amhsText(strategy.amhs));
   if (source) parts.push(t("code.lines", { lines: lines(source) }));
   return parts.join(" · ");
+}
+
+/** Transport settings in a few words. */
+function amhsText(amhs) {
+  const dispatch = t(`amhs.dispatch.${amhs.dispatch ?? "nearest"}`);
+  return amhs.vehicles == null
+    ? t("amhs.summaryAll", { dispatch })
+    : t("amhs.summary", { vehicles: amhs.vehicles, dispatch });
 }
 
 /** The scenario as [label key, text()] pairs; texts follow the language. */
@@ -470,6 +577,7 @@ export function describe(key, name, config, replications, source) {
     ],
     ["strategy.engineering.label", () => engineeringText(config.engineering ?? "base")],
     ["strategy.superHot.short", () => t(config.reserve_super_hot ? "common.on" : "common.off")],
+    ...(config.amhs ? [["amhs.heading", () => amhsText(config.amhs)]] : []),
     ["code.heading", () => (source ? t("code.lines", { lines: lines(source) }) : t("common.off"))],
     ["settings.horizon.label", () => String(config.horizon / DAY)],
     [

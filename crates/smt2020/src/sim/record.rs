@@ -1,12 +1,14 @@
 //! What a simulation records besides its results ([`Recording`]): the lots over a CQT limit, the
-//! tool groups day by day and the events of a window. Records are tables of equal-length columns
-//! that refer to the dataset info by index. Recording never changes the run.
+//! tool groups day by day, the events of a window and the AMHS of a window for a replay
+//! ([`Replay`](super::Replay)). Records are tables of equal-length columns that refer to the
+//! dataset info by index. Recording never changes the run.
 
 use std::collections::HashSet;
 
 use des_core::Time;
 use serde::{Deserialize, Serialize};
 
+use super::replay::ReplayWindow;
 use super::stats::LotKind;
 use super::tool::STATES;
 use super::{Error, deserialize_time};
@@ -25,6 +27,9 @@ pub struct Recording {
     /// The events of a window.
     #[serde(default)]
     pub events: Option<EventFilter>,
+    /// The AMHS of a window for replaying it (datasets with a layout).
+    #[serde(default)]
+    pub replay: Option<ReplayWindow>,
 }
 
 /// Events from `from` up to `until`, at these tool groups (none: all) and of these lots (release
@@ -56,6 +61,9 @@ named_enum! {
         End = "end",
         /// A lot leaves the fab after its last step.
         Complete = "complete",
+        /// A vehicle picks a lot's FOUP up at a port, and puts it down at one (AMHS).
+        Pickup = "pickup",
+        Dropoff = "dropoff",
         /// A tool breaks down, and is repaired.
         Down = "down",
         Up = "up",
@@ -140,6 +148,14 @@ struct Window {
 impl Recorder {
     /// The recorder of `recording` for `data`, or none if it records nothing.
     pub(super) fn new(data: &Dataset, recording: &Recording) -> Result<Option<Self>, Error> {
+        if let Some(window) = &recording.replay {
+            if data.layout.is_none() {
+                return Err(Error("the dataset has no AMHS layout to replay".into()));
+            }
+            if window.until <= window.from {
+                return Err(Error("the replay window must end after it starts".into()));
+            }
+        }
         let events = match &recording.events {
             None => None,
             Some(filter) => {

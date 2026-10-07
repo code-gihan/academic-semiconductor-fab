@@ -658,6 +658,7 @@ fn records_account_for_the_run() {
             tool_groups: Vec::new(),
             lots: Vec::new(),
         }),
+        replay: None,
     };
     let mut sim = Simulation::with_recording(Arc::clone(&ds), config, recording).unwrap();
     sim.run(None).unwrap();

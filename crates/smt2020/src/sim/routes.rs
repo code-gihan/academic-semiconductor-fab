@@ -36,6 +36,8 @@ impl Affine {
 }
 
 pub(super) struct RouteInfo {
+    /// Probability that each step is processed: its sampling, 0 for steps the layout leaves out.
+    pub sampling: Vec<f64>,
     /// Expected duration of each step when processed: load, processing (a lot alone on a
     /// cascading tool takes p + (n−1)·c) and unload.
     pub step: Vec<Affine>,
@@ -75,7 +77,9 @@ pub(super) struct Routes {
 }
 
 impl Routes {
-    pub(super) fn new(data: &Dataset, steppers: &[bool]) -> Self {
+    /// The routes of `data`; with `skipped` (an AMHS layout's tool groups without tools) the
+    /// steps of those groups are left out and transports have no fixed expectation.
+    pub(super) fn new(data: &Dataset, steppers: &[bool], skipped: Option<&[bool]>) -> Self {
         #[derive(PartialEq, Eq, Hash)]
         enum Key<'a> {
             RouteStep(usize, StepIndex),
@@ -122,7 +126,7 @@ impl Routes {
         let info: Vec<RouteInfo> = data
             .routes
             .iter()
-            .map(|route| RouteInfo::new(data, route, steppers))
+            .map(|route| RouteInfo::new(data, route, steppers, skipped))
             .collect();
         let mut segment_at: Vec<Vec<Option<usize>>> = data
             .routes
@@ -154,8 +158,18 @@ impl Routes {
 }
 
 impl RouteInfo {
-    fn new(data: &Dataset, route: &Route, steppers: &[bool]) -> Self {
+    fn new(data: &Dataset, route: &Route, steppers: &[bool], skipped: Option<&[bool]>) -> Self {
         let steps = &route.steps;
+        let sampling: Vec<f64> = steps
+            .iter()
+            .map(|step| {
+                if skipped.is_some_and(|skipped| skipped[step.tool_group]) {
+                    0.0
+                } else {
+                    step.sampling
+                }
+            })
+            .collect();
         let step: Vec<Affine> = steps
             .iter()
             .map(|step| {
@@ -181,7 +195,7 @@ impl RouteInfo {
 
         let mut remaining = vec![Affine::default(); steps.len() + 1];
         for index in (0..steps.len()).rev() {
-            remaining[index] = remaining[index + 1].plus(step[index].times(steps[index].sampling));
+            remaining[index] = remaining[index + 1].plus(step[index].times(sampling[index]));
         }
 
         // Expected transport from the previous processed step: track where the lot last was.
@@ -191,20 +205,24 @@ impl RouteInfo {
         let mut visits = Vec::with_capacity(steps.len());
         for (index, spec) in steps.iter().enumerate() {
             let to = data.tool_groups[spec.tool_group].location;
-            let transport: f64 = (0..locations)
-                .map(|from| last[from] * transport_mean(data, from, to))
-                .sum();
+            let transport: f64 = if skipped.is_some() {
+                0.0
+            } else {
+                (0..locations)
+                    .map(|from| last[from] * transport_mean(data, from, to))
+                    .sum()
+            };
             visits.push(
                 step[index]
                     .plus(Affine {
                         base: transport,
                         per_wafer: 0.0,
                     })
-                    .times(spec.sampling),
+                    .times(sampling[index]),
             );
             last.iter_mut()
-                .for_each(|share| *share *= 1.0 - spec.sampling);
-            last[to] += spec.sampling;
+                .for_each(|share| *share *= 1.0 - sampling[index]);
+            last[to] += sampling[index];
         }
         let mut rpt = visits
             .iter()
@@ -215,7 +233,7 @@ impl RouteInfo {
                 let redo = visits[rework.to..=index]
                     .iter()
                     .fold(Affine::default(), |sum, &visit| sum.plus(visit));
-                let q = spec.sampling * rework.probability;
+                let q = sampling[index] * rework.probability;
                 rpt = rpt.plus(redo.times(q / (1.0 - q)));
             }
         }
@@ -245,6 +263,7 @@ impl RouteInfo {
             })
             .collect();
         Self {
+            sampling,
             step,
             remaining,
             rpt,

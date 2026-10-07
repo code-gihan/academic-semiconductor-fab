@@ -7,13 +7,15 @@ use std::fmt;
 use des_core::Time;
 use serde::{Deserialize, Serialize};
 
+use crate::layout::Layout;
+
 /// Start of every dataset file, followed by [`FORMAT_VERSION`] (u32, little endian) and the
 /// postcard-encoded [`Dataset`].
 const MAGIC: &[u8; 8] = b"SMT2020\0";
 
 /// Layout version of dataset files. Bumped whenever a serialized type of this module changes,
 /// so files of another layout are rejected instead of misread.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 impl Dataset {
     /// Encodes the dataset as a dataset file.
@@ -98,6 +100,9 @@ pub struct Dataset {
     pub lots: Vec<LotRelease>,
     /// Reporting periods in ascending start order.
     pub periods: Vec<Period>,
+    /// AMHS layout (SMAT2022): with it, OHTs carry the lots between ports instead of the
+    /// transport times.
+    pub layout: Option<Layout>,
 }
 
 /// Duration distribution.
@@ -435,6 +440,7 @@ pub(crate) fn tiny() -> Dataset {
             report: true,
             reset: true,
         }],
+        layout: None,
     }
 }
 
@@ -451,7 +457,7 @@ mod tests {
     /// The layout guard: a change of a serialized type changes these bytes. Then bump
     /// `FORMAT_VERSION` and update them.
     #[test]
-    fn dataset_file_layout_is_version_1() {
+    fn dataset_file_layout_is_version_2() {
         let hex: String = tiny()
             .to_bytes()
             .iter()
@@ -460,11 +466,12 @@ mod tests {
         assert_eq!(
             hex,
             concat!(
-                "534d5432303230000100000001044574636801034661620106457463685f31000002c0a907c0a907",
+                "534d5432303230000200000001044574636801034661620106457463685f31000002c0a907c0a907",
                 "0000000200020001028090e4c004028090e4c0040280bab703010080a0f6a71380f0b2520080bab7",
                 "030102533101000000809f490001025231010131000001809f49e0d4030000010000000000000000",
                 "00f03f0000000106706172745f310970726f647563745f3100000001000a190080bab7030a0180f0",
                 "b25200010014190080f0b252000100010150000101",
+                "00",
             )
         );
     }
@@ -476,8 +483,8 @@ mod tests {
         assert_eq!(message(b"not a dataset"), "not an SMT2020 dataset file");
         assert_eq!(message(&bytes[..10]), "truncated dataset file");
         let mut other = bytes.clone();
-        other[8] = 2;
-        assert!(message(&other).starts_with("dataset file format 2, this build reads 1"));
+        other[8] = 1;
+        assert!(message(&other).starts_with("dataset file format 1, this build reads 2"));
         let mut longer = bytes.clone();
         longer.push(0);
         assert_eq!(message(&longer), "trailing bytes after the dataset");

@@ -1,10 +1,11 @@
-// Datasets of the page: a bundled file served next to it (data/ds1–4.bin) or a local .bin file,
-// fetched or read once and decoded by the wasm module, with its info (tool groups, routes, CQT
-// segments) for the editor, the labels and the checks a run would make.
+// Datasets of the page: a bundled file served next to it (data/ds1–4.bin, data/smat2022.bin) or a
+// local .bin file, fetched or read once and decoded by the wasm module, with its info (tool
+// groups, routes, CQT segments, an AMHS layout's size) for the editor, the labels and the checks
+// a run would make.
 import { Dataset, Simulation } from "./pkg/fab_wasm.js";
 import { Failure, t } from "./i18n.js";
 
-export const BUNDLED = ["ds1", "ds2", "ds3", "ds4"];
+export const BUNDLED = ["ds1", "ds2", "ds3", "ds4", "smat2022"];
 /** Datasets by id, as promises: loads asked for together share one; a failed one is dropped. */
 const loaded = new Map();
 

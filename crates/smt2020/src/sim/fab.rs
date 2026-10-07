@@ -8,6 +8,7 @@ use des_core::{DAY, Model, Scheduler, Time};
 
 use super::code::{Code, CqtView, GroupCount, Hooks, LotView};
 use super::dispatch::Key;
+use super::logistics::Logistics;
 use super::plan::{Plan, releases_before};
 use super::record::{Entry, EventKind, Recorder, Recording, Records};
 use super::routes::Routes;
@@ -53,6 +54,11 @@ pub(super) enum Event {
     Wake(ToolGroupId),
     /// End of the reporting period with this index.
     PeriodEnd(usize),
+    /// A vehicle's next instant to act ([`Amhs`](super::amhs)); stale if its epoch moved on.
+    Vehicle {
+        vehicle: u32,
+        epoch: u32,
+    },
     /// [`DRAIN_LIMIT`] after the horizon: the run stops unfinished.
     Deadline,
 }
@@ -62,10 +68,13 @@ named_enum! {
     pub enum LotState {
         /// On the way to the step's tool group.
         Moving = "moving",
-        /// In the tool group's queue.
+        /// In the tool group's queue (with an AMHS also while assigned to a tool and on its way
+        /// there).
         Queued = "queued",
         /// In a job on a tool.
         Processing = "processing",
+        /// Past its last step, on its way out of the fab (AMHS).
+        Leaving = "leaving",
     }
 }
 
@@ -110,6 +119,10 @@ pub(super) struct LotTimes {
     pub arrived: Time,
     pub started: Time,
     pub visits: Vec<Visit>,
+    /// AMHS: time of the transports of the present step so far (request to drop-off), and when
+    /// the running one was requested.
+    pub moved: Time,
+    pub requested: Time,
 }
 
 pub(super) struct Reservation {
@@ -120,6 +133,7 @@ pub(super) struct Reservation {
 
 /// A lot queued at a tool group with everything its ranking reads, fixed on arrival: dispatching
 /// scans these entries instead of lots and route data.
+#[derive(Clone)]
 pub(super) struct Waiting {
     pub lot: LotId,
     pub route: RouteId,
@@ -197,7 +211,7 @@ pub(super) struct Group {
 
 impl Group {
     /// Integrates the queue length up to `now`, before it changes or is read.
-    fn integrate_queue(&mut self, now: Time) {
+    pub(super) fn integrate_queue(&mut self, now: Time) {
         self.queue_area += self.queue.len() as f64 * (now - self.queue_since) as f64;
         self.queue_since = now;
     }
@@ -221,7 +235,7 @@ pub(super) struct Fab {
     pub rng: Streams,
     pub lots: Vec<Lot>,
     /// Per lot, as `lots`.
-    times: Vec<LotTimes>,
+    pub times: Vec<LotTimes>,
     free: Vec<LotId>,
     serial: u64,
     pub tools: Vec<Tool>,
@@ -261,6 +275,8 @@ pub(super) struct Fab {
     pub order: Vec<ToolId>,
     recorder: Option<Recorder>,
     records: Records,
+    /// Ports, lots' FOUPs and the AMHS of a dataset with a layout.
+    pub logistics: Option<Logistics>,
 }
 
 impl Fab {
@@ -277,7 +293,21 @@ impl Fab {
             return Err(Error("the horizon must be positive".into()));
         }
         let strategy = Strategy::new(&data, config, flow_factors)?;
-        let routes = Routes::new(&data, &strategy.steppers);
+        let mut logistics = match (&data.layout, &config.amhs) {
+            (None, None) => None,
+            (None, Some(_)) => return Err(Error("the dataset has no AMHS layout".into())),
+            (Some(_), amhs) => Some(Logistics::new(&data, &amhs.clone().unwrap_or_default())?),
+        };
+        if let (Some(window), Some(logistics)) = (&recording.replay, &mut logistics) {
+            logistics.record(window);
+        }
+        let routes = Routes::new(
+            &data,
+            &strategy.steppers,
+            logistics
+                .as_ref()
+                .map(|logistics| logistics.skipped.as_slice()),
+        );
         let plan = Plan::new(&data, config.horizon, config.load)?;
         let recorder = Recorder::new(&data, recording)?;
 
@@ -390,6 +420,7 @@ impl Fab {
             order: Vec::new(),
             recorder,
             records: Records::default(),
+            logistics,
         })
     }
 
@@ -454,7 +485,7 @@ impl Fab {
     /// Records the event `entry` describes now, if recording events. The entry is made only
     /// then: unrecorded runs pay one check per event.
     #[inline]
-    fn log(&mut self, now: Time, entry: impl FnOnce(&Self) -> Entry) {
+    pub(super) fn log(&mut self, now: Time, entry: impl FnOnce(&Self) -> Entry) {
         if let Some(recorder) = &self.recorder {
             let entry = entry(self);
             recorder.event(&mut self.records, now, entry);
@@ -612,7 +643,15 @@ impl Fab {
         self.stats.wip(now, self.wip);
         self.days.wip(now, self.wip);
         self.wip += 1;
-        if spec.step.is_some() {
+        let skipped = match &self.logistics {
+            Some(logistics) => {
+                let skipped = logistics.skipped[self.group_of(id)];
+                self.place_released(id, spec.step.is_some(), now);
+                skipped
+            }
+            None => false,
+        };
+        if spec.step.is_some() && !skipped {
             // Initial WIP waits at its current step.
             sched.schedule_in(0, Event::Arrive(id));
         } else {
@@ -624,7 +663,14 @@ impl Fab {
     fn advance(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
         let steps = &self.data.routes[self.lots[id].route].steps;
         let mut step = self.lots[id].step;
-        while step < steps.len() && !self.rng.chance(Purpose::Sampling, steps[step].sampling) {
+        let skipped = self
+            .logistics
+            .as_ref()
+            .map(|logistics| logistics.skipped.as_slice());
+        while step < steps.len()
+            && (skipped.is_some_and(|skipped| skipped[steps[step].tool_group])
+                || !self.rng.chance(Purpose::Sampling, steps[step].sampling))
+        {
             step += 1;
         }
         // Tool group of the next processed step; none past the last step.
@@ -639,13 +685,20 @@ impl Fab {
             self.release_reservation(group, sched);
         }
         let Some(group) = next else {
-            self.complete(id, sched);
+            if self.logistics.is_some() {
+                // Out through a complete station; the status shows the last step.
+                self.lots[id].step = self.data.routes[self.lots[id].route].steps.len() - 1;
+                self.leave(id, sched);
+            } else {
+                self.complete(id, sched);
+            }
             return;
         };
         let to = self.data.tool_groups[group].location;
         let transport = self.lots[id]
             .location
-            .and_then(|from| self.transports[from * self.data.locations.len() + to]);
+            .and_then(|from| self.transports[from * self.data.locations.len() + to])
+            .filter(|_| self.logistics.is_none());
         let delay = transport.map_or(0, |time| self.rng.sample(Purpose::Transport, time));
         self.lots[id].state = LotState::Moving;
         self.count_segment(id, 1);
@@ -657,6 +710,7 @@ impl Fab {
         self.count_segment(id, -1);
         self.lots[id].state = LotState::Queued;
         self.times[id].arrived = now;
+        self.times[id].moved = 0;
         self.count_segment(id, 1);
         let group = self.group_of(id);
         self.log(now, |fab| Entry {
@@ -685,16 +739,30 @@ impl Fab {
         }
         self.groups[group].integrate_queue(now);
         self.groups[group].queue.push(waiting);
+        // AMHS: a tool of the group takes the lot at its port without a free one.
+        if self.logistics.is_some()
+            && let Some(tool) = self.standing_at(id)
+            && self.tools[tool].group == group
+        {
+            self.refresh(tool, sched);
+        }
         if let Some(reservation) = &self.groups[group].reservation
             && reservation.lot == id
             && let Some(tool) = reservation.tool
         {
             self.selected.clear();
             self.selected.push(id);
-            self.start_job(tool, sched);
+            if self.logistics.is_some() {
+                self.assign(tool, sched);
+            } else {
+                self.start_job(tool, sched);
+            }
             return;
         }
         self.dispatch(group, Some(id), sched);
+        if self.logistics.is_some() {
+            self.settle(id, sched);
+        }
     }
 
     /// Queue entry of a lot arriving at its step now.
@@ -755,8 +823,7 @@ impl Fab {
             return deadline;
         }
         let info = &self.routes.info[lot.route];
-        let steps = &self.data.routes[lot.route].steps;
-        let p = |k: usize| steps[k].sampling * info.step[k].at(lot.wafers);
+        let p = |k: usize| info.sampling[k] * info.step[k].at(lot.wafers);
         let ff = |k: usize| flow_factors[lot.route][k];
         let span = (segment.entry + 1..segment.exit)
             .map(|k| ff(k) * p(k))
@@ -767,7 +834,7 @@ impl Fab {
         segment.entered as f64 + segment.limit as f64 * share - p(lot.step)
     }
 
-    fn complete(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
+    pub(super) fn complete(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
         let now = sched.now();
         let lot = &mut self.lots[id];
         let cycle_time = now - lot.release;
@@ -804,43 +871,56 @@ impl Fab {
     pub(super) fn start_job(&mut self, tool_id: ToolId, sched: &mut Scheduler<Event>) {
         let now = sched.now();
         let lots = mem::take(&mut self.selected);
+        let group_id = self.group_of(lots[0]);
+        self.groups[group_id].integrate_queue(now);
+        self.groups[group_id]
+            .queue
+            .retain(|waiting| !lots.contains(&waiting.lot));
+        self.begin_job(tool_id, lots, true, sched);
+    }
+
+    /// Starts `lots` (one lot or a batch, out of the queue) on `tool`: selected just now
+    /// (`dispatched`), or assigned to the tool earlier and come to its ports (AMHS), whose
+    /// projected setup, run and campaign count were taken then.
+    pub(super) fn begin_job(
+        &mut self,
+        tool_id: ToolId,
+        lots: Vec<LotId>,
+        dispatched: bool,
+        sched: &mut Scheduler<Event>,
+    ) {
+        let now = sched.now();
         let head = &self.lots[lots[0]];
         let (route, step_index) = (head.route, head.step);
         let step = &self.data.routes[route].steps[step_index];
         let group_id = step.tool_group;
         let group = &self.data.tool_groups[group_id];
         let rule = group.rule;
-        self.groups[group_id].integrate_queue(now);
-        self.groups[group_id]
-            .queue
-            .retain(|waiting| !lots.contains(&waiting.lot));
 
         self.tools[tool_id].account(now);
         let current = self.tools[tool_id].setup;
+        let (next, run_left, sets_up) = after_job(
+            &self.data,
+            rule,
+            current,
+            self.tools[tool_id].run_left,
+            step.setup,
+        );
         let mut setup = 0;
-        if let Some(needed) = step.setup
-            && (needed.always || current != Some(needed.setup))
-        {
+        if sets_up {
+            let needed = step.setup.expect("a setup");
             let dist = needed
                 .time
                 .map(Dist::Constant)
                 .or_else(|| self.setup_dist(current, needed.setup));
             setup = dist.map_or(0, |dist| self.rng.sample(Purpose::Setup, dist));
-            if let Rule::SetupRun(setup_group) = rule
-                && current != Some(needed.setup)
-            {
-                // A new setup run must reach the group's minimum run length.
-                self.tools[tool_id].run_left = self.data.setup_groups[setup_group]
-                    .min_run
-                    .iter()
-                    .find(|run| run.0 == needed.setup)
-                    .map_or(0, |run| run.1);
-            }
-            self.tools[tool_id].setup = Some(needed.setup);
         }
-        if let Rule::SetupRun(_) = rule {
-            let tool = &mut self.tools[tool_id];
-            tool.run_left = tool.run_left.saturating_sub(1);
+        let tool = &mut self.tools[tool_id];
+        tool.setup = next;
+        tool.run_left = run_left;
+        if dispatched {
+            tool.next_setup = next;
+            tool.next_run_left = run_left;
         }
         let units = match step.unit {
             Unit::Wafer => lots.iter().map(|&id| self.lots[id].wafers).sum(),
@@ -855,6 +935,7 @@ impl Fab {
             unload: group.unload,
         };
         let dedicate_to = step.dedicate_to;
+        let moved = self.logistics.is_some();
 
         for &id in &lots {
             let lot = &mut self.lots[id];
@@ -865,10 +946,11 @@ impl Fab {
                 && segment.exit == step_index
             {
                 // The wait ends: the exit step's arrival and queue complete its visits.
+                let (transport, queue) = split_wait(times, lot.last_done, now, moved);
                 times.visits.push(Visit {
                     step: step_index,
-                    transport: times.arrived - lot.last_done,
-                    queue: now - times.arrived,
+                    transport,
+                    queue,
                     process: 0,
                 });
                 let violated = self.stats.cqt(
@@ -895,7 +977,8 @@ impl Fab {
                 lot.dedicated.retain(|&(step, _)| step != target);
                 lot.dedicated.push((target, tool_id));
             }
-            if lot.kind.engineering()
+            if dispatched
+                && lot.kind.engineering()
                 && self.groups[group_id].campaign > 0
                 && self.strategy.steppers[group_id]
             {
@@ -922,6 +1005,11 @@ impl Fab {
                 epoch,
             },
         );
+        self.log_tool_states(tool_id, now);
+        if !dispatched {
+            // The setups and runs after the assignments left, from the tool's new ones.
+            self.reproject(tool_id);
+        }
         // A tool with room left goes to the back of the ready queue.
         self.set_unready(tool_id);
         self.refresh(tool_id, sched);
@@ -960,9 +1048,19 @@ impl Fab {
             });
             self.finish_step(id, sched);
         }
+        if self.logistics.is_some() {
+            if self.data.tool_groups[group].batching.is_some() {
+                self.batch_done(tool_id, &lots, sched);
+            }
+            // A wafer-count PM fell due.
+            if !self.tools[tool_id].pm_pending.is_empty() {
+                self.release_assignments(tool_id, sched);
+            }
+        }
         self.selected = lots;
         self.selected.clear();
         self.tool_changed(tool_id, sched);
+        self.log_tool_states(tool_id, now);
     }
 
     fn finish_step(&mut self, id: LotId, sched: &mut Scheduler<Event>) {
@@ -977,14 +1075,18 @@ impl Fab {
             lot.step,
             (now - lot.last_done) as f64 / info.step[lot.step].at(lot.wafers),
         );
+        let moved = self.logistics.is_some();
         match &lot.segment {
             Some(segment) if segment.exit == lot.step => lot.segment = None,
-            Some(_) => times.visits.push(Visit {
-                step: lot.step,
-                transport: times.arrived - lot.last_done,
-                queue: times.started - times.arrived,
-                process: now - times.started,
-            }),
+            Some(_) => {
+                let (transport, queue) = split_wait(times, lot.last_done, times.started, moved);
+                times.visits.push(Visit {
+                    step: lot.step,
+                    transport,
+                    queue,
+                    process: now - times.started,
+                });
+            }
             None => {}
         }
         lot.last_done = now;
@@ -1019,6 +1121,9 @@ impl Fab {
         {
             self.start_pm(tool_id, sched);
         }
+        if self.logistics.is_some() {
+            self.try_start(tool_id, sched);
+        }
         self.refresh(tool_id, sched);
         if self.tools[tool_id].ready {
             self.dispatch(self.tools[tool_id].group, None, sched);
@@ -1027,9 +1132,14 @@ impl Fab {
 
     /// Lists an available tool in its group's ready queue (or holds it for a reservation), and
     /// unlists an unavailable one.
-    fn refresh(&mut self, tool_id: ToolId, sched: &mut Scheduler<Event>) {
+    pub(super) fn refresh(&mut self, tool_id: ToolId, sched: &mut Scheduler<Event>) {
         let tool = &self.tools[tool_id];
-        if !tool.available() || tool.held {
+        let available = if self.logistics.is_some() {
+            self.assignable(tool_id)
+        } else {
+            tool.available()
+        };
+        if !available || tool.held {
             self.set_unready(tool_id);
             return;
         }
@@ -1049,7 +1159,7 @@ impl Fab {
         }
     }
 
-    fn set_unready(&mut self, tool_id: ToolId) {
+    pub(super) fn set_unready(&mut self, tool_id: ToolId) {
         let tool = &mut self.tools[tool_id];
         if tool.ready {
             tool.ready = false;
@@ -1081,9 +1191,13 @@ impl Fab {
                 breakdown,
             },
         );
+        self.log_tool_states(tool_id, now);
         self.log_tool(now, EventKind::Down, tool_id);
         self.unhold(tool_id);
         self.refresh(tool_id, sched);
+        if self.logistics.is_some() {
+            self.release_assignments(tool_id, sched);
+        }
     }
 
     fn repair(&mut self, tool_id: ToolId, breakdown: usize, sched: &mut Scheduler<Event>) {
@@ -1113,6 +1227,7 @@ impl Fab {
             }
         }
         self.tool_changed(tool_id, sched);
+        self.log_tool_states(tool_id, now);
     }
 
     fn pm_due(&mut self, tool_id: ToolId, pm: usize, sched: &mut Scheduler<Event>) {
@@ -1121,6 +1236,9 @@ impl Fab {
             sched.schedule_in(interval, Event::PmDue { tool: tool_id, pm });
         }
         self.tools[tool_id].request_pm(pm);
+        if self.logistics.is_some() {
+            self.release_assignments(tool_id, sched);
+        }
         self.tool_changed(tool_id, sched);
     }
 
@@ -1134,6 +1252,7 @@ impl Fab {
             Event::PmDone(tool_id),
         );
         self.log_tool(sched.now(), EventKind::PmStart, tool_id);
+        self.log_tool_states(tool_id, sched.now());
         self.unhold(tool_id);
     }
 
@@ -1146,6 +1265,7 @@ impl Fab {
             self.fail(tool_id, breakdown, sched);
         }
         self.tool_changed(tool_id, sched);
+        self.log_tool_states(tool_id, sched.now());
     }
 
     // ---- super hot lot reservations ----
@@ -1184,15 +1304,22 @@ impl Fab {
             .expect("reservation");
         reservation.tool = Some(tool);
         let lot = reservation.lot;
-        if self.lots[lot].state == LotState::Queued && self.group_of(lot) == group {
+        if self.lots[lot].state == LotState::Queued
+            && self.group_of(lot) == group
+            && self.assigned_tool(lot).is_none()
+        {
             self.selected.clear();
             self.selected.push(lot);
-            self.start_job(tool, sched);
+            if self.logistics.is_some() {
+                self.assign(tool, sched);
+            } else {
+                self.start_job(tool, sched);
+            }
         }
     }
 
     /// A held tool that goes down or into PM stops waiting; the reservation waits for another.
-    fn unhold(&mut self, tool: ToolId) {
+    pub(super) fn unhold(&mut self, tool: ToolId) {
         if mem::take(&mut self.tools[tool].held) {
             let group = &mut self.groups[self.tools[tool].group];
             group.reservation.as_mut().expect("reservation").tool = None;
@@ -1320,13 +1447,24 @@ impl Fab {
             tool.account(now);
         }
         self.stats.wip(now, self.wip);
+        let amhs = self
+            .logistics
+            .as_mut()
+            .map(|logistics| logistics.system.report(now));
         if report {
-            self.reports.push(
-                self.stats
-                    .report(name, now, &self.data, &self.routes, &self.tools),
-            );
+            self.reports.push(self.stats.report(
+                name,
+                now,
+                &self.data,
+                &self.routes,
+                &self.tools,
+                amhs,
+            ));
         }
         if reset {
+            if let Some(logistics) = &mut self.logistics {
+                logistics.system.reset();
+            }
             self.stats.reset(now);
             for tool in &mut self.tools {
                 tool.time = [0; STATES];
@@ -1377,13 +1515,17 @@ impl Model for Fab {
             sched.schedule_at(period.end, Event::PeriodEnd(index));
         }
         sched.schedule_at(self.horizon + DRAIN_LIMIT, Event::Deadline);
+        if let Some(logistics) = &mut self.logistics {
+            logistics.system.init(sched);
+        }
     }
 
     fn handle(&mut self, event: Event, sched: &mut Scheduler<Event>) {
-        // Days end before the first event at or after their end.
+        // Days end before the first event at or after their end, a replay's window begins so.
         while sched.now() >= self.days.end {
             self.close_day(self.days.end);
         }
+        self.begin_replay(sched.now());
         match event {
             Event::Stream(index) => self.release_stream(index, sched),
             Event::Listed => self.release_listed(sched),
@@ -1401,6 +1543,7 @@ impl Model for Fab {
                 self.dispatch(group, None, sched);
             }
             Event::PeriodEnd(index) => self.period_end(index, sched),
+            Event::Vehicle { vehicle, epoch } => self.vehicle_event(vehicle, epoch, sched),
             // A finished run stops before its deadline.
             Event::Deadline => sched.stop(),
         }
@@ -1425,8 +1568,50 @@ impl Model for Fab {
             }
             self.fewer = fewer;
         }
-        if self.code_failure.is_some() {
+        if self.code_failure.is_some() || self.amhs_failure().is_some() {
             sched.stop();
         }
+    }
+}
+
+/// A tool's setup and lots left in its setup run after a job needing `needed` under `rule`, from
+/// `setup` and `run_left`, and whether the job sets the tool up: a new setup run must reach the
+/// group's minimum run length (`rule_LSSU`).
+pub(super) fn after_job(
+    data: &Dataset,
+    rule: Rule,
+    setup: Option<SetupId>,
+    run_left: u32,
+    needed: Option<StepSetup>,
+) -> (Option<SetupId>, u32, bool) {
+    let (mut next, mut run_left) = (setup, run_left);
+    let sets_up = needed.is_some_and(|needed| needed.always || setup != Some(needed.setup));
+    if sets_up {
+        let needed = needed.expect("a setup");
+        if let Rule::SetupRun(setup_group) = rule
+            && setup != Some(needed.setup)
+        {
+            run_left = data.setup_groups[setup_group]
+                .min_run
+                .iter()
+                .find(|run| run.0 == needed.setup)
+                .map_or(0, |run| run.1);
+        }
+        next = Some(needed.setup);
+    }
+    if let Rule::SetupRun(_) = rule {
+        run_left = run_left.saturating_sub(1);
+    }
+    (next, run_left, sets_up)
+}
+
+/// Transport and queue time of a step's wait from the end of the previous step `done` to `start`:
+/// up to the arrival in the queue and after it, or with an AMHS (`moved`) the transports' time
+/// and the rest.
+fn split_wait(times: &LotTimes, done: Time, start: Time, moved: bool) -> (Time, Time) {
+    if moved {
+        (times.moved, start - done - times.moved)
+    } else {
+        (times.arrived - done, start - times.arrived)
     }
 }

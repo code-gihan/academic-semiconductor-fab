@@ -5,6 +5,7 @@ use des_core::Time;
 use serde::Serialize;
 
 use crate::data::{Dataset, Rule};
+use crate::layout::PortKind;
 use crate::sim::{Criterion, STEPPERS};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -16,6 +17,20 @@ pub struct DatasetInfo {
     /// CQT segments in route and step order ([`Dataset::segments`]).
     pub segments: Vec<SegmentInfo>,
     pub periods: Vec<PeriodInfo>,
+    /// The AMHS layout's size; none without one.
+    pub layout: Option<LayoutInfo>,
+}
+
+/// An AMHS layout's size: its vehicles, bays, rails (with their length, m) and ports.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LayoutInfo {
+    pub vehicles: usize,
+    pub bays: usize,
+    pub rails: usize,
+    pub rail_length: f64,
+    pub zones: usize,
+    pub tool_ports: usize,
+    pub buffers: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -155,6 +170,20 @@ impl Dataset {
                     reset: period.reset,
                 })
                 .collect(),
+            layout: self.layout.as_ref().map(|layout| {
+                let ports = |role: fn(&PortKind) -> bool| {
+                    layout.ports.iter().filter(|port| role(&port.kind)).count()
+                };
+                LayoutInfo {
+                    vehicles: layout.vehicles.len(),
+                    bays: layout.bays.len(),
+                    rails: layout.links.len(),
+                    rail_length: layout.links.iter().map(|link| link.length).sum::<f64>() / 1_000.0,
+                    zones: layout.zones.len(),
+                    tool_ports: ports(|kind| matches!(kind, PortKind::Tool(_))),
+                    buffers: ports(|kind| matches!(kind, PortKind::Buffer(_))),
+                }
+            }),
         }
     }
 }

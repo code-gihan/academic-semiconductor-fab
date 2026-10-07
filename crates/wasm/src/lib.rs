@@ -8,11 +8,13 @@ mod code;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use js_sys::Function;
+use js_sys::{Array, Float64Array, Function, Object, Reflect, Uint8Array, Uint32Array};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use smt2020::report::{self, Comparison, Summary};
-use smt2020::sim::{self, Recording, Results};
+use smt2020::sim::{
+    self, Activity, FoupPlace, Frame, LotKind, Player, Recording, Replay, Results, ToolState,
+};
 use wasm_bindgen::prelude::*;
 
 /// A decoded dataset file, shared by the simulations of it.
@@ -32,6 +34,12 @@ impl Dataset {
     /// Its areas, tool groups, parts, routes, CQT segments and periods, by name and index.
     pub fn info(&self) -> Result<JsValue, JsValue> {
         to_js(&self.0.info())
+    }
+
+    /// Its AMHS layout for drawing (mm): nodes, rails, bays, tool and station footprints and port
+    /// points; null without one.
+    pub fn layout(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.0.layout.as_ref().map(|layout| layout.drawing()))
     }
 }
 
@@ -151,10 +159,131 @@ impl Simulation {
         to_js(&self.0.segments())
     }
 
+    /// The AMHS: its vehicles, the FOUPs at ports, in commit stations and in batch tools, the
+    /// ports kept for FOUPs on their way, every tool's state and the transports waiting for a
+    /// vehicle; null without a layout.
+    pub fn amhs(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.0.amhs())
+    }
+
+    /// The AMHS replay recorded so far (`recording.replay`) in its compact form (a Uint8Array) for
+    /// a `ReplayPlayer`; null without one or before its window began.
+    pub fn replay(&self) -> JsValue {
+        self.0.replay().map_or(JsValue::NULL, |replay| {
+            Uint8Array::from(replay.bytes()).into()
+        })
+    }
+
     /// Results of the finished run.
     pub fn results(&self) -> Result<JsValue, JsValue> {
         to_js(&self.0.results().map_err(error)?)
     }
+}
+
+/// Plays a replay (`Simulation.replay()`) on the dataset it was recorded on: the fab at any
+/// instant of its window.
+#[wasm_bindgen]
+pub struct ReplayPlayer {
+    player: Player,
+    frame: Frame,
+    /// The names of activities, lot kinds, FOUP places and tool states, made once.
+    activities: Vec<JsValue>,
+    kinds: Vec<JsValue>,
+    places: Vec<JsValue>,
+    states: Vec<JsValue>,
+}
+
+#[wasm_bindgen]
+impl ReplayPlayer {
+    /// Reads and checks `replay`, recorded on `dataset`.
+    #[wasm_bindgen(constructor)]
+    pub fn new(dataset: &Dataset, replay: Vec<u8>) -> Result<ReplayPlayer, JsValue> {
+        let replay = Replay::from_bytes(replay).map_err(error)?;
+        let player = Player::new(Arc::clone(&dataset.0), replay).map_err(error)?;
+        let names = |names: Vec<&str>| names.into_iter().map(JsValue::from_str).collect();
+        Ok(Self {
+            player,
+            frame: Frame::default(),
+            activities: names(Activity::ALL.iter().map(|each| each.name()).collect()),
+            kinds: names(LotKind::ALL.iter().map(|each| each.name()).collect()),
+            places: names(FoupPlace::ALL.iter().map(|each| each.name()).collect()),
+            states: names(ToolState::ALL.iter().map(|each| each.name()).collect()),
+        })
+    }
+
+    /// Its window: `{from, until}` (ms).
+    pub fn window(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.player.window())
+    }
+
+    /// The fab at `time` (ms, within the window) in the core's schema, its number columns as
+    /// typed arrays: `{time, vehicles: {x, y, heading, speed, activity}, foups: {lot, kind,
+    /// place, index}, tools, delivered, tool_to_tool, carried}`.
+    pub fn frame(&mut self, time: f64) -> Result<JsValue, JsValue> {
+        self.player.frame_into(time, &mut self.frame);
+        let frame = &self.frame;
+        let floats = |column: &[f64]| JsValue::from(Float64Array::from(column));
+        let vehicles = &frame.vehicles;
+        let foups = &frame.foups;
+        let lots: Vec<f64> = foups.lot.iter().map(|&lot| lot as f64).collect();
+        // Enum variants are in their declaration order, as their names.
+        object(&[
+            ("time", JsValue::from_f64(frame.time)),
+            (
+                "vehicles",
+                object(&[
+                    ("x", floats(&vehicles.x)),
+                    ("y", floats(&vehicles.y)),
+                    ("heading", floats(&vehicles.heading)),
+                    ("speed", floats(&vehicles.speed)),
+                    (
+                        "activity",
+                        named(&vehicles.activity, &self.activities, |each| each as usize),
+                    ),
+                ])?,
+            ),
+            (
+                "foups",
+                object(&[
+                    ("lot", floats(&lots)),
+                    (
+                        "kind",
+                        named(&foups.kind, &self.kinds, |each| each as usize),
+                    ),
+                    (
+                        "place",
+                        named(&foups.place, &self.places, |each| each as usize),
+                    ),
+                    ("index", Uint32Array::from(&foups.index[..]).into()),
+                ])?,
+            ),
+            (
+                "tools",
+                named(&frame.tools, &self.states, |each| each as usize),
+            ),
+            ("delivered", JsValue::from_f64(frame.delivered as f64)),
+            ("tool_to_tool", JsValue::from_f64(frame.tool_to_tool as f64)),
+            ("carried", JsValue::from_f64(frame.carried)),
+        ])
+    }
+}
+
+/// An array of the names of `values`, each by its `index` among `names`.
+fn named<T: Copy>(values: &[T], names: &[JsValue], index: impl Fn(T) -> usize) -> JsValue {
+    let array = Array::new();
+    for &value in values {
+        array.push(&names[index(value)]);
+    }
+    array.into()
+}
+
+/// A plain object of `fields`.
+fn object(fields: &[(&str, JsValue)]) -> Result<JsValue, JsValue> {
+    let object = Object::new();
+    for (name, value) in fields {
+        Reflect::set(&object, &JsValue::from_str(name), value)?;
+    }
+    Ok(object.into())
 }
 
 /// Measures of results of one configuration's replications, with their means and 95%

@@ -3,6 +3,7 @@
 use des_core::Time;
 use serde::Serialize;
 
+use super::amhs::{AmhsReport, VehicleStatus};
 use super::fab::{Fab, LotState};
 use super::stats::{CqtReport, LotKind};
 use super::tool::{STATES, ToolState};
@@ -27,10 +28,51 @@ pub struct LotStatus {
     pub state: LotState,
     /// The tool processing the lot ([`ToolStatus::id`]).
     pub tool: Option<usize>,
+    /// AMHS: the port its FOUP stands at (a commit station's while in it) and the vehicle
+    /// carrying it ([`VehicleStatus::id`](super::VehicleStatus::id)).
+    pub port: Option<usize>,
+    pub vehicle: Option<usize>,
     /// The CQT segment the lot is in, until its exit step ends: that step's index and the latest
     /// start of it within the limit.
     pub cqt_exit: Option<usize>,
     pub cqt_deadline: Option<Time>,
+}
+
+/// The AMHS for drawing it: its vehicles, the FOUPs at ports, in commit stations and in batch
+/// tools, the ports kept for FOUPs on their way, every tool's state, and the transports waiting
+/// for a vehicle.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AmhsStatus {
+    pub vehicles: Vec<VehicleStatus>,
+    /// FOUPs at ports of tools and track buffers, by port.
+    pub foups: Vec<FoupStatus>,
+    /// Ports kept for a FOUP on its way, in order.
+    pub kept: Vec<usize>,
+    /// FOUPs in commit stations, waiting for their first transport, by the station's port.
+    pub committed: Vec<FoupCount>,
+    /// FOUPs in batch tools, by tool ([`ToolStatus::id`]).
+    pub inside: Vec<FoupCount>,
+    /// Every tool's state, by id.
+    pub tools: Vec<ToolState>,
+    /// Transports waiting for a vehicle.
+    pub backlog: usize,
+    /// The AMHS measures of the reporting window so far.
+    pub report: AmhsReport,
+}
+
+/// A FOUP at a port: its lot ([`LotStatus::id`]) and the lot's kind.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FoupStatus {
+    pub port: usize,
+    pub lot: u64,
+    pub kind: LotKind,
+}
+
+/// FOUPs in a station or tool.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct FoupCount {
+    pub at: usize,
+    pub foups: u32,
 }
 
 /// A tool.
@@ -103,10 +145,11 @@ impl Fab {
             .lots
             .iter()
             .zip(processing)
-            .filter(|(lot, _)| lot.alive)
-            .map(|(lot, tool)| {
+            .enumerate()
+            .filter(|(_, (lot, _))| lot.alive)
+            .map(|(id, (lot, tool))| {
                 let step = &self.data.routes[lot.route].steps[lot.step];
-                LotStatus {
+                let mut status = LotStatus {
                     id: lot.serial,
                     part: self.data.parts[lot.part].name.clone(),
                     kind: lot.kind,
@@ -124,7 +167,11 @@ impl Fab {
                         .segment
                         .as_ref()
                         .map(|segment| segment.entered + segment.limit),
-                }
+                    port: None,
+                    vehicle: None,
+                };
+                self.lot_place(id, &mut status);
+                status
             })
             .collect();
         lots.sort_unstable_by_key(|lot| lot.id);

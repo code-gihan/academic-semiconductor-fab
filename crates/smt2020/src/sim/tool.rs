@@ -83,6 +83,10 @@ pub(super) struct Tool {
     pub setup: Option<SetupId>,
     /// Lots still due in the current setup run (`rule_LSSU`).
     pub run_left: u32,
+    /// The setup and run after the lots assigned to the tool and not yet begun (dispatching
+    /// ranks by them); the present ones without such lots.
+    pub next_setup: Option<SetupId>,
+    pub next_run_left: u32,
     /// One job, or two on a cascading tool.
     pub jobs: [Job; 2],
     /// Cascading tools: when the first and the second slot become free.
@@ -131,6 +135,8 @@ impl Tool {
             cascading,
             setup: None,
             run_left: 0,
+            next_setup: None,
+            next_run_left: 0,
             jobs: Default::default(),
             slots_free: [0; 2],
             breakdowns: 0,
@@ -248,6 +254,23 @@ impl Tool {
     /// State now; `now` must not precede the last event of the tool.
     pub(super) fn state(&self, now: Time) -> ToolState {
         self.state_at(now).0
+    }
+
+    /// The states from `now` on as of the tool's current jobs and outages: each from its time on,
+    /// the first at `now`.
+    pub(super) fn timeline(&self, now: Time) -> Vec<(Time, ToolState)> {
+        let mut changes: Vec<(Time, ToolState)> = Vec::new();
+        let mut at = now;
+        loop {
+            let (state, change) = self.state_at(at);
+            if changes.last().is_none_or(|&(_, last)| last != state) {
+                changes.push((at, state));
+            }
+            if change == Time::MAX {
+                return changes;
+            }
+            at = change;
+        }
     }
 
     /// State at `t` and when it changes next, as of the tool's current jobs and outages.

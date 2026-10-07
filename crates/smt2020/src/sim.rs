@@ -7,11 +7,14 @@
 //! bindings: times are ms (fractional times round to whole ms), omitted configuration fields take
 //! their defaults.
 
+mod amhs;
 mod code;
 mod dispatch;
 mod fab;
+mod logistics;
 mod plan;
 mod record;
+mod replay;
 mod routes;
 mod stats;
 mod status;
@@ -31,14 +34,22 @@ use crate::data::{Dataset, Rank};
 use fab::Fab;
 use strategy::Strategy;
 
+pub use amhs::{
+    Activity, AmhsConfig, AmhsReport, BAY_DISTANCE_CLASSES, BayDistance, Dispatch, Moves,
+    VehicleStatus, VehicleTimes,
+};
 pub use code::{Admit, BatchView, Code, CqtView, GroupCount, Hooks, LotView, SegmentView, Start};
 pub use fab::LotState;
 pub use record::{EventFilter, EventKind, Events, Recording, Records, ToolGroupDays, Violations};
+pub use replay::{FoupFrames, FoupPlace, Frame, Player, Replay, ReplayWindow, VehicleFrames};
 pub use stats::{
     CqtReport, CqtSegmentReport, CqtStepReport, CqtTimes, DayReport, FLOW_FACTOR_PERCENTILES,
     FlowFactors, LotKind, LotReport, PeriodReport, Results, StateTimes, ToolGroupReport,
 };
-pub use status::{LotStatus, SegmentLot, SegmentStatus, ToolGroupStatus, ToolStatus};
+pub use status::{
+    AmhsStatus, FoupCount, FoupStatus, LotStatus, SegmentLot, SegmentStatus, ToolGroupStatus,
+    ToolStatus,
+};
 pub use strategy::MAX_CRITERIA;
 pub(crate) use strategy::STEPPERS;
 pub use tool::ToolState;
@@ -90,6 +101,10 @@ pub struct Config {
     pub stopping: Option<Stopping>,
     #[serde(default)]
     pub engineering: EngineeringRule,
+    /// AMHS settings of a dataset with a layout, which always runs its AMHS (the defaults
+    /// without them); none for a dataset without one.
+    #[serde(default)]
+    pub amhs: Option<AmhsConfig>,
 }
 
 impl Config {
@@ -108,6 +123,7 @@ impl Config {
             batch_start_within: None,
             stopping: None,
             engineering: EngineeringRule::Base,
+            amhs: None,
         }
     }
 
@@ -569,8 +585,12 @@ impl Simulation {
                 observe(&Progress::of(fab, now, pass, passes, horizon))
             });
             let fab = self.engine.model();
-            if let Some(failure) = fab.code_failure() {
-                let failure = Error(format!("strategy code: {failure}"));
+            let failure = fab
+                .code_failure()
+                .map(|failure| format!("strategy code: {failure}"))
+                .or_else(|| fab.amhs_failure().map(str::to_owned));
+            if let Some(failure) = failure {
+                let failure = Error(failure);
                 self.failure = Some(failure.clone());
                 return Err(failure);
             }
@@ -631,6 +651,17 @@ impl Simulation {
     /// Every CQT segment, in [`DatasetInfo::segments`](crate::DatasetInfo::segments) order.
     pub fn segments(&self) -> Vec<SegmentStatus> {
         self.engine.model().segment_statuses(self.engine.now())
+    }
+
+    /// The AMHS: its vehicles, FOUPs and tool states; none without a layout.
+    pub fn amhs(&self) -> Option<AmhsStatus> {
+        self.engine.model().amhs_status(self.engine.now())
+    }
+
+    /// The AMHS replay recorded so far ([`Recording::replay`]), up to its window's end or the
+    /// simulation time; none without one or before its window began.
+    pub fn replay(&self) -> Option<Replay> {
+        self.engine.model().replay(self.engine.now())
     }
 
     /// Results of the finished run.
@@ -696,7 +727,9 @@ mod tests {
                 "ranking": {"Etch_1": [{"qt_within": 3600000.4}, "priority", "fifo"]},
                 "batch_start_within": 1800000,
                 "stopping": {"limits": {"LithoTrack_FE_95": {"front": 50, "total": 85}}},
-                "engineering": {"cate": {"production": 544320000.0000001, "engineering": 6.048e7}}}"#,
+                "engineering": {"cate": {"production": 544320000.0000001, "engineering": 6.048e7}},
+                "amhs": {"vehicles": 300, "dispatch": "bay", "look_ahead": 1, "hoist": 8000.4,
+                         "max_speed": 3000}}"#,
         )
         .unwrap();
         assert_eq!(
@@ -733,6 +766,14 @@ mod tests {
                     production: 544_320_000,
                     engineering: 60_480_000,
                 },
+                amhs: Some(AmhsConfig {
+                    vehicles: Some(300),
+                    dispatch: Dispatch::Bay,
+                    look_ahead: Some(1),
+                    hoist: 8_000,
+                    max_speed: Some(3_000.0),
+                    ..AmhsConfig::default()
+                }),
             }
         );
         // The serialized form reads back as it is.
@@ -1070,6 +1111,7 @@ mod tests {
                 tool_groups: Vec::new(),
                 lots: Vec::new(),
             }),
+            replay: None,
         }
     }
 

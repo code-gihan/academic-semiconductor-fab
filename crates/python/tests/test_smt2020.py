@@ -406,5 +406,65 @@ class SimulationTest(unittest.TestCase):
         )
 
 
+class AmhsTest(unittest.TestCase):
+    def test_the_smat2022_layout_and_amhs_show_where_vehicles_and_foups_are(self):
+        dataset = smt2020.load_dataset("smat2022")
+        layout = dataset.layout()
+        self.assertEqual((len(layout["rails"]), len(layout["ports"])), (3424, 22120))
+        self.assertIsNone(smt2020.load_dataset("ds1").layout())
+        simulation = smt2020.Simulation(dataset, {"horizon": 730 * DAY, "amhs": {"vehicles": 300}})
+        simulation.run(until=HOUR)
+        amhs = simulation.amhs()
+        self.assertEqual(len(amhs["vehicles"]), 300)
+        tools = sum(group["tools"] for group in dataset.info()["tool_groups"])
+        self.assertEqual(len(amhs["tools"]), tools)
+        lots = simulation.lots()
+        carried = sorted(vehicle["lot"] for vehicle in amhs["vehicles"] if vehicle["lot"] is not None)
+        self.assertEqual(carried, [lot["id"] for lot in lots if lot["vehicle"] is not None])
+        at_ports = {lot["id"] for lot in lots if lot["port"] is not None}
+        self.assertTrue({foup["lot"] for foup in amhs["foups"]} <= at_ports)
+        ds1 = smt2020.load_dataset("ds1")
+        self.assertIsNone(smt2020.Simulation(ds1, {"horizon": DAY}).amhs())
+        with self.assertRaisesRegex(ValueError, "no AMHS layout"):
+            smt2020.Simulation(ds1, {"horizon": DAY, "amhs": {}})
+
+    def test_a_recorded_replay_plays_every_vehicle_foup_and_tool_as_the_run_had_them(self):
+        dataset = smt2020.load_dataset("smat2022")
+        config = {"horizon": 730 * DAY, "amhs": {"vehicles": 200}}
+        start, end = HOUR // 2, HOUR
+        recorded = smt2020.Simulation(dataset, config, {"replay": {"from": start, "until": end}})
+        self.assertIsNone(recorded.replay())
+        recorded.run(until=end)
+        replay = recorded.replay()
+        self.assertIsInstance(replay, bytes)
+        player = smt2020.ReplayPlayer(dataset, replay)
+        self.assertEqual(player.window(), {"from": start, "until": end})
+        plain = smt2020.Simulation(dataset, config)
+        seen = []
+        for at in range(start, end, 61_373):
+            plain.run(until=at)
+            seen.append((at, plain.amhs()))
+        # Played forward, then sought backward.
+        for at, amhs in seen + seen[::-1]:
+            frame = player.frame(at)
+            vehicles, foups = frame["vehicles"], frame["foups"]
+            self.assertEqual(len(vehicles["x"]), len(amhs["vehicles"]))
+            for id, vehicle in enumerate(amhs["vehicles"]):
+                off = math.hypot(vehicle["x"] - vehicles["x"][id], vehicle["y"] - vehicles["y"][id])
+                self.assertLess(off, 1.1e-3, f"vehicle {id} at {at}")
+                self.assertEqual(vehicles["activity"][id], vehicle["activity"])
+            at_ports = {
+                lot: index
+                for lot, place, index in zip(foups["lot"], foups["place"], foups["index"])
+                if place == "port"
+            }
+            self.assertEqual(at_ports, {foup["lot"]: foup["port"] for foup in amhs["foups"]})
+            self.assertEqual(frame["tools"], amhs["tools"])
+        with self.assertRaisesRegex(ValueError, "corrupt replay"):
+            smt2020.ReplayPlayer(dataset, replay[: len(replay) // 2])
+        with self.assertRaisesRegex(ValueError, "no AMHS layout"):
+            smt2020.ReplayPlayer(smt2020.load_dataset("ds1"), replay)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,8 @@
 // Views of the page, one shown at a time. The location hash names it (#home, #setup, #run,
-// #analysis, #compare, #python), so links, bookmarks and the back button switch views; any other
-// hash is an anchor within the shown view, and none is the Home view. Reacts to hashchange only.
-const VIEWS = ["home", "setup", "run", "analysis", "compare", "python"];
+// #layout, #analysis, #compare, #python), so links, bookmarks and the back button switch views;
+// any other hash is an anchor within the shown view, and none is the Home view. Reacts to
+// hashchange only.
+const VIEWS = ["home", "setup", "run", "layout", "analysis", "compare", "python"];
 let shown = null;
 let onShow = () => {};
 

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   Dataset,
+  ReplayPlayer,
   Simulation,
   compare,
   comparisonCsv,
@@ -163,7 +164,11 @@ test("recording leaves the results unchanged and accounts for them", () => {
     events: { from: DAY, until: 2 * DAY, tool_groups: [info.tool_groups[0].name] },
   };
   const simulation = new Simulation(dataset, config, recording);
-  assert.deepEqual(simulation.recording(), { ...recording, events: { ...recording.events, lots: [] } });
+  assert.deepEqual(simulation.recording(), {
+    ...recording,
+    events: { ...recording.events, lots: [] },
+    replay: null,
+  });
   const progress = simulation.run();
   const recorded = simulation.results();
   assert.equal(digest(recorded), digest(results));
@@ -336,4 +341,67 @@ test("strategy code errors stop the run", () => {
   const strategy = new Strategy();
   new Simulation(dataset, ranked, null, strategy).run(DAY);
   assert.ok(strategy.calls > 0);
+});
+
+test("the SMAT2022 layout and AMHS show where vehicles and FOUPs are", () => {
+  const smat = new Dataset(readFileSync(new URL("www/data/smat2022.bin", root)));
+  const layout = smat.layout();
+  assert.equal(layout.rails.length, 3424);
+  assert.equal(layout.ports.length, 22120);
+  assert.equal(dataset.layout(), null);
+  const simulation = new Simulation(smat, { horizon: 730 * DAY, amhs: { vehicles: 300 } });
+  simulation.run(HOUR);
+  const amhs = simulation.amhs();
+  assert.equal(amhs.vehicles.length, 300);
+  assert.equal(amhs.tools.length, smat.info().tool_groups.reduce((sum, group) => sum + group.tools, 0));
+  const lots = simulation.lots();
+  const carried = amhs.vehicles.flatMap((vehicle) => (vehicle.lot == null ? [] : [vehicle.lot]));
+  assert.deepEqual(
+    carried.sort((a, b) => a - b),
+    lots.filter((lot) => lot.vehicle != null).map((lot) => lot.id),
+  );
+  const atPorts = new Set(lots.filter((lot) => lot.port != null).map((lot) => lot.id));
+  assert.ok(amhs.foups.every((foup) => atPorts.has(foup.lot)));
+  assert.equal(new Simulation(dataset, config).amhs(), null);
+  assert.throws(() => new Simulation(dataset, { ...config, amhs: {} }), /no AMHS layout/);
+  smat.free();
+});
+
+test("a recorded replay plays every vehicle, FOUP and tool as the run had them", () => {
+  const smat = new Dataset(readFileSync(new URL("www/data/smat2022.bin", root)));
+  const config = { horizon: 730 * DAY, amhs: { vehicles: 200 } };
+  const [from, until] = [HOUR / 2, HOUR];
+  const recorded = new Simulation(smat, config, { replay: { from, until } });
+  assert.equal(recorded.replay(), null);
+  recorded.run(until);
+  const bytes = recorded.replay();
+  assert.ok(bytes instanceof Uint8Array);
+  const player = new ReplayPlayer(smat, bytes);
+  assert.deepEqual(player.window(), { from, until });
+  const plain = new Simulation(smat, config);
+  const seen = [];
+  for (let at = from; at < until; at += 61_373) {
+    plain.run(at);
+    seen.push([at, plain.amhs()]);
+  }
+  // Played forward, then sought backward.
+  for (const [at, amhs] of [...seen, ...[...seen].reverse()]) {
+    const frame = player.frame(at);
+    const { vehicles, foups } = frame;
+    assert.equal(frame.time, at);
+    assert.equal(vehicles.x.length, amhs.vehicles.length);
+    amhs.vehicles.forEach((vehicle, id) => {
+      const off = Math.hypot(vehicle.x - vehicles.x[id], vehicle.y - vehicles.y[id]);
+      assert.ok(off < 1.1e-3, `vehicle ${id} at ${at}: ${off} mm off`);
+      assert.equal(vehicles.activity[id], vehicle.activity);
+    });
+    const atPorts = [...foups.lot].flatMap((lot, row) =>
+      foups.place[row] === "port" ? [[lot, foups.index[row]]] : [],
+    );
+    assert.deepEqual(new Map(atPorts), new Map(amhs.foups.map((foup) => [foup.lot, foup.port])));
+    assert.deepEqual(frame.tools, amhs.tools);
+  }
+  assert.throws(() => new ReplayPlayer(smat, bytes.slice(0, bytes.length >> 1)), /corrupt replay/);
+  assert.throws(() => new ReplayPlayer(dataset, bytes), /no AMHS layout/);
+  for (const each of [player, recorded, plain, smat]) each.free();
 });

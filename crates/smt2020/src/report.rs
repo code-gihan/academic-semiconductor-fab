@@ -5,10 +5,12 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
-use des_core::{DAY, HOUR};
+use des_core::{DAY, HOUR, SECOND, Time};
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{CqtReport, CqtTimes, Error, LotKind, PeriodReport, Results, StateTimes};
+use crate::sim::{
+    AmhsReport, CqtReport, CqtTimes, Error, LotKind, PeriodReport, Results, StateTimes,
+};
 
 named_enum! {
     /// What a measure describes.
@@ -29,12 +31,17 @@ named_enum! {
         CqtSegment = "cqt_segment",
         /// A step of a CQT segment (item `route:entry-exit:step`).
         CqtStep = "cqt_step",
+        /// The AMHS of a dataset with a layout; no item.
+        Amhs = "amhs",
+        /// Loaded drives of a bay distance (\[SMAT2022\] Table 4; item `0`–`9`, `10+`, or
+        /// `other` for drives with an end outside the intrabays).
+        BayDistance = "bay_distance",
     }
 }
 
 named_enum! {
-    /// Measures; the name's suffix is the unit: `_pct` percent, `_d` days, `_h` hours, otherwise
-    /// counts, lots or ratios.
+    /// Measures; the name's suffix is the unit: `_pct` percent, `_d` days, `_h` hours, `_s`
+    /// seconds, otherwise counts, lots or ratios.
     pub enum Measure {
         /// Lots released in the window.
         Started = "started",
@@ -92,6 +99,21 @@ named_enum! {
         TransportVlH = "transport_vl_h",
         QueueVlH = "queue_vl_h",
         ProcessVlH = "process_vl_h",
+        /// AMHS deliveries done in the window, and the tool-to-tool share of them.
+        Deliveries = "deliveries",
+        T2tPct = "t2t_pct",
+        /// Mean times per delivery: from the request to the drop-off, waiting for a vehicle, its
+        /// drive to the pickup, the loaded drive, and the loaded drive alone on the rails with
+        /// the zones free (raw transport time).
+        DeliveryS = "delivery_s",
+        VehicleWaitS = "vehicle_wait_s",
+        EmptyDriveS = "empty_drive_s",
+        LoadedDriveS = "loaded_drive_s",
+        RawDriveS = "raw_drive_s",
+        /// Share of vehicle time on transports (driving to the pickup, hoisting, carrying).
+        VehicleBusyPct = "vehicle_busy_pct",
+        /// Mean wait of the zone requests that had to wait.
+        ZoneWaitS = "zone_wait_s",
     }
 }
 
@@ -379,6 +401,85 @@ fn period_metrics(
                     }
                 }
             }
+        }
+    }
+    if let Some(amhs) = &period.amhs {
+        amhs_metrics(add, amhs);
+    }
+}
+
+/// The AMHS measures (\[SMAT2022\] §4): deliveries with their tool-to-tool share and mean
+/// times, the vehicles' busy share and the zone waits, then the loaded drives by bay distance.
+fn amhs_metrics(
+    add: &mut impl FnMut(Scope, &str, Option<LotKind>, Measure, f64),
+    amhs: &AmhsReport,
+) {
+    let seconds = |time: Time, count: u64| time as f64 / count as f64 / SECOND as f64;
+    let deliveries = amhs.moves.total();
+    add(
+        Scope::Amhs,
+        "",
+        None,
+        Measure::Deliveries,
+        deliveries as f64,
+    );
+    if deliveries > 0 {
+        let t2t = 100.0 * amhs.moves.tool_to_tool as f64 / deliveries as f64;
+        add(Scope::Amhs, "", None, Measure::T2tPct, t2t);
+        let raw = amhs
+            .bay_distances
+            .iter()
+            .map(|class| class.unobstructed)
+            .sum();
+        for (measure, time) in [
+            (Measure::DeliveryS, amhs.delivery),
+            (Measure::VehicleWaitS, amhs.vehicle_wait),
+            (Measure::EmptyDriveS, amhs.empty_drive),
+            (Measure::LoadedDriveS, amhs.loaded_drive),
+            (Measure::RawDriveS, raw),
+        ] {
+            add(Scope::Amhs, "", None, measure, seconds(time, deliveries));
+        }
+    }
+    let times = amhs.vehicle_time;
+    let total = times.idle + times.to_pickup + times.loading + times.to_dropoff + times.unloading;
+    if total > 0 {
+        let busy = 100.0 * (total - times.idle) as f64 / total as f64;
+        add(Scope::Amhs, "", None, Measure::VehicleBusyPct, busy);
+    }
+    if amhs.zone_waits > 0 {
+        let wait = seconds(amhs.zone_wait, amhs.zone_waits);
+        add(Scope::Amhs, "", None, Measure::ZoneWaitS, wait);
+    }
+    for (class, drives) in amhs.bay_distances.iter().enumerate() {
+        let item = match class {
+            0..=9 => class.to_string(),
+            10 => "10+".into(),
+            _ => "other".into(),
+        };
+        add(
+            Scope::BayDistance,
+            &item,
+            None,
+            Measure::Deliveries,
+            drives.drives as f64,
+        );
+        if drives.drives > 0 {
+            let (time, raw) = (drives.time, drives.unobstructed);
+            add(
+                Scope::BayDistance,
+                &item,
+                None,
+                Measure::LoadedDriveS,
+                seconds(time, drives.drives),
+            );
+            add(
+                Scope::BayDistance,
+                &item,
+                None,
+                Measure::RawDriveS,
+                seconds(raw, drives.drives),
+            );
         }
     }
 }
@@ -899,6 +1000,7 @@ mod tests {
                     cqt,
                     steps,
                 }],
+                amhs: None,
             }],
             days: vec![day(12, 10.0, 0), day(8, 12.0 + down as f64, 1)],
             released: 20,

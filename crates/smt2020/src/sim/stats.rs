@@ -4,6 +4,7 @@
 use des_core::{DAY, HOUR, Time};
 use serde::{Deserialize, Serialize};
 
+use super::amhs::AmhsReport;
 use super::routes::Routes;
 use super::tool::{STATES, Tool, ToolState};
 use crate::data::{Dataset, PartId, RouteId, StepIndex};
@@ -104,6 +105,8 @@ pub struct PeriodReport {
     pub cqt_rest: CqtReport,
     /// Every CQT segment of the dataset, in [`Dataset::segments`] order.
     pub cqt_segments: Vec<CqtSegmentReport>,
+    /// The AMHS of a dataset with a layout.
+    pub amhs: Option<AmhsReport>,
 }
 
 /// A CQT segment in a window: its completions and where their waits went.
@@ -407,6 +410,7 @@ impl Stats {
         data: &Dataset,
         routes: &Routes,
         tools: &[Tool],
+        amhs: Option<AmhsReport>,
     ) -> PeriodReport {
         let mut lots = Vec::new();
         for (index, stats) in self.lots.iter().enumerate() {
@@ -527,6 +531,7 @@ impl Stats {
             cqt_litho,
             cqt_rest,
             cqt_segments,
+            amhs,
         }
     }
 

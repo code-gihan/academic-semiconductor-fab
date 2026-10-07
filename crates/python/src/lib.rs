@@ -14,18 +14,20 @@ use std::sync::atomic::Ordering;
 
 use pyo3::exceptions::{PyKeyboardInterrupt, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use pythonize::{depythonize, pythonize};
 use serde::Serialize;
 use smt2020::report::{self, Comparison, Summary};
-use smt2020::sim::{self, Config, Recording, Results};
+use smt2020::sim::{self, Config, Player, Recording, Replay, Results};
 use smt2020::{DAY, HOUR, MINUTE, SECOND, asd};
 
 /// The web page's dataset files, bundled.
-const BUNDLED: [(&str, &[u8]); 4] = [
+const BUNDLED: [(&str, &[u8]); 5] = [
     ("ds1", include_bytes!("../../../www/data/ds1.bin")),
     ("ds2", include_bytes!("../../../www/data/ds2.bin")),
     ("ds3", include_bytes!("../../../www/data/ds3.bin")),
     ("ds4", include_bytes!("../../../www/data/ds4.bin")),
+    ("smat2022", include_bytes!("../../../www/data/smat2022.bin")),
 ];
 
 /// A decoded dataset, shared by the simulations of it.
@@ -46,10 +48,17 @@ impl Dataset {
     fn info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         to_py(py, &self.0.info())
     }
+
+    /// Its AMHS layout for drawing (mm): nodes, rails, bays, tool and station footprints and
+    /// port points; None without one.
+    fn layout<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, &self.0.layout.as_ref().map(|layout| layout.drawing()))
+    }
 }
 
-/// The dataset `source` names: "ds1" to "ds4" are the bundled datasets, any other source is the
-/// path of a dataset file or of an AutoSched model directory (`*.asd`).
+/// The dataset `source` names: "ds1" to "ds4" and "smat2022" (DS4 with its AMHS) are the bundled
+/// datasets, any other source is the path of a dataset file or of an AutoSched model directory
+/// (`*.asd`).
 #[pyfunction]
 fn load_dataset(source: PathBuf) -> PyResult<Dataset> {
     if let Some((_, bytes)) = BUNDLED
@@ -214,9 +223,51 @@ impl Simulation {
         to_py(py, &self.simulation.segments())
     }
 
+    /// The AMHS: its vehicles, the FOUPs at ports, in commit stations and in batch tools, the
+    /// ports kept for FOUPs on their way, every tool's state and the transports waiting for a
+    /// vehicle; None without a layout.
+    fn amhs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, &self.simulation.amhs())
+    }
+
+    /// The AMHS replay recorded so far (recording "replay") in its compact form, for a
+    /// `ReplayPlayer`; None without one or before its window began.
+    fn replay<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        let replay = self.simulation.replay()?;
+        Some(PyBytes::new(py, replay.bytes()))
+    }
+
     /// Results of the finished run.
     fn results<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         to_py(py, &self.simulation.results().map_err(runtime_error)?)
+    }
+}
+
+/// Plays a replay (`Simulation.replay()`) on the dataset it was recorded on: the fab at any
+/// instant of its window.
+#[pyclass(module = "smt2020")]
+struct ReplayPlayer(Player);
+
+#[pymethods]
+impl ReplayPlayer {
+    /// Reads and checks `replay`, recorded on `dataset`.
+    #[new]
+    fn new(dataset: &Dataset, replay: &[u8]) -> PyResult<Self> {
+        let replay = Replay::from_bytes(replay.to_vec()).map_err(value_error)?;
+        Player::new(Arc::clone(&dataset.0), replay)
+            .map(Self)
+            .map_err(value_error)
+    }
+
+    /// Its window: from and until (ms).
+    fn window<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, &self.0.window())
+    }
+
+    /// The fab at `time` (ms, within the window): every vehicle, FOUP and tool as columns, and
+    /// the deliveries so far.
+    fn frame<'py>(&mut self, py: Python<'py>, time: f64) -> PyResult<Bound<'py, PyAny>> {
+        to_py(py, &self.0.frame(time))
     }
 }
 
@@ -284,6 +335,7 @@ fn smt2020_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("SECOND", SECOND)?;
     module.add_class::<Dataset>()?;
     module.add_class::<Simulation>()?;
+    module.add_class::<ReplayPlayer>()?;
     module.add_class::<code::Lot>()?;
     module.add_class::<code::Cqt>()?;
     module.add_class::<code::Segment>()?;

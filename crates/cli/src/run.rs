@@ -382,4 +382,44 @@ fn print_table(summary: &[Summary], period: &str) {
             );
         }
     }
+    if let Some(deliveries) = find(Scope::Amhs, "", None, Measure::Deliveries) {
+        let amhs = |measure| find(Scope::Amhs, "", None, measure);
+        println!(
+            "  AMHS {} deliveries, tool to tool {} %, vehicles busy {} %",
+            cell(Some(deliveries), 0),
+            cell(amhs(Measure::T2tPct), 1),
+            cell(amhs(Measure::VehicleBusyPct), 1),
+        );
+        println!(
+            "  per delivery (s): {} in all, {} waiting for a vehicle, {} to the pickup, {} loaded              ({} unobstructed)",
+            cell(amhs(Measure::DeliveryS), 1),
+            cell(amhs(Measure::VehicleWaitS), 1),
+            cell(amhs(Measure::EmptyDriveS), 1),
+            cell(amhs(Measure::LoadedDriveS), 1),
+            cell(amhs(Measure::RawDriveS), 1),
+        );
+        println!(
+            "  {:<6}{:>12}{:>16}{:>14}{:>14}",
+            "bays", "drives", "transport (s)", "raw (s)", "waiting (s)"
+        );
+        let items = (0..10)
+            .map(|class| class.to_string())
+            .chain(["10+".into(), "other".into()]);
+        for item in items {
+            let class = |measure| find(Scope::BayDistance, &item, None, measure);
+            let waiting = class(Measure::LoadedDriveS)
+                .zip(class(Measure::RawDriveS))
+                .map_or("-".into(), |(time, raw)| {
+                    format!("{:.1}", time.mean - raw.mean)
+                });
+            println!(
+                "  {:<6}{:>12}{:>16}{:>14}{:>14}",
+                item,
+                cell(class(Measure::Deliveries), 0),
+                cell(class(Measure::LoadedDriveS), 1),
+                cell(class(Measure::RawDriveS), 1),
+                waiting,
+            );
+        }
+    }
 }

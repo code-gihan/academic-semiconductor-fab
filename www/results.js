@@ -1,8 +1,8 @@
 // The overview of a finished run: its setup and main and detail measures (kpis.js) above tabs of
 // a report period: CQT violations (the shares, the segments, where a segment's waits go), lots
-// and days, tools, the inside of a run (details.js) and every measure (tables, the runs'
-// fingerprints and times). Values are the runs' means ± the half-width of their 95% confidence
-// interval.
+// and days, tools, the transport of a dataset with an AMHS layout, the inside of a run
+// (details.js) and every measure (tables, the runs' fingerprints and times). Values are the
+// runs' means ± the half-width of their 95% confidence interval.
 import { barChart, lineChart } from "./charts.js";
 import { formatNumber, t } from "./i18n.js";
 import { DETAIL, MAIN, rowKey, stat, tile } from "./kpis.js";
@@ -22,6 +22,22 @@ const PARTS = [
   ["transport", "transport"],
   ["process", "process"],
 ];
+/** Bay distance classes of loaded drives, and [P3] Table 4: transport and raw transport time
+ * (s) by class. */
+const BAY_CLASSES = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10+", "other"];
+const PAPER_BAYS = {
+  0: [42.61, 35.71],
+  1: [76.17, 68.14],
+  2: [110.41, 99.85],
+  3: [115.82, 104.25],
+  4: [114.48, 103.98],
+  5: [141.44, 127.94],
+  6: [159.32, 146.2],
+  7: [159.34, 145.23],
+  8: [162.74, 147.44],
+  9: [169.62, 154.99],
+  "10+": [209.75, 187.0],
+};
 /** Day-by-day measures offered: [scope, measure, decimals]. */
 const DAILY = [
   ["cqt", "vl_pct", 1],
@@ -59,6 +75,30 @@ const TABLES = [
       ["vl4h_pct", "col.vl4h", 2],
       ["avl_h", "col.avl", 3],
       ["aont_h", "col.aont", 3],
+    ],
+  },
+  {
+    name: "amhs",
+    scope: "amhs",
+    columns: [
+      ["deliveries", "col.deliveries", 0],
+      ["t2t_pct", "col.t2t", 1],
+      ["delivery_s", "col.delivery", 1],
+      ["vehicle_wait_s", "col.vehicleWait", 1],
+      ["empty_drive_s", "col.emptyDrive", 1],
+      ["loaded_drive_s", "col.loadedDrive", 1],
+      ["raw_drive_s", "col.rawDrive", 1],
+      ["vehicle_busy_pct", "col.vehicleBusy", 1],
+      ["zone_wait_s", "col.zoneWait", 1],
+    ],
+  },
+  {
+    name: "bayDistance",
+    scope: "bay_distance",
+    columns: [
+      ["deliveries", "col.deliveries", 0],
+      ["loaded_drive_s", "col.loadedDrive", 1],
+      ["raw_drive_s", "col.rawDrive", 1],
     ],
   },
   {
@@ -161,6 +201,11 @@ export function showResults(run, period, animated) {
   fill("panel-cqt", [cqtChart(value), segmentChart(run, value, segments), breakdownChart(run, value, segments)]);
   fill("panel-lots", [kindChart(value), dailyChart(run)]);
   fill("panel-tools", [areaChart(rows, value), toolGroupChart(rows, value)]);
+  // The transport's tab shows for a dataset with an AMHS layout only.
+  const transport = rows.some((row) => row.scope === "amhs");
+  $("tab-amhs").hidden = !transport;
+  if (!transport && !$("panel-amhs").hidden) tabs.select("cqt");
+  fill("panel-amhs", transport ? [bayDistanceChart(value)] : []);
   $("tables").replaceChildren(...TABLES.map((spec) => table(spec, rows, value)).filter(Boolean));
 
   $("digests").replaceChildren(
@@ -314,6 +359,46 @@ function breakdownChart(run, value, segments) {
   );
   result.firstElementChild.append(choice, onward);
   return result;
+}
+
+/** The loaded drive's mean time by bays apart, alone on the rails and held up, with [P3] Table 4
+ * in the tooltip. */
+function bayDistanceChart(value) {
+  const rows = BAY_CLASSES.flatMap((item) => {
+    const time = value("bay_distance", item, null, "loaded_drive_s");
+    const raw = value("bay_distance", item, null, "raw_drive_s");
+    if (!time || !raw) return [];
+    const label = item === "other" ? t("bay.other") : item;
+    const paper = PAPER_BAYS[item];
+    return [
+      {
+        label,
+        values: [raw.mean, Math.max(0, time.mean - raw.mean)],
+        text: t("kpi.suffix.seconds", { value: formatNumber(time.mean, 1) }),
+        title: [
+          label,
+          `${t("col.deliveries")}: ${cell(value("bay_distance", item, null, "deliveries"), 0)}`,
+          `${t("col.loadedDrive")}: ${cell(time, 1)}`,
+          `${t("col.rawDrive")}: ${cell(raw, 1)}`,
+          ...(paper ? [t("bay.paper", { time: formatNumber(paper[0], 1), raw: formatNumber(paper[1], 1) })] : []),
+        ].join("\n"),
+      },
+    ];
+  });
+  if (rows.length === 0) return null;
+  return figure(
+    "chart.bayDistance",
+    "chart.bayDistanceHint",
+    barChart({
+      rows,
+      parts: [
+        { kind: "transport", label: t("part.raw") },
+        { kind: "warning", label: t("part.held") },
+      ],
+      label: t("chart.bayDistance"),
+      animate,
+    }),
+  );
 }
 
 /** A measure day by day: mean over the runs with its 95% interval. */
@@ -502,7 +587,14 @@ function table(spec, rows, value) {
   const body = grid.createTBody();
   for (const [item, kind] of items) {
     const row = body.insertRow();
-    const label = spec.scope === "cqt" ? t(`cqt.${item}`) : [item, kind && kindLabel(kind)].filter(Boolean).join(" · ");
+    const label =
+      spec.scope === "cqt"
+        ? t(`cqt.${item}`)
+        : spec.scope === "amhs"
+          ? t("table.amhs.row")
+          : spec.scope === "bay_distance" && item === "other"
+            ? t("bay.other")
+            : [item, kind && kindLabel(kind)].filter(Boolean).join(" · ");
     row.append(Object.assign(element("th", label), { scope: "row" }));
     for (const [measure, , decimals] of spec.columns) {
       row.insertCell().textContent = cell(value(spec.scope, item, kind, measure), decimals);

@@ -134,6 +134,7 @@ fn build(dir: &Path, options: &Options, orders: &[&str]) -> Result<Dataset, Erro
         streams,
         lots,
         periods,
+        layout: None,
     })
 }
 
