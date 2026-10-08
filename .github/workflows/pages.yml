@@ -72,14 +72,14 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - name: Build wasm
-        run: cargo build --release --locked --target wasm32-unknown-unknown -p fab-wasm
+        run: cargo build --release --locked --target wasm32-unknown-unknown -p smt2020-wasm
 
       - name: Install wasm-bindgen-cli
         # Must be the exact wasm-bindgen version in Cargo.lock.
         run: cargo install wasm-bindgen-cli --locked --version "$(cargo pkgid wasm-bindgen | sed 's/.*@//')"
 
       - name: Generate JS bindings
-        run: wasm-bindgen --target web --no-typescript --out-dir www/pkg target/wasm32-unknown-unknown/release/fab_wasm.wasm
+        run: wasm-bindgen --target web --no-typescript --out-name smt2020 --out-dir www/pkg target/wasm32-unknown-unknown/release/smt2020_wasm.wasm
 
       - name: Test JavaScript API
         run: node --test crates/wasm/tests/api.test.mjs

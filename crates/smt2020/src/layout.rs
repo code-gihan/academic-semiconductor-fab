@@ -350,6 +350,19 @@ impl Layout {
         }
     }
 
+    /// Point of the rear of a vehicle `length` mm long whose front is `offset` mm into `link`,
+    /// having come from rail `behind`: there while the front is less than `length` into its rail
+    /// (rails are longer than vehicles).
+    pub fn rear(&self, link: LinkId, offset: f64, behind: LinkId, length: f64) -> (f64, f64) {
+        let (rail, at) = if offset >= length {
+            (link, offset - length)
+        } else {
+            (behind, self.links[behind].length - (length - offset))
+        };
+        let (x, y, _) = self.point(rail, at);
+        (x, y)
+    }
+
     /// Bay distance of a move between two bays (\[SMAT2022\] §4.2): the column difference of two
     /// intrabays, plus one between rows; `None` if a bay is not an intrabay of the grid.
     pub fn bay_distance(&self, from: BayId, to: BayId) -> Option<u32> {

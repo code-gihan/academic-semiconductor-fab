@@ -219,18 +219,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "fab-wasm"
-version = "0.1.0"
-dependencies = [
- "js-sys",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "smt2020",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "fast-float2"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -605,6 +593,18 @@ dependencies = [
  "pythonize",
  "serde",
  "smt2020",
+]
+
+[[package]]
+name = "smt2020-wasm"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "smt2020",
+ "wasm-bindgen",
 ]
 
 [[package]]

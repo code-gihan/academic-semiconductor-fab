@@ -451,7 +451,17 @@ class AmhsTest(unittest.TestCase):
             self.assertEqual(len(vehicles["x"]), len(amhs["vehicles"]))
             for id, vehicle in enumerate(amhs["vehicles"]):
                 off = math.hypot(vehicle["x"] - vehicles["x"][id], vehicle["y"] - vehicles["y"][id])
-                self.assertLess(off, 1.1e-3, f"vehicle {id} at {at}")
+                rear = math.hypot(
+                    vehicle["tail_x"] - vehicles["tail_x"][id],
+                    vehicle["tail_y"] - vehicles["tail_y"][id],
+                )
+                self.assertLess(max(off, rear), 1.1e-3, f"vehicle {id} at {at}")
+                # The rear lies along the rails, the body (784 mm) no longer than itself.
+                body = math.hypot(
+                    vehicles["x"][id] - vehicles["tail_x"][id],
+                    vehicles["y"][id] - vehicles["tail_y"][id],
+                )
+                self.assertTrue(500 < body <= 784 + 1e-6, f"vehicle {id} at {at}: body {body}")
                 self.assertEqual(vehicles["activity"][id], vehicle["activity"])
             at_ports = {
                 lot: index

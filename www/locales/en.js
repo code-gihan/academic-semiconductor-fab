@@ -716,7 +716,7 @@ export default {
 
   "layout.heading": "Fab layout and transport",
   "layout.intro":
-    "Simulates the setup's dataset and strategy up to the end of a window, recording every OHT move, every FOUP move and every tool state, then replays the window on the fab floor: play, pause, change the speed or drag the time bar. Drag the floor to pan, scroll or use ± to zoom, point at an OHT or a tool for details.",
+    "Simulates the setup's dataset and strategy up to the end of a window, recording every OHT move, every FOUP move and every tool state, then replays the window on the fab floor: play, pause, change the speed or drag the time bar. A run of the setup (Run simulation) records this window too, so after it the replay shows at once. Drag the floor to pan, scroll or use ± to zoom, point at an OHT or a tool for details.",
   "layout.empty": "Choose SMAT2022 (DS4 + transport) in Setup to see the fab layout.",
   "layout.day": "From the start of day",
   "layout.length": "Window",
@@ -726,10 +726,12 @@ export default {
   "layout.length.120": "2 hours",
   "layout.record": "Simulate and replay",
   "layout.stop": "Stop",
+  "layout.starting": "Starting the simulation…",
+  "layout.preRun": "QTS pre-run over the whole run to measure the flow factors (skipped once this setup has run): {day}…",
   "layout.recording": "Simulating up to the window's end: day {day} of {days}…",
-  "layout.building": "Building the replay…",
   "layout.ready": "Replay of {length} from day {day} ({size} MB recorded).",
   "layout.stopped": "Stopped.",
+  "layout.afterEnd": "The run ended before this window: choose an earlier day.",
   "layout.changed": "The setup changed since this replay: simulate again to see it.",
   "layout.failed": "The simulation stopped: {message}",
   "layout.play": "Play",

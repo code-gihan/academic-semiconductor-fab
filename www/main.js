@@ -2,10 +2,11 @@
 // the worker pool runs their replications (at most navigator.hardwareConcurrency at once) and the
 // wasm module summarizes them for the Analysis view, whose details show what the first
 // scenario's replication 0 recorded and replays of the others, and compares them in the Compare
-// view; the Layout view animates the setup's transport on a dataset with an AMHS layout.
+// view; the Layout view animates the setup's transport on a dataset with an AMHS layout, whose
+// runs record the view's window so that its replay is there when they end.
 // Everything reacts to events (input, worker messages, hash changes, resizes, animation frames);
 // nothing polls.
-import init, { csv, daily, summarize } from "./pkg/fab_wasm.js";
+import init, { csv, daily, summarize } from "./pkg/smt2020.js";
 import { loadCharts } from "./charts.js";
 import { renderComparison, showComparison } from "./compare.js";
 import { RECORDING, chooseSegment, renderDetails, showDetails } from "./details.js";
@@ -39,7 +40,7 @@ $("language").replaceChildren(
 // The Layout view hears of setup edits once both exist.
 let layout = null;
 const setup = setupView({ status: setStatus, run: start, changed: () => layout?.changed() });
-layout = layoutView({ setup });
+layout = layoutView({ setup, finishedReplay, flowFactors: measuredFlowFactors });
 const home = homeView({ start, stop: () => stop(() => t("status.cancelled")) });
 /** The tab indicator has been placed once: later moves slide. */
 let placed = false;
@@ -147,6 +148,8 @@ function start(batch) {
     replications,
     threads: Math.min(count, pool.capacity()),
     scenarios: batch.scenarios.map((scenario) => ({ ...scenario, done: [] })),
+    // On a dataset with a layout the Layout view's window, which the runs record for it.
+    window: batch.info.layout ? layout.window() : null,
     lanes: lanes(batch.scenarios.map((scenario) => scenario.name), replications),
     finished: 0,
     /** Lane shown on the clocks of the Run view, and whether a click chose it. */
@@ -177,9 +180,7 @@ function start(batch) {
         dataset: run.dataset,
         config: { ...scenario.config, replication },
         code: scenario.code,
-        // The first scenario's replication 0 records what the details show first (recording
-        // leaves results unchanged); the others are replayed when asked for.
-        recording: index === 0 && replication === 0 ? RECORDING : undefined,
+        recording: replication === 0 ? recordingOf(index, run.window) : undefined,
         live: true,
         onStart: () => {
           lane.state = "running";
@@ -254,6 +255,7 @@ function finish(run) {
     name: run.name,
     dataset: run.dataset,
     info: run.info,
+    window: run.window,
     seconds,
     shown: 0,
     scenarios: run.scenarios.map((scenario) => {
@@ -307,6 +309,50 @@ function showScenario(index, animated = false) {
 
 function shownScenario() {
   return finished.scenarios[finished.shown];
+}
+
+/** What replication 0 of scenario `index` records (results unchanged): the first scenario's, what
+ * the details show first (the others are replayed when asked for); every scenario's, the replay
+ * of `window` (none without a layout) for the Layout view. */
+function recordingOf(index, window) {
+  if (index > 0 && !window) return undefined;
+  return { ...(index === 0 ? RECORDING : {}), ...(window ? { replay: window } : {}) };
+}
+
+/** The finished run's replications that ran `config` (replication included) on the dataset
+ * `key`, each with its scenario's strategy code. */
+function finishedRuns(key, config) {
+  if (finished?.dataset.key !== key) return [];
+  const wanted = canonical(config);
+  return finished.scenarios.flatMap((scenario) =>
+    scenario.done
+      .filter((done) => canonical(done.config) === wanted)
+      .map((done) => ({ done, code: scenario.view.code ?? null })),
+  );
+}
+
+/** The QTS flow factors the finished run measured with `config` on the dataset `key`, if it ran
+ * that: a run of it given them needs no pre-run (which runs without strategy code) and runs the
+ * same. */
+function measuredFlowFactors(key, config) {
+  return finishedRuns(key, config).find(({ done }) => done.flowFactors)?.done.flowFactors ?? null;
+}
+
+/** The replay of `window` the finished run recorded with `config` and strategy `code` on the
+ * dataset `key`, if it did. */
+function finishedReplay(key, config, code, window) {
+  if (canonical(finished?.window) !== canonical(window)) return null;
+  const same = finishedRuns(key, config).find((run) => run.code === (code ?? null) && run.done.replay);
+  return same?.done.replay ?? null;
+}
+
+/** JSON of `value` with every object's keys in order: equal for equal configurations. */
+function canonical(value) {
+  return JSON.stringify(value, (_, each) =>
+    each && typeof each === "object" && !Array.isArray(each)
+      ? Object.fromEntries(Object.entries(each).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : each,
+  );
 }
 
 /** Ends the active run, if any, by stopping its jobs, and shows `render()`. */

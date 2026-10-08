@@ -1,5 +1,6 @@
 [package]
-name = "fab-wasm"
+name = "smt2020-wasm"
+description = "JavaScript (WebAssembly) module of the SMT2020 simulator"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

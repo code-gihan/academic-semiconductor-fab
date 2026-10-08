@@ -6,7 +6,8 @@
 //! few f64 steps), or else its f64 steps after the last change. A breakpoint that keeps the
 //! acceleration is left out where the player, driving on, stays within [`DRIFT`] of the vehicle
 //! until the next; position and speed are given where the player would drift further. The rails
-//! follow from the network and the ways taken at diverging nodes.
+//! follow from the network, the ways taken at diverging nodes and, for the rear, the rail behind
+//! the first.
 
 use std::ops::Range;
 
@@ -364,7 +365,7 @@ impl Record {
 }
 
 /// A track's start: the acceleration (its symbol, or itself after the escape), position on its
-/// first rail (from the rail's start) and speed.
+/// first rail (from the rail's start) and speed, and the rail behind that one.
 #[derive(Clone, Copy, Debug, Default)]
 struct Start {
     symbol: u32,
@@ -372,6 +373,7 @@ struct Start {
     s: f64,
     v: f64,
     rail: u64,
+    behind: u64,
 }
 
 impl Start {
@@ -395,6 +397,7 @@ impl Start {
         }
         raw(coder, &mut self.s);
         coder.bits(c.rail_bits, &mut self.rail);
+        coder.bits(c.rail_bits, &mut self.behind);
     }
 }
 
@@ -412,6 +415,7 @@ struct Breakpoint {
 pub(crate) struct TrackWriter {
     start: Segment,
     rail: LinkId,
+    behind: LinkId,
     /// The changes and the ways taken, in a recording's bytes.
     records: Vec<u8>,
     count: u64,
@@ -426,7 +430,7 @@ pub(crate) struct TrackWriter {
 
 impl TrackWriter {
     /// A vehicle at the window's start `t`: at `s` on rail `rail` (positions from that rail's
-    /// start), with speed `v` and acceleration `a`.
+    /// start), having come from rail `behind`, with speed `v` and acceleration `a`.
     pub(crate) fn new(
         kinematics: &Kinematics,
         t: f64,
@@ -434,6 +438,7 @@ impl TrackWriter {
         v: f64,
         a: f64,
         rail: LinkId,
+        behind: LinkId,
     ) -> Self {
         let start = Segment {
             t,
@@ -445,6 +450,7 @@ impl TrackWriter {
         Self {
             start,
             rail,
+            behind,
             records: Vec::new(),
             count: 0,
             ways: Vec::new(),
@@ -535,6 +541,7 @@ impl TrackWriter {
             s: self.start.s,
             v: self.start.v,
             rail: self.rail as u64,
+            behind: self.behind as u64,
         };
         start.code(coder, contexts);
         let mut count = self.count;
@@ -557,7 +564,7 @@ pub(super) struct Codec {
 }
 
 /// Where a track's reading stands: the segment in force, the next change read ahead (with its
-/// instant), and the rail the front is on as far as looked.
+/// instant), and the rail the front is on as far as looked, with the one before it.
 #[derive(Clone, Copy)]
 struct Cursor {
     read: ReadState,
@@ -565,6 +572,7 @@ struct Cursor {
     segment: Segment,
     next: Option<(Record, f64)>,
     rail: LinkId,
+    behind: LinkId,
     /// The position of the rail's start, and the ways taken so far.
     start: f64,
     way: usize,
@@ -628,6 +636,7 @@ impl Cursor {
                 },
             };
             self.start += length;
+            self.behind = self.rail;
             self.rail = next;
         }
     }
@@ -683,8 +692,10 @@ impl Track {
             None => return Err(corrupt()),
         };
         let rail = usize::try_from(start.rail).map_err(|_| corrupt())?;
+        let behind = usize::try_from(start.behind).map_err(|_| corrupt())?;
         let finite = [start.s, start.v, a].iter().all(|value| value.is_finite());
-        if reading.damaged() || !finite || rail >= layout.links.len() {
+        let rails = layout.links.len();
+        if reading.damaged() || !finite || rail >= rails || behind >= rails {
             return Err(corrupt());
         }
         let segment = Segment {
@@ -700,6 +711,7 @@ impl Track {
             segment,
             next: None,
             rail,
+            behind,
             start: 0.0,
             way: 0,
             seen: from,
@@ -732,7 +744,8 @@ impl Track {
         })
     }
 
-    /// The rail and offset (mm) of the front at `time`, and the speed (mm/ms).
+    /// The rail and offset (mm) of the front at `time`, the rail before it, and the speed
+    /// (mm/ms).
     pub(super) fn at(
         &mut self,
         time: f64,
@@ -740,7 +753,7 @@ impl Track {
         codec: &Codec,
         layout: &Layout,
         out: &[Vec<LinkId>],
-    ) -> (LinkId, f64, f64) {
+    ) -> (LinkId, f64, LinkId, f64) {
         let part = &replay[self.bytes.clone()];
         if time < self.cursor.seen {
             let index = self
@@ -758,6 +771,6 @@ impl Track {
         self.cursor.seen = time;
         let rail = self.cursor.rail;
         let offset = (s - self.cursor.start).clamp(0.0, layout.links[rail].length);
-        (rail, offset, v)
+        (rail, offset, self.cursor.behind, v)
     }
 }

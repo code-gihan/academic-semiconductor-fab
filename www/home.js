@@ -5,7 +5,7 @@
 // against BASE, with the core's paired differences and their verdicts. The race is a run of the
 // page like any other: main.js runs it on the worker pool, and its results also fill the Analysis
 // and Compare views.
-import { compare } from "./pkg/fab_wasm.js";
+import { compare } from "./pkg/smt2020.js";
 import { liveLines } from "./charts.js";
 import { loadDataset, passes } from "./datasets.js";
 import { explain } from "./explainer.js";

@@ -2,7 +2,7 @@
 // numbers. Each scenario is compared with the baseline replication pair by replication pair (the
 // core's compare): the mean difference and its 95% confidence interval show whether a strategy
 // changed a measure beyond chance.
-import { compare, comparisonCsv } from "./pkg/fab_wasm.js";
+import { compare, comparisonCsv } from "./pkg/smt2020.js";
 import { barChart } from "./charts.js";
 import { download } from "./files.js";
 import { formatNumber, t } from "./i18n.js";

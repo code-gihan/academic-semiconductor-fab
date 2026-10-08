@@ -507,7 +507,8 @@ fn check_connected(nodes: &[RailNode], links: &[RailLink]) -> Result<(), Error> 
 
 /// The region of each zone: the rails from its stop nodes up to its reset nodes. A vehicle needs
 /// the zone from its stop node until it passes a reset node, so regions must be entered at stop
-/// nodes only, lead to reset nodes without loops and stay apart.
+/// nodes only, lead to reset nodes without loops and stay apart. Merges are left to the zones
+/// (vehicles only see those ahead on their own path), so each merging node lies in one region.
 fn derive_zones(zones: &[String], nodes: &[RailNode], links: &mut [RailLink]) -> Result<(), Error> {
     let mut outgoing: Vec<Vec<LinkId>> = vec![Vec::new(); nodes.len()];
     let mut incoming: Vec<Vec<LinkId>> = vec![Vec::new(); nodes.len()];
@@ -615,6 +616,18 @@ fn derive_zones(zones: &[String], nodes: &[RailNode], links: &mut [RailLink]) ->
         }
         if ordered != region.len() {
             return Err(error(format!("the region of ZCU {name} has a loop")));
+        }
+    }
+    // Vehicles from different rails meet at a merging node only one zone holder at a time: the
+    // rails into it lie in the region of one zone.
+    for (node, rails) in incoming.iter().enumerate() {
+        let zone = rails.first().and_then(|&link| links[link].zone);
+        if rails.len() > 1 && (zone.is_none() || rails.iter().any(|&link| links[link].zone != zone))
+        {
+            return Err(error(format!(
+                "the rails into merging node {} must lie in the region of one ZCU",
+                nodes[node].name
+            )));
         }
     }
     Ok(())
@@ -1299,6 +1312,20 @@ pub(crate) mod tests {
         check(
             &|s| row(s, "Address", 7)[4] = Cell::Text("NONE".into()),
             "rail r6 enters ZCU Z1 without passing a stop node",
+        );
+        // Z1 dropped: nothing keeps vehicles from r6 and s7 apart where they merge at n4.
+        check(
+            &|s| {
+                for line in [5, 7, 8] {
+                    row(s, "Address", line)[4] = Cell::Text("NONE".into());
+                }
+                s.iter_mut()
+                    .find(|sheet| sheet.name == "ZCU")
+                    .unwrap()
+                    .rows
+                    .remove(1);
+            },
+            "the rails into merging node n4 must lie in the region of one ZCU",
         );
         check(
             &|s| row(s, "Equipment", 2)[0] = Cell::Text("ETCH1".into()),

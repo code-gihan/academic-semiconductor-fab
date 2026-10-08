@@ -2,8 +2,8 @@
 //! SMAT2022 simulator's bay rings) or waits for the next vehicle freed, oldest first. A vehicle
 //! drives to the pickup port, hoists the FOUP up, drives to the drop-off port (which may change
 //! until it gets there) and hoists it down. Idle vehicles roam their intrabay between its two
-//! roaming points; past the bay's limit the longest roaming one moves to the neighbor bay roamed
-//! least.
+//! roaming points; past the bay's limit the longest roaming one moves to the bay roamed least in
+//! the nearest ring of neighbors with room.
 
 use des_core::{Scheduler, Time};
 
@@ -266,7 +266,7 @@ impl Amhs {
     }
 
     /// The vehicle roams `bay`, heading for the nearer of its points; past the limit the bay's
-    /// longest roaming vehicle moves to the neighbor bay roamed least that has room.
+    /// longest roaming vehicle moves to the nearest bay with room.
     fn join_bay(&mut self, id: usize, bay: BayId, now: f64) {
         self.vehicles[id].bay = bay;
         self.bays[bay].roaming.push_back(id);
@@ -278,21 +278,45 @@ impl Amhs {
         let (rail, at) = points[point];
         self.set_path(id, now, rail, at, Goal::Waypoint);
         self.pending.push_back(id);
-        if self.bays[bay].roaming.len() > self.roam_limit as usize {
-            let neighbor = self.layout().bays[bay]
-                .neighbors
+        if self.bays[bay].roaming.len() > self.roam_limit as usize
+            && let Some(other) = self.bay_with_room(bay)
+        {
+            let oldest = self.bays[bay].roaming.pop_front().expect("roaming");
+            self.join_bay(oldest, other, now);
+        }
+    }
+
+    /// The intrabay roamed least in the nearest ring of neighbors around `bay` that has one with
+    /// fewer roaming vehicles than the limit (the first among equals): idle vehicles never pile up
+    /// in a bay whose neighbors are full, where they would fill its loop and lock it.
+    fn bay_with_room(&self, bay: BayId) -> Option<BayId> {
+        let limit = self.roam_limit as usize;
+        let mut seen = vec![false; self.bays.len()];
+        seen[bay] = true;
+        let mut ring = vec![bay];
+        while !ring.is_empty() {
+            let mut next = Vec::new();
+            for &each in &ring {
+                for &neighbor in &self.layout().bays[each].neighbors {
+                    if !seen[neighbor] {
+                        seen[neighbor] = true;
+                        next.push(neighbor);
+                    }
+                }
+            }
+            let room = next
                 .iter()
                 .copied()
-                .filter(|&neighbor| {
-                    self.bays[neighbor].points.is_some()
-                        && self.bays[neighbor].roaming.len() < self.roam_limit as usize
+                .filter(|&each| {
+                    self.bays[each].points.is_some() && self.bays[each].roaming.len() < limit
                 })
-                .min_by_key(|&neighbor| self.bays[neighbor].roaming.len());
-            if let Some(neighbor) = neighbor {
-                let oldest = self.bays[bay].roaming.pop_front().expect("roaming");
-                self.join_bay(oldest, neighbor, now);
+                .min_by_key(|&each| self.bays[each].roaming.len());
+            if room.is_some() {
+                return room;
             }
+            ring = next;
         }
+        None
     }
 
     /// At the braking point for its roaming point the vehicle carries on to the other one.

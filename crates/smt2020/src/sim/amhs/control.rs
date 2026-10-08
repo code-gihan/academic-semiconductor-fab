@@ -1,11 +1,12 @@
 //! Vehicle control: each vehicle plans to its movement authority, the nearest of its goal, the
-//! stop node of a zone it does not hold, and the stop point of the vehicle ahead (where that one
-//! would come to rest braking now) less that one's length and the gap. Stop points never fall
-//! back, so such a plan is safe whatever the vehicle ahead does next. A follower reaching the
-//! braking point of that limit while the vehicle ahead still gains ground matches its speed
-//! (braking) and from then copies its motion at a fixed distance. Zones are exclusive: a vehicle
-//! asks at the braking point for the stop node, waits there if the zone is held, and frees it
-//! passing a reset node; waiting vehicles hold no zone, so zones cannot deadlock.
+//! stop node of a zone it does not hold, and the stop points of the vehicles ahead on its path
+//! (where each would come to rest braking now) less their lengths and the gap; the vehicle of
+//! the nearest is its leader. Stop points never fall back, so such a plan is safe whatever the
+//! vehicles ahead do next. A follower reaching the braking point of that limit while the leader
+//! still gains ground matches its speed (braking) and from then copies its motion at a fixed
+//! distance, up to where the next vehicle ahead binds. Zones are exclusive: a vehicle asks at the
+//! braking point for the stop node, waits there if the zone is held, and frees it passing a reset
+//! node; waiting vehicles hold no zone, so zones cannot deadlock.
 
 use des_core::{Scheduler, Time};
 
@@ -139,6 +140,7 @@ impl Amhs {
         while self.vehicles[id].checks.node_at <= now {
             let passed = self.vehicles[id].checks.node;
             let (rail, _) = self.vehicles[id].path.pop_front().expect("a rail to leave");
+            self.vehicles[id].behind = rail;
             let (next, _) = *self.vehicles[id].path.front().expect("a rail to enter");
             let node = self.track.rails[rail].to;
             let front = self.on_rail[rail].pop_front();
@@ -309,51 +311,56 @@ impl Amhs {
         }
     }
 
-    /// The nearest vehicle ahead whose tail lies before `limit` and the longest vehicle's reach:
-    /// on the vehicle's path, or with its tail still covering a diverging node of it or the end
-    /// of it.
-    fn find_leader(&self, id: usize, s: f64, limit: f64, now: f64) -> Option<Leader> {
+    /// The vehicles ahead that bound the vehicle's way to `limit`: every one whose body lies on
+    /// its path within the longest vehicle's reach of `limit` (the one ahead on its rail, the
+    /// rearmost on each later rail) or still covers a diverging node of the path or its end. The
+    /// leader is the one whose stop point less its length and the gap lies nearest; also returned
+    /// is that bound of the next nearest (infinite if none), where copying the leader must stop:
+    /// a leader turning off the path does not shield the vehicles beyond its turn.
+    fn find_leader(&self, id: usize, s: f64, limit: f64, now: f64) -> (Option<Leader>, f64) {
         let vehicle = &self.vehicles[id];
         let horizon = limit + self.reach;
+        let mut best: Option<(f64, Leader)> = None;
+        let mut next = f64::INFINITY;
+        // A vehicle whose front is on a rail from the node at `start` on this one's odometer;
+        // off the path only while its tail still covers the node (clear at its leave time).
+        let mut consider = |other: usize, start: f64, off_path: bool| {
+            if other == id || best.is_some_and(|(_, leader)| leader.id == other) {
+                return;
+            }
+            let ahead = &self.vehicles[other];
+            let delta = start - ahead.path[0].1;
+            let tail = ahead.plan.state(now).0 + delta - ahead.length;
+            if off_path && !(tail < start - EPS && tail > s) {
+                return;
+            }
+            let leader = Leader { id: other, delta };
+            let bound = self.behind(id, leader, now);
+            match best {
+                Some((least, _)) if least <= bound => next = next.min(bound),
+                _ => {
+                    next = next.min(best.map_or(f64::INFINITY, |(least, _)| least));
+                    best = Some((bound, leader));
+                }
+            }
+        };
         let (rail, start) = vehicle.path[0];
         let list = &self.on_rail[rail];
         let position = list.iter().position(|&other| other == id).expect("listed");
         if position > 0 {
-            let other = list[position - 1];
-            return Some(Leader {
-                id: other,
-                delta: start - self.vehicles[other].path[0].1,
-            });
+            consider(list[position - 1], start, false);
         }
-        let mut best: Option<(f64, Leader)> = None;
-        // A vehicle whose front is on a rail from the node at `start` on this one's odometer;
-        // off the path only while its tail still covers the node (clear at its leave time).
-        let consider =
-            |other: usize, start: f64, off_path: bool, best: &mut Option<(f64, Leader)>| {
-                let ahead = &self.vehicles[other];
-                let delta = start - ahead.path[0].1;
-                let tail = ahead.plan.state(now).0 + delta - ahead.length;
-                if other != id
-                    && (!off_path || (tail < start - EPS && tail > s))
-                    && best.is_none_or(|(best, _)| tail < best)
-                {
-                    *best = Some((tail, Leader { id: other, delta }));
-                }
-            };
         for &(rail, start) in vehicle.path.iter().skip(1) {
             if start > horizon {
                 break;
             }
             for &other in &self.clearing[self.track.rails[rail].from] {
                 if self.vehicles[other].path[0].0 != rail {
-                    consider(other, start, true, &mut best);
+                    consider(other, start, true);
                 }
             }
             if let Some(&other) = self.on_rail[rail].back() {
-                consider(other, start, false, &mut best);
-            }
-            if best.is_some() {
-                return best.map(|(_, leader)| leader);
+                consider(other, start, false);
             }
         }
         // Past the end of the path: vehicles just out of its last node.
@@ -363,14 +370,14 @@ impl Amhs {
             let node = self.track.rails[rail].to;
             for &out in &self.track.nodes[node].out {
                 if let Some(&other) = self.on_rail[out].back() {
-                    consider(other, end, true, &mut best);
+                    consider(other, end, true);
                 }
             }
             for &other in &self.clearing[node] {
-                consider(other, end, true, &mut best);
+                consider(other, end, true);
             }
         }
-        best.map(|(_, leader)| leader)
+        (best.map(|(_, leader)| leader), next)
     }
 
     /// Makes `leader` the vehicle's leader, in the followers' lists too.
@@ -435,7 +442,7 @@ impl Amhs {
             return (Plan::rest(now, s), None, Mode::Free);
         }
         let own = self.own_limit(id);
-        let leader = self.find_leader(id, s, own.odo, now);
+        let (leader, next) = self.find_leader(id, s, own.odo, now);
         self.link_leader(id, leader);
         let Some((leader, behind)) = leader
             .map(|leader| (leader, self.behind(id, leader, now)))
@@ -453,7 +460,7 @@ impl Amhs {
             && self.mirrorable(id, leader.id)
         {
             let base = other.plan.shifted(now, s - leader_s);
-            return match self.mirror(id, now, base, own, leader.id) {
+            return match self.mirror(id, now, base, own, next, leader.id) {
                 Some((plan, decision)) => (plan, decision, Mode::Mirror),
                 None => self.brake_for_a_ms(id, now, s, speed, behind),
             };
@@ -508,14 +515,17 @@ impl Amhs {
     }
 
     /// Following `leader` with `base` (its motion on the vehicle's odometer from `now`), cut
-    /// short where the vehicle's own limit binds; planned again once `leader` brakes for good,
-    /// and where a speed limit would bind, which must not happen within this ms (none then).
+    /// short where its stop point reaches the vehicle's own limit or `next`, the bound of the
+    /// next vehicle ahead (caught there); planned again once `leader` brakes for good, and where
+    /// a speed limit would bind. None where the next vehicle or a speed limit binds within this
+    /// ms.
     fn mirror(
         &self,
         id: usize,
         now: f64,
         base: Plan,
         own: Limit,
+        next: f64,
         leader: usize,
     ) -> Option<(Plan, Option<(Time, Decision)>)> {
         let decel = self.vehicles[id].dynamics.decel;
@@ -526,12 +536,20 @@ impl Amhs {
                 *decision = Some((at, kind));
             }
         };
+        let (limit, kind) = if next < own.odo {
+            (next, Some(Decision::Catch))
+        } else {
+            (own.odo, self.own_decision(id, own))
+        };
         let cut = base
-            .time_stop_point_at(own.odo, decel, now)
-            .filter(|&at| base.end() > own.odo + EPS || at < base.end_time());
+            .time_stop_point_at(limit, decel, now)
+            .filter(|&at| base.end() > limit + EPS || at < base.end_time());
         let plan = match cut {
             Some(at) => {
-                if let Some(kind) = self.own_decision(id, own) {
+                if next < own.odo && floor(at) <= now as Time {
+                    return None;
+                }
+                if let Some(kind) = kind {
                     earliest(floor(at), kind, &mut decision);
                 }
                 braking_after(&base, at, decel)
@@ -555,9 +573,9 @@ impl Amhs {
         Some((plan, decision))
     }
 
-    /// Where copying the vehicle ahead would break a speed limit within this ms: the vehicle's
-    /// own plan to its stop point less that one's length and its gap, looked at again in a ms
-    /// (when the vehicles have drifted apart).
+    /// Where copying the vehicle ahead would break a speed limit or reach the next vehicle's
+    /// bound within this ms (the event clock's resolution): the vehicle's own plan to the stop
+    /// point of the vehicle ahead less its length and the gap, looked at again in a ms.
     fn brake_for_a_ms(&self, id: usize, now: f64, s: f64, speed: f64, behind: f64) -> Planned {
         let dynamics = self.vehicles[id].dynamics;
         let plan = profile(now, s, speed, &self.zones(id, s, behind.max(s)), dynamics);
@@ -740,7 +758,7 @@ impl Amhs {
     fn catch(&mut self, id: usize, now: f64, sched: &mut Scheduler<Event>) {
         let (s, speed) = self.vehicles[id].plan.state(now);
         let own = self.own_limit(id);
-        let leader = self.find_leader(id, s, own.odo, now);
+        let (leader, next) = self.find_leader(id, s, own.odo, now);
         self.link_leader(id, leader);
         let bound = leader
             .map(|leader| (leader, self.behind(id, leader, now)))
@@ -781,7 +799,7 @@ impl Amhs {
                         .shifted(matched, at_match - other.plan.state(matched).0);
                     let mut phases = vec![braking.phases[0]];
                     phases.extend(copy.phases);
-                    match self.mirror(id, now, Plan { phases }, own, leader.id) {
+                    match self.mirror(id, now, Plan { phases }, own, next, leader.id) {
                         Some((plan, decision)) => (plan, decision, Mode::Mirror),
                         None => self.brake_for_a_ms(id, now, s, speed, behind),
                     }
@@ -806,7 +824,7 @@ impl Amhs {
                     .map(|phase| phase.t)
                     .find(|&t| t > now)
                     .unwrap_or(f64::INFINITY);
-                match self.mirror(id, now, base, own, leader.id) {
+                match self.mirror(id, now, base, own, next, leader.id) {
                     Some((plan, decision)) => {
                         let recheck = floor(next_phase).max(now as Time + 1);
                         let decision = match decision {

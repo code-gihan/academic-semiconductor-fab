@@ -4,7 +4,7 @@
 //! acceleration change at its instant, every activity, FOUP move and tool state as it was.
 //!
 //! The record keeps what the run does not determine by itself (`motion`, `changes`) and codes it
-//! with probabilities counted over the window (`coder`). Format (version 1): `SMTREPLY`, the
+//! with probabilities counted over the window (`coder`). Format (version 2): `SMTREPLY`, the
 //! version (u32), the window, its counts and the kinematics (varints, f64s), the probability of
 //! each context (u16s), then each vehicle's track and the change lists (each its byte length and
 //! its coded bytes); integers in varints and numbers little-endian.
@@ -33,7 +33,7 @@ pub(crate) use changes::{ActivityChange, FoupMove, ToolChange};
 pub(crate) use motion::{Kinematics, TrackWriter};
 
 const MAGIC: &[u8; 8] = b"SMTREPLY";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// A window from `from` up to `until` (ms).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -407,13 +407,15 @@ pub struct Frame {
     pub carried: f64,
 }
 
-/// Every vehicle, by id: its front's point (mm) and heading (rad), its speed (m/s) and what it
-/// does.
+/// Every vehicle, by id: its front's point (mm) and heading (rad), its rear's point along the
+/// rails (mm), its speed (m/s) and what it does.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct VehicleFrames {
     pub x: Vec<f64>,
     pub y: Vec<f64>,
     pub heading: Vec<f64>,
+    pub tail_x: Vec<f64>,
+    pub tail_y: Vec<f64>,
     pub speed: Vec<f64>,
     pub activity: Vec<Activity>,
 }
@@ -601,17 +603,25 @@ impl Player {
             &mut vehicles.x,
             &mut vehicles.y,
             &mut vehicles.heading,
+            &mut vehicles.tail_x,
+            &mut vehicles.tail_y,
             &mut vehicles.speed,
         ] {
             column.clear();
         }
         vehicles.activity.clear();
-        for (track, activities) in self.tracks.iter_mut().zip(&self.activities) {
-            let (rail, offset, speed) = track.at(time, &self.bytes, &self.codec, layout, &self.out);
+        let tracks = self.tracks.iter_mut().zip(&self.activities);
+        for ((track, activities), spec) in tracks.zip(&layout.vehicles) {
+            let (rail, offset, behind, speed) =
+                track.at(time, &self.bytes, &self.codec, layout, &self.out);
             let (x, y, heading) = layout.point(rail, offset);
+            let length = layout.vehicle_types[spec.kind].length;
+            let (tail_x, tail_y) = layout.rear(rail, offset, behind, length);
             vehicles.x.push(x);
             vehicles.y.push(y);
             vehicles.heading.push(heading);
+            vehicles.tail_x.push(tail_x);
+            vehicles.tail_y.push(tail_y);
             vehicles.speed.push(speed);
             // Every vehicle's first activity is at the window's start.
             let latest = activities.partition_point(|&(each, _)| each as f64 <= time);

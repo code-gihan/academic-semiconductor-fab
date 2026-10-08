@@ -11,7 +11,7 @@ use super::Criterion;
 use super::code::{Admit, BatchView, GroupCount, SegmentView, Start};
 use super::fab::{Event, Fab, LotId, LotState, ToolId, Waiting};
 use super::strategy::MAX_CRITERIA;
-use crate::data::{Dist, PartId, Rule, SetupId, StepIndex, StepSetup, ToolGroupId};
+use crate::data::{Dist, PartId, RouteId, Rule, SetupId, StepIndex, StepSetup, ToolGroupId};
 
 /// Ranking key compared lexicographically, smallest first: the CAtE/CoT class, the criteria and
 /// the release order.
@@ -249,15 +249,17 @@ impl Fab {
             }
         }
         // rule_LSSU: an unfinished setup run, hot lots included, waits for lots keeping the setup
-        // while any can come (AutoSched documentation: a minimum number of lots is ensured). The
-        // setup and run are those after the lots assigned to the tool ahead.
+        // while any can come (AutoSched documentation: a minimum number of lots is ensured),
+        // unless the group's runs would wait on each other for good. The setup and run are those
+        // after the lots assigned to the tool ahead.
         let state = &self.tools[tool];
         let current = state.next_setup;
         let run_holds = matches!(self.data.tool_groups[group].rule, Rule::SetupRun(_))
             && state.next_run_left > 0
             && current.is_some_and(|setup| {
                 self.can_still_come(&self.routes.setup_members[&(group, setup)])
-            });
+            })
+            && !self.runs_locked(group);
         // AMHS: a tool without a free port takes only the lots standing at its ports.
         let dockable = self.dockable(tool);
         // Held lots, lots dedicated to another tool, and setup changes during a held run wait.
@@ -493,6 +495,52 @@ impl Fab {
                                 || (lot.step == step && lot.state == LotState::Moving))
                     })
             })
+    }
+
+    /// rule_LSSU: whether the group's setup runs wait on each other for good. Every tool of it is
+    /// idle in an unfinished run that lots of its setup can still come to (7.8), yet no lot comes
+    /// to a step of the group that a run lets its tool take (no setup, or a running one) before a
+    /// step needing another setup, which the runs keep every tool from taking up. Runs that cannot
+    /// end so give way.
+    fn runs_locked(&self, group: ToolGroupId) -> bool {
+        let mut running = Vec::new();
+        for tool in self.groups[group].tools.clone() {
+            let state = &self.tools[tool];
+            let idle = if self.logistics.is_some() {
+                self.load(tool) == 0
+            } else {
+                state.busy() == 0
+            };
+            match state.next_setup {
+                Some(setup) if idle && state.next_run_left > 0 => {
+                    if !running.contains(&setup) {
+                        running.push(setup);
+                    }
+                }
+                _ => return false,
+            }
+        }
+        // Whether a lot at `step` of `route` meets the group first at a step a run takes. Setup
+        // steps of rule_LSSU groups are never skipped (checked by the loader).
+        let comes = |route: RouteId, step: StepIndex| {
+            self.data.routes[route].steps[step..]
+                .iter()
+                .find(|next| next.tool_group == group)
+                .is_some_and(|next| next.setup.is_none_or(|need| running.contains(&need.setup)))
+        };
+        running
+            .iter()
+            .all(|&setup| self.can_still_come(&self.routes.setup_members[&(group, setup)]))
+            && !self
+                .lots
+                .iter()
+                .any(|lot| lot.alive && comes(lot.route, lot.step))
+            && !self
+                .data
+                .parts
+                .iter()
+                .enumerate()
+                .any(|(part, spec)| self.plan.remaining[part] > 0 && comes(spec.route, 0))
     }
 }
 

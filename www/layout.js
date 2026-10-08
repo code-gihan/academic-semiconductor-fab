@@ -7,7 +7,8 @@
 // to events (animation frames while playing, worker messages, input, resizes, the colour
 // scheme); nothing polls.
 import { formatNumber, t } from "./i18n.js";
-import { ReplayPlayer } from "./pkg/fab_wasm.js";
+import { ReplayPlayer } from "./pkg/smt2020.js";
+import { dayText } from "./progress.js";
 
 const DAY = 86_400_000;
 /** Simulated ms per wall ms offered, and the one chosen first. */
@@ -62,11 +63,15 @@ const LABEL = 11;
 const $ = (id) => document.getElementById(id);
 
 /**
- * The view; `setup` is the Setup view, whose `snapshot()` is the setup to simulate. `ready()` is
- * called once the wasm module works, `shown(view)` whenever a view is shown, `changed()` after an
- * edit of the setup and `relabel()` after a language change.
+ * The view; `setup` is the Setup view, whose `snapshot()` is the setup to simulate. A finished
+ * run of the page may have done part of the work: `finishedReplay(key, config, code, window)` is
+ * the replay it recorded of `window` with `config` and strategy `code` on the dataset `key`, and
+ * `flowFactors(key, config)` the QTS flow factors it measured with `config`, which spare a
+ * recording its pre-run (null if none). `ready()` is called once the wasm module works,
+ * `shown(view)` whenever a view is shown, `changed()` after an edit of the setup, `relabel()`
+ * after a language change, and `window()` is the window the view's inputs choose.
  */
-export function layoutView({ setup }) {
+export function layoutView({ setup, finishedReplay, flowFactors }) {
   const canvas = $("layout-canvas");
   const context = canvas.getContext("2d");
   const background = document.createElement("canvas");
@@ -157,7 +162,7 @@ export function layoutView({ setup }) {
     each.addEventListener("message", ({ data }) => {
       if (data.run !== run) return;
       if (data.type === "progress") {
-        progress(data.progress.now);
+        progress(data.progress);
       } else if (data.type === "replay") {
         recorded(data.replay);
       } else {
@@ -222,42 +227,66 @@ export function layoutView({ setup }) {
     else if (statusText() === t("layout.empty")) status(() => "");
   }
 
-  /** Simulates the setup up to the window's end, recording the window. */
+  /** The window the inputs choose: from the start of a day, for a length (ms). */
+  function chosenWindow() {
+    const day = Math.max(1, Math.round(Number($("layout-day").value)));
+    const from = (day - 1) * DAY;
+    return { from, until: from + Number($("layout-length").value) };
+  }
+
+  /** Replays the window of the setup: as a finished run of it recorded it, or simulated up to
+   * the window's end. */
   function record() {
     const snapshot = setup.snapshot();
     if (!snapshot?.entry.info.layout || recording) return;
     pause();
-    const day = Math.max(1, Math.round(Number($("layout-day").value)));
-    const from = (day - 1) * DAY;
-    const until = from + Number($("layout-length").value);
+    const { from, until } = chosenWindow();
     run += 1;
-    recording = { snapshot, day, until, length: until - from };
+    recording = { snapshot, day: from / DAY + 1, until, length: until - from };
     const { entry } = snapshot;
+    // Replication 0, with the flow factors a finished run of it measured if QTS needs them.
+    const config = { ...snapshot.config, replication: 0 };
+    const kept = finishedReplay(entry.id, config, snapshot.code, { from, until });
+    if (kept) {
+      recorded(kept);
+      return;
+    }
+    const measured = flowFactors(entry.id, config);
     worker.postMessage({
       run,
       key: entry.id,
       bytes: sent === entry.id ? undefined : entry.bytes,
-      config: { ...snapshot.config, replication: 0 },
+      config: measured ? { ...config, flow_factors: measured } : config,
       code: snapshot.code,
       window: { from, until },
     });
     sent = entry.id;
     $("layout-stop").hidden = false;
     showSetup();
-    progress(0);
+    status(() => t("layout.starting"));
   }
 
-  /** The recording has simulated up to `now`. */
-  function progress(now) {
+  /** Where the recording is: a QTS pre-run first measures the flow factors over the whole run
+   * (no finished run of the setup gave them), then the run goes up to the window's end. */
+  function progress(update) {
+    if (update.pass < update.passes - 1) {
+      status(() => t("layout.preRun", { day: dayText(update) }));
+      return;
+    }
     const days = Math.ceil(recording.until / DAY);
-    const day = Math.min(days, Math.floor(now / DAY) + 1);
+    const day = Math.min(days, Math.floor(update.now / DAY) + 1);
     status(() => t("layout.recording", { day: formatNumber(day, 0), days: formatNumber(days, 0) }));
   }
 
-  /** The recording is done: its replay is shown from its start, paused. */
+  /** The recording is done: its replay is shown from its start, paused; none if the run ended
+   * before the window. */
   function recorded(replay) {
     const { snapshot, day, length } = recording;
     finishRecording();
+    if (!replay) {
+      status(() => t("layout.afterEnd"));
+      return;
+    }
     let player;
     try {
       player = new ReplayPlayer(snapshot.entry.dataset, replay);
@@ -496,7 +525,7 @@ export function layoutView({ setup }) {
         const [place, index] = [foups.place[row], foups.index[row]];
         let at = null;
         if (place === "port") at = drawing.ports[index];
-        else if (place === "vehicle") at = { x: vehicles.x[index], y: vehicles.y[index] };
+        else if (place === "vehicle") at = middle(vehicles, index);
         else if (place === "commit" && !hot) committed.set(index, (committed.get(index) ?? 0) + 1);
         if (at) context.rect(screenX(at.x) - half, screenY(at.y) - half, 2 * half, 2 * half);
       });
@@ -512,7 +541,8 @@ export function layoutView({ setup }) {
     showStats();
   }
 
-  /** Vehicle bodies back from their fronts along their heading, or dots when small. */
+  /** Vehicle bodies from their fronts to their rears on the rails (a straight body on a curve
+   * spans its chord), or dots at their middles when small. */
   function drawVehicles(drawing, vehicles) {
     const width = Math.max(1.5, VEHICLE_WIDTH * view.scale);
     for (const [activity, colour] of Object.entries(ACTIVITY_COLOUR)) {
@@ -520,23 +550,22 @@ export function layoutView({ setup }) {
       context.beginPath();
       vehicles.activity.forEach((each, id) => {
         if (each !== activity) return;
-        const x = screenX(vehicles.x[id]);
-        const y = screenY(vehicles.y[id]);
-        const length = drawing.vehicle_lengths[id] * view.scale;
-        if (length < DOT_BELOW) {
+        if (drawing.vehicle_lengths[id] * view.scale < DOT_BELOW) {
+          const at = middle(vehicles, id);
+          const [x, y] = [screenX(at.x), screenY(at.y)];
           context.moveTo(x + 2.5, y);
           context.arc(x, y, 2.5, 0, 2 * Math.PI);
           return;
         }
-        // Screen heading: y flipped.
-        const heading = vehicles.heading[id];
-        const [dx, dy] = [Math.cos(heading), -Math.sin(heading)];
-        const [nx, ny] = [-dy * (width / 2), dx * (width / 2)];
-        const [bx, by] = [x - dx * length, y - dy * length];
+        const [x, y] = [screenX(vehicles.x[id]), screenY(vehicles.y[id])];
+        const [tx, ty] = [screenX(vehicles.tail_x[id]), screenY(vehicles.tail_y[id])];
+        // Half the width across the body, from rear to front.
+        const scale = width / 2 / Math.hypot(x - tx, y - ty);
+        const [nx, ny] = [(ty - y) * scale, (x - tx) * scale];
         context.moveTo(x + nx, y + ny);
         context.lineTo(x - nx, y - ny);
-        context.lineTo(bx - nx, by - ny);
-        context.lineTo(bx + nx, by + ny);
+        context.lineTo(tx - nx, ty - ny);
+        context.lineTo(tx + nx, ty + ny);
         context.closePath();
       });
       context.fill();
@@ -618,8 +647,9 @@ export function layoutView({ setup }) {
     const { vehicles, foups } = shownReplay.frame;
     let best = null;
     let nearest = 8;
-    vehicles.x.forEach((vx, id) => {
-      const distance = Math.hypot(screenX(vx) - x, screenY(vehicles.y[id]) - y);
+    vehicles.x.forEach((_, id) => {
+      const at = middle(vehicles, id);
+      const distance = Math.hypot(screenX(at.x) - x, screenY(at.y) - y);
       if (distance < nearest) {
         nearest = distance;
         best = id;
@@ -653,7 +683,13 @@ export function layoutView({ setup }) {
     return lines.join("\n");
   }
 
-  return { ready, shown, changed, relabel };
+  return { ready, shown, changed, relabel, window: chosenWindow };
+}
+
+/** The middle of vehicle `id`'s body (mm), between its front and its rear: where it carries a
+ * FOUP. */
+function middle(vehicles, id) {
+  return { x: (vehicles.x[id] + vehicles.tail_x[id]) / 2, y: (vehicles.y[id] + vehicles.tail_y[id]) / 2 };
 }
 
 /** A window's length (ms) in words. */

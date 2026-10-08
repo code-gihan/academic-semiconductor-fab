@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::mem;
+use std::ops::Range;
 use std::sync::Arc;
 
 use des_core::{DAY, Model, Scheduler, Time};
@@ -190,6 +191,8 @@ impl WaitingCqt {
 
 #[derive(Default)]
 pub(super) struct Group {
+    /// Its tools.
+    pub tools: Range<ToolId>,
     pub queue: Vec<Waiting>,
     /// Available tools, longest available first.
     pub ready: VecDeque<ToolId>,
@@ -368,6 +371,7 @@ impl Fab {
         let mut tools = Vec::new();
         let mut groups: Vec<Group> = data.tool_groups.iter().map(|_| Group::default()).collect();
         for (group_id, group) in data.tool_groups.iter().enumerate() {
+            groups[group_id].tools = tools.len()..tools.len() + group.tools as usize;
             for position in 1..=group.tools {
                 let mut tool =
                     Tool::new(group_id, group.cascading, &group.pms, position, group.tools);

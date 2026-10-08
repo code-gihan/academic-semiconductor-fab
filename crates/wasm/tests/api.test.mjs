@@ -14,10 +14,10 @@ import {
   digest,
   initSync,
   summarize,
-} from "../../../www/pkg/fab_wasm.js";
+} from "../../../www/pkg/smt2020.js";
 
 const root = new URL("../../../", import.meta.url);
-initSync({ module: readFileSync(new URL("www/pkg/fab_wasm_bg.wasm", root)) });
+initSync({ module: readFileSync(new URL("www/pkg/smt2020_bg.wasm", root)) });
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -392,7 +392,11 @@ test("a recorded replay plays every vehicle, FOUP and tool as the run had them",
     assert.equal(vehicles.x.length, amhs.vehicles.length);
     amhs.vehicles.forEach((vehicle, id) => {
       const off = Math.hypot(vehicle.x - vehicles.x[id], vehicle.y - vehicles.y[id]);
-      assert.ok(off < 1.1e-3, `vehicle ${id} at ${at}: ${off} mm off`);
+      const rear = Math.hypot(vehicle.tail_x - vehicles.tail_x[id], vehicle.tail_y - vehicles.tail_y[id]);
+      assert.ok(off < 1.1e-3 && rear < 1.1e-3, `vehicle ${id} at ${at}: ${off}, ${rear} mm off`);
+      // The rear lies along the rails, the body (784 mm) no longer than itself.
+      const body = Math.hypot(vehicles.x[id] - vehicles.tail_x[id], vehicles.y[id] - vehicles.tail_y[id]);
+      assert.ok(body > 500 && body <= 784 + 1e-6, `vehicle ${id} at ${at}: body ${body} mm`);
       assert.equal(vehicles.activity[id], vehicle.activity);
     });
     const atPorts = [...foups.lot].flatMap((lot, row) =>

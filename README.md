@@ -86,9 +86,9 @@ smat = smt2020.load_dataset("smat2022")
 window = {"from": DAY, "until": DAY + 3_600_000}
 traced = smt2020.Simulation(smat, {"horizon": 730 * DAY, "amhs": {"dispatch": "bay"}}, {"replay": window})
 traced.run(until=window["until"])
-traced.amhs()  # OHT(활동·위치·속도·화물), 포트 FOUP, 툴 상태, 반송 지표
-player = smt2020.ReplayPlayer(smat, traced.replay())  # bytes(1시간 약 0.5 MB)
-frame = player.frame(DAY + 600_000)  # 그 시각의 OHT 좌표·활동, FOUP 위치, 툴 상태 열
+traced.amhs()  # OHT(활동·앞 끝·뒤 끝·속도·화물), 포트 FOUP, 툴 상태, 반송 지표
+player = smt2020.ReplayPlayer(smat, traced.replay())  # bytes(1시간 약 0.4 MB, 데이터 속도)
+frame = player.frame(DAY + 600_000)  # 그 시각의 OHT 앞·뒤 끝 좌표·활동, FOUP 위치, 툴 상태 열
 ```
 
 - 실행 중 GIL을 놓으므로 스레드마다 `Simulation`을 두면 복제가 병렬로 실행된다. Ctrl-C는 실행을 일시정지하고 `KeyboardInterrupt`를 발생시킨다.
@@ -109,7 +109,7 @@ with ThreadPoolExecutor() as pool:
 
 ```js
 // module worker: run()은 진행하는 동안 스레드를 점유한다.
-import init, { Dataset, ReplayPlayer, Simulation, summarize, csv, digest } from "./pkg/fab_wasm.js";
+import init, { Dataset, ReplayPlayer, Simulation, summarize, csv, digest } from "./pkg/smt2020.js";
 
 await init();
 const dataset = new Dataset(new Uint8Array(await (await fetch("data/ds2.bin")).arrayBuffer()));
@@ -131,12 +131,12 @@ const [from, until] = [DAY, DAY + 3_600_000];
 const traced = new Simulation(smat, { horizon: 730 * DAY }, { replay: { from, until } });
 traced.run(until);
 const player = new ReplayPlayer(smat, traced.replay());
-const { vehicles, foups, tools } = player.frame(DAY + 600_000); // 숫자 열은 Float64Array
+const { vehicles, foups, tools } = player.frame(DAY + 600_000); // 숫자 열은 Float64Array(차량 앞·뒤 끝 x·y 등)
 ```
 
 - 복제는 `replication`만 다르게 워커마다 실행하고 결과 배열을 `summarize`·`csv`에 넘긴다(`www/main.js`·`www/worker.js`).
 - 데이터셋 파일: 배포 페이지의 `data/ds1.bin`–`ds4.bin`(다른 출처에서도 fetch 가능, 예: `https://code-gihan.github.io/academic-semiconductor-fab/data/ds2.bin`) 또는 `smt2020 convert` 출력.
-- Node.js: `initSync({ module: readFileSync("www/pkg/fab_wasm_bg.wasm") })` 후 같은 API.
+- Node.js: `initSync({ module: readFileSync("www/pkg/smt2020_bg.wasm") })` 후 같은 API.
 
 ### Rust
 
@@ -248,7 +248,7 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 - 순위 = `tool.txt` FWLRANK 순: rank_HP(우선순위 높은 순, hot lot이 setup 유발 가능) → rank_RSETUP(필요 setup 시간 짧은 순) → rank_FIFO(대기열 도착 순, DS1·3) 또는 rank_CR(작은 순, DS2·4). DS3·4는 LithoTrack_FE_95·115, Planar 6 TG에 rank_RSETUP 없음. 동률은 lot 번호. 설정의 기준 목록(`ranking`)이 있는 TG는 그 목록([운영 전략](#운영-전략)).
 - CR = (납기 − t) / 잔여 공정시간. 잔여 공정시간 = 현재 스텝부터 기대 스텝시간 합(load + 공정 + unload, 샘플링 확률 가중, 반송·리워크 제외). 스텝별 a + b·n 형태 접미합을 사전 계산.
 - 자격 필터: LTL 전용 툴, setup run, super hot 예약, Stopping 보류. CAtE·CoT는 순위 맨 앞 유형 키.
-- rule_LSSU(Implant_128·132·91, setup 그룹 Implant_Gas, MINRUN 7): setup 변경 후 해당 setup으로 7 lot 처리 전 재변경 금지(run 길이는 변경 시 MINRUN, lot 시작마다 1 감소). 미완 run 중엔 hot lot도 setup을 바꾸지 않는 lot만 자격(AutoSched 문서: run 최소 lot 보장), 없으면 대기(가정). 현 setup lot이 더 올 수 없으면 대기 해제(가정).
+- rule_LSSU(Implant_128·132·91, setup 그룹 Implant_Gas, MINRUN 7): setup 변경 후 해당 setup으로 7 lot 처리 전 재변경 금지(run 길이는 변경 시 MINRUN, lot 시작마다 1 감소). 미완 run 중엔 hot lot도 setup을 바꾸지 않는 lot만 자격(AutoSched 문서: run 최소 lot 보장), 없으면 대기(가정). 현 setup lot이 더 올 수 없으면 대기 해제(가정). TG의 모든 툴이 일 없이 미완 run에 있는데 어떤 lot도 그 TG에서 run이 받는 스텝(setup 없음 또는 run 중인 setup)을 먼저 만나지 않으면(모두 어떤 툴의 run setup도 아닌 setup 스텝을 먼저 거쳐야 함), run끼리 영영 기다리므로 해제(가정; SMAT2022 2년 실행의 지평 뒤 Implant_132에서 발생. 그 전 규칙으로는 끝나지 않는 상태라 그 밖의 결과는 같다).
 - 툴 선택(유휴 툴 복수): wake_LeastSetupTime TG(DS1·2 9개, DS3·4 15개)는 도착 lot의 setup 시간 최소. 그 외·동률은 유휴 최장(가정).
 - super hot(우선순위 30, rule_HotLotFIRST): HOTLOT=yes면 현 스텝 공정 시작 시(HOTLOTDELAY%=0) 다음 스텝 TG 툴 1대 예약, 예약 툴은 도착까지 대기, setup은 도착 후. rule_LSSU TG 제외, TG당 예약 1건, 예약 툴 고장·PM 시 다음 가용 툴로 이전(가정). `.asd`는 전부 HOTLOT=no라 기본 비활성, 옵션으로 활성(xlsx 시맨틱).
 
@@ -276,16 +276,16 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 - 범위: 툴이 없는 TG(`Delay_32`)의 스텝은 건너뛴다(가정, 레이아웃에 위치 없음). RPT·CR·QT 여유의 기대 반송 시간은 0(가정, 반송 시간이 차량 상태에 달려 고정 기대값이 없음). 스토커는 쓰지 않는다(가정, [P3] 시나리오는 트랙 버퍼).
 - 투입·완료: lot은 첫 툴 스텝의 툴에 가장 가까운 commit 스테이션에서 투입되고, 마지막 툴에 가장 가까운 complete 스테이션으로 나간다(가정, 레일 거리. SMAT2022 시뮬레이터는 route 번호 기준). 초기 WIP는 현 스텝 이후 첫 툴 TG의 툴에서 가장 가까운 빈 트랙 버퍼에 놓고, 없으면 commit 스테이션에 둔다(가정).
 - 차량 운동: 등가속 구간(가속·정속·감속)의 닫힌 식 계획. 사건은 계획이 바뀌거나 결정이 필요한 순간(노드 통과, 제동점, 도착, 호이스트 종료)에만 생기고 시간 간격 갱신(tick)은 없다. 사건 시각은 정수 ms(제동 결정은 내림, 통과는 올림). 속도 제한 = min(레일 제한, 차량 최고 속도). 위치 허용 오차 10⁻³ mm, 속도 10⁻⁶ m/s. 오도미터가 10⁷ mm를 넘으면 현 레일 시작부터 다시 센다(정확한 뺄셈) → 2년 실행에서도 위치 오차가 커지지 않는다.
-- 차간(이동 폐색): 이동 권한 = 목적지, 점유하지 않은 ZCU의 정지 노드, 앞차 정지점(지금 제동하면 설 곳) − 앞차 길이 − 간격 중 가장 가까운 곳. 정지점은 뒤로 물러나지 않으므로 앞차가 무엇을 하든 안전하다. 앞차가 멀어지는 중에 제동점에 닿으면 속도를 맞추고(제동) 이후 앞차 계획을 일정 거리로 따른다(가정, SMAT2022 시뮬레이터의 시간 간격별 거리 검사 대신 사건형).
-- ZCU: 정지 노드의 제동점에서 요청, 점유 중이면 정지 노드에서 대기(요청 순), 리셋 노드를 지나면 해제. 대기 차량은 구역을 점유하지 않아 구역끼리 교착이 없다.
+- 차간(이동 폐색): 이동 권한 = 목적지, 점유하지 않은 ZCU의 정지 노드, 경로 위 앞 차량들(같은 레일의 앞차, 이후 레일마다 가장 뒤 차량, 경로의 분기 노드·끝을 아직 덮은 차량)의 정지점(지금 제동하면 설 곳) − 그 차량 길이 − 간격 중 가장 가까운 곳. 그 차량이 앞차다(분기로 빠지는 앞차 너머 차량도 권한을 정한다). 정지점은 뒤로 물러나지 않으므로 앞 차량들이 무엇을 하든 안전하다. 앞차가 멀어지는 중에 제동점에 닿으면 속도를 맞추고(제동) 이후 앞차 계획을 일정 거리로 따르다가, 다음 차량의 권한에 닿는 곳에서 그 차량을 따라붙는다(가정, SMAT2022 시뮬레이터의 시간 간격별 거리 검사 대신 사건형). 따르기가 이번 ms(사건 시계 해상도) 안에 다음 차량이나 속도 제한에 걸리면 앞차 권한까지의 자기 계획으로 바꾸고 다음 ms에 다시 정한다.
+- ZCU: 정지 노드의 제동점에서 요청, 점유 중이면 정지 노드에서 대기(요청 순), 리셋 노드를 지나면 해제. 대기 차량은 구역을 점유하지 않아 구역끼리 교착이 없다. 차량은 자기 경로 위 차량만 보므로 병합은 ZCU가 한 대씩 통과시킨다: 병합 노드로 들어오는 레일은 한 ZCU 영역에 있어야 한다(변환 시 검증, SMAT2022 병합 566개 모두 충족).
 - 배차: 반송 요청 즉시 유휴 차량 배정. `nearest`(레일 거리 최근접, 기본) 또는 `bay`(SMAT2022 시뮬레이터: 픽업 베이에서 가장 오래 순회한 차량, 없으면 이웃 베이 고리 순; 픽업 전에 설 수 없는 차량 제외). 없으면 요청 순으로 다음에 풀린 차량이 맡는다.
-- 순회: 유휴 차량은 자기 인트라베이의 두 순회점(분기 노드로 들어가는 최상단·최하단 레일 끝 100 mm 전, 없으면 첫·끝 레일) 사이를 돈다. 베이의 순회 차량이 `roam_limit`(15)을 넘으면 가장 오래 순회한 차량이 가장 덜 순회하는 이웃 베이로 간다.
+- 순회: 유휴 차량은 자기 인트라베이의 두 순회점(분기 노드로 들어가는 최상단·최하단 레일 끝 100 mm 전, 없으면 첫·끝 레일) 사이를 돈다. 베이의 순회 차량이 `roam_limit`(15)을 넘으면 가장 오래 순회한 차량이 자리가 있는(순회 차량 < `roam_limit`) 가장 가까운 이웃 고리에서 가장 덜 순회하는 베이로 간다(가정: SMAT2022 시뮬레이터는 가장 덜 순회하는 이웃으로 보내고 그 베이가 넘치면 다시 보내는데, 두 베이가 서로를 고르면 끝나지 않는다; 자리 있는 이웃이 있으면 같다). 이웃만 보던 이전 규칙은 이웃이 모두 찬 베이에 유휴 차량을 쌓아 순환 레일을 채웠다(룩어헤드 0에서 베이 A19 50여 대, 8.2 h 교착).
 - 호이스트: 적재·하역 10 s(설정 `hoist`, 가정: [P3]에 값 없음). 하역 포트가 바뀌면(배정 툴 고장 등) 운반 중에도 새 포트로 간다.
 - 배정: 스텝을 마친 lot은 곧바로 다음 스텝 대기열에 들어가고, 가동 가능한 툴이 디스패칭 순위로 lot을 미리 배정받는다. 받는 양: 룩어헤드 null = 포트 수만큼(배치 툴은 유휴일 때 배치 하나, SMAT2022 시뮬레이터와 같음), 정수 n = 동시 job 수 + n. 작업량이 가장 적은 툴부터(동률은 가용 시각). 배정된 FOUP은 즉시 그 툴 포트로 간다(툴 포트에서 바로 = 툴 투 툴, T2T).
 - 버퍼: 배정되지 않은 lot은 TG 툴 베이들에서 레일 거리가 가장 가까운 빈 트랙 버퍼로(없으면 이웃 베이 고리 순), 모두 차면 빈 버퍼를 기다린다(요청 순).
 - 시작: 툴은 FOUP이 모두 포트에 온 배정 중 순위가 가장 높은 것을 시작한다. 배치 툴은 FOUP을 포트로 받아 안으로 들이고(내부 버퍼, 가정) 배치 뒤 포트 하나씩 내보낸다. 툴 고장·PM 시작 때 시작 전 배정은 대기열로 돌아간다(이동 중 FOUP은 버퍼로 재지정).
 - 측정(결과 `periods[].amhs`, 측정 범위 `amhs`·`bay_distance`): 운반 수·T2T 비율, 운반 시간(요청 → 하역 완료), 차량 대기, 공차·적재 주행, 적재 주행 중 단독 주행(앞차·구역 없음) 시간, 베이 거리(0–9, 10+, 인터베이)별 적재 주행, 차량 활동 시간·가동률, 구역 대기.
-- 안전 검사(테스트): 구역 단일 점유, 레일 위 앞뒤 순서, 정지점 간격, 순회 목록이 매 검사 시각에 성립.
+- 안전 검사(테스트): 구역 단일 점유, 레일 위 앞뒤 순서, 정지점 간격(간격 안에 있는 차량은 서 있고 앞으로 가는 계획이 없다: 분기 노드에서 다른 갈래로 막 간 차량 옆에 섰다가 경로가 그 갈래로 바뀐 경우), 순회 목록이 매 검사 시각에 성립.
 
 ## 운영 전략
 
@@ -309,9 +309,9 @@ target/release/smt2020 validate "data/raw/AutoSched/dataset 2/LVHM_Model"
 
 ## API
 
-코어는 Rust 라이브러리 `smt2020` 하나다. JavaScript(`fab_wasm`)·Python(`smt2020`)은 같은 기능과 직렬화 스키마를 언어 관례대로 노출하는 포장이고(시간 ms, `DAY`·`HOUR`·`MINUTE`·`SECOND` 상수), CLI(`convert`, `run`, `validate`)는 그 위의 실행 도구다.
+코어는 Rust 라이브러리 `smt2020` 하나다. JavaScript(wasm 모듈 `smt2020`)·Python(패키지 `smt2020`)은 같은 기능과 직렬화 스키마를 언어 관례대로 노출하는 포장이고(시간 ms, `DAY`·`HOUR`·`MINUTE`·`SECOND` 상수), CLI(`convert`, `run`, `validate`)는 그 위의 실행 도구다.
 
-| 기능 | Rust `smt2020` | JS `fab_wasm` | Python `smt2020` |
+| 기능 | Rust `smt2020` | JS `smt2020`(wasm) | Python `smt2020` |
 |---|---|---|---|
 | 데이터셋 | `Dataset::from_bytes`·`to_bytes`, `asd::{load, load_with_orders, orders}` | `new Dataset(bytes)` | `Dataset(bytes)`, `load_dataset(source)` |
 | 데이터셋 정보 | `Dataset::info()` | `dataset.info()` | `dataset.info()` |
@@ -377,7 +377,7 @@ JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생�
 
 ### 진행·상태·결과
 
-- AMHS(`amhs()`, 레이아웃 없으면 null): `vehicles[]` {`id`, `activity`(`idle`·`to_pickup`·`loading`·`to_dropoff`·`unloading`), `link`·`offset`(레일·앞 끝 위치 mm), `x`·`y`·`heading`, `speed`(m/s), `lot`}, `foups[]`(툴·버퍼 포트의 FOUP) {`port`, `lot`, `kind`}, `kept`(오는 FOUP에 잡아 둔 포트), `committed`·`inside`(commit 스테이션·배치 툴 안 FOUP 수), `tools`(툴 상태), `backlog`(차량 없는 운반), `report`(보고 기간의 반송 지표). lot 상태에 `port`·`vehicle`, 상태 `leaving`(complete로 가는 중). 데이터셋 정보 `layout`(차량·베이·레일·길이·ZCU·툴 포트·버퍼 수), `layout()` = 그림용 레이아웃(노드·레일(원호)·베이·툴·스테이션·포트 좌표, mm).
+- AMHS(`amhs()`, 레이아웃 없으면 null): `vehicles[]` {`id`, `activity`(`idle`·`to_pickup`·`loading`·`to_dropoff`·`unloading`), `link`·`offset`(레일·앞 끝 위치 mm), `x`·`y`·`heading`(앞 끝), `tail_x`·`tail_y`(레일을 따라 차량 길이만큼 뒤의 뒤 끝, mm), `speed`(m/s), `lot`}, `foups[]`(툴·버퍼 포트의 FOUP) {`port`, `lot`, `kind`}, `kept`(오는 FOUP에 잡아 둔 포트), `committed`·`inside`(commit 스테이션·배치 툴 안 FOUP 수), `tools`(툴 상태), `backlog`(차량 없는 운반), `report`(보고 기간의 반송 지표). lot 상태에 `port`·`vehicle`, 상태 `leaving`(complete로 가는 중). 데이터셋 정보 `layout`(차량·베이·레일·길이·ZCU·툴 포트·버퍼 수), `layout()` = 그림용 레이아웃(노드·레일(원호)·베이·툴·스테이션·포트 좌표, mm).
 - 데이터셋 정보(`info()`): `areas`, `tool_groups[]` {`name`, `area`, `tools`, `batching`, `setup_runs`, `stepper`, `ranks`(데이터 순위 기준)}, `parts[]` {`name`, `family`, `engineering`, `route`}, `routes[]` {`name`, `steps[]` {`name`, `tool_group`}}, `segments[]`(CQT 구간, route·시작 스텝 순 = 구간 index) {`route`, `entry`, `exit`, `limit`, `litho`, `tool_groups`}, `periods[]` {`name`, `start`, `report`, `reset`}. 숫자 참조는 각 목록의 index.
 - 진행(`Progress`, 관찰자에게 1일 1회, `progress()`·`run`의 반환): `pass`·`passes`(QTS 1차 실행이면 0/2·1/2), `now`(그 pass의 시각), `horizon`, `released`·`completed`(투입·완료 lot), `wip`, `cqt_completed`·`cqt_violated`(CQT 구간 완료·위반 누적), `finished`.
 - lot(`lots()`, 재공 lot을 id 순으로): `id`(투입 순번, 0부터), `part`, `kind`, `priority`(디스패칭 우선순위, EF 반영), `wafers`, `release`, `due`, `step`·`step_name`·`tool_group`(이동 중이면 향하는, 대기·공정 중이면 그 스텝), `state`(`moving`·`queued`·`processing`), `tool`(공정 중인 툴 id), `cqt_exit`·`cqt_deadline`(진행 중인 CQT 구간의 종료 스텝과 그 스텝의 한도 내 최종 시작 시각).
@@ -403,7 +403,7 @@ JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생�
 
 - TG 필터는 TG 없는 사건(투입·완료)을, lot 필터는 lot 없는 사건(고장·PM)을 거른다. 창 끝 ≤ 시작, 미지 TG는 오류.
 
-- AMHS 재생: `"replay": {"from": ms, "until": ms}`(레이아웃 데이터셋만, until > from). 창 시작 직전에 모든 차량·FOUP·툴 상태를 찍고 창 안의 변화를 기록한다(결과 불변). `replay()`는 압축 바이트(창 끝 전에는 그때까지), `ReplayPlayer(dataset, bytes).frame(t)`가 그 시각의 차량(좌표·방향·속도·활동)·FOUP(포트·차량·툴·commit)·툴 상태와 창 안 운반 수·T2T·탑재 시간을 준다(열 형식, JS는 숫자 열이 typed array). 차량 위치는 모든 시각에 10⁻⁴ mm·속도 10⁻⁷ m/s 이내, 가속도 변경 시각·활동·FOUP·툴 상태는 정확([재생 형식](#재생-형식)).
+- AMHS 재생: `"replay": {"from": ms, "until": ms}`(레이아웃 데이터셋만, until > from). 창 시작 직전에 모든 차량·FOUP·툴 상태를 찍고 창 안의 변화를 기록한다(결과 불변). `replay()`는 압축 바이트(창 끝 전에는 그때까지), `ReplayPlayer(dataset, bytes).frame(t)`가 그 시각의 차량(앞 끝 좌표·방향, 레일을 따른 뒤 끝 좌표, 속도·활동)·FOUP(포트·차량·툴·commit)·툴 상태와 창 안 운반 수·T2T·탑재 시간을 준다(열 형식, JS는 숫자 열이 typed array). 차량 위치는 모든 시각에 10⁻⁴ mm·속도 10⁻⁷ m/s 이내, 가속도 변경 시각·활동·FOUP·툴 상태는 정확([재생 형식](#재생-형식)).
 - 규모(DS2 730 d): 위반 약 17.7만 행, TG 일별 약 8.1만 행(JSON 19.5 MB), 기록 시간 1–2% 증가. 사건은 전 TG 하루 약 4.2만 행.
 
 ### 재생 형식
@@ -414,8 +414,8 @@ JSON·JS 객체·Python dict·Rust `Config` 공통. `horizon` 외 필드는 생�
 - 생략: 가속도가 같고 재생이 다음 변경까지 10⁻⁴ mm·10⁻⁷ m/s 안에 머무는 중단점은 쓰지 않는다. 한 구간 안의 위치 오차는 시각에 선형이라 양 끝 검사로 구간 전체가 보장된다. 넘으면 정확한 위치·속도(f64 순서 차)를 쓴다. 레일은 레이아웃과 분기 노드 선택(나가는 레일 index)으로 정해진다.
 - 부호화: 모든 기호를 이진 결정으로 바꾸고(작은 알파벳 = 이진 트리, 정수 = 비트 길이 단항 + 하위 비트(Elias γ)) 문맥(직전·새 가속도 쌍 등)별 고정 확률로 범위 부호화한다(LZMA 방식 범위 부호기, 확률 12비트). 확률은 창 전체에서 센 값(같은 부호화를 두 번: 세기 → 쓰기)이라 저장한 디코더 상태(범위·코드·위치)에서 어디서든 이어 읽는다. 플레이어는 차량마다 128 변경째마다 체크포인트를 둔다(뒤로 탐색 = 체크포인트에서 다시 읽기).
 - 활동·FOUP·툴 변경 목록: 직전 변경부터 ms, 대상(차량·lot·툴 비트), 새 값(직전 값 문맥의 이진 트리), lot 종류는 첫 이동에만.
-- 형식(버전 1): `SMTREPLY` + 버전(u32) + 창·개수(차량·레일·포트·툴)·lot 비트·최대 분기 index·가속도·속도 목록 + 문맥 확률(u16) + 차량별 트랙 + 변경 목록(각각 길이 + 부호화 바이트). 다른 데이터셋·손상은 오류(경계·개수 상한·범위 검사, 끝까지 읽어 검증).
-- 크기(SMAT2022, 2일째 1시간, 500대): 시각별 f64 열 36 MB → 중단점 생략·바이트 부호 1.20 MB → 문맥 범위 부호화 463 KB(78배). 생성 33 ms, 읽기(전체 검증) 43 ms, 프레임 42 µs(네이티브). 남은 비트의 63%는 앞차에 막혀 제동을 시작한 시각(f64 정확값)으로, 차간 제어를 다시 돌리지 않으면 예측할 수 없다.
+- 형식(버전 2): `SMTREPLY` + 버전(u32) + 창·개수(차량·레일·포트·툴)·lot 비트·최대 분기 index·가속도·속도 목록 + 문맥 확률(u16) + 차량별 트랙(분기 선택, 시작 상태·레일·그 뒤 레일, 변경) + 변경 목록(각각 길이 + 부호화 바이트). 뒤 레일은 창 시작에 병합 노드를 걸친 차체의 뒤 끝을 정한다(이후는 지나온 레일). 다른 데이터셋·손상은 오류(경계·개수 상한·범위 검사, 끝까지 읽어 검증).
+- 크기(SMAT2022, 2일째 1시간, 500대): 시각별 f64 열 36 MB → 문맥 범위 부호화 387 KB(93배; 중간의 중단점 생략·바이트 부호는 이전 제어에서 1.20 MB). 생성 27 ms, 읽기(전체 검증) 38 ms, 프레임 47 µs(네이티브). 속도 설정별(1일째 3시간째·2일째 첫 1시간): 데이터 0.34·0.39 MB, 직선 1.5·곡선 1.0 m/s 1.53·1.41 MB, [P3] Table 1 3.88·3.53 MB(곡선마다 가감속). 재생은 고른 창(웹 15분–2시간)만 기록한다: 730 d 전체는 압축해도 6–68 GB라 기록하지 않고, 결정적 실행이라 같은 설정을 창 끝까지 다시 실행해 기록한다. 남은 비트의 대부분(이전 제어에서 63%)은 앞차에 막혀 제동을 시작한 시각(f64 정확값)으로, 차간 제어를 다시 돌리지 않으면 예측할 수 없다.
 - DuckDB-wasm은 쓰지 않는다: 재생은 시각 순 순차 접근이라 열 저장·SQL의 이점이 없고 번들 수 MB와 초기화 비용이 든다. 사후 SQL 집계는 `frame` 열이나 결과를 내보내 쓴다.
 
 ### 데이터셋 파일
@@ -482,8 +482,27 @@ done
 
 ### AMHS 검증
 
-- 안전: 실데이터 기본 설정 6 h(20 ms·1 s 간격 검사)와 300대·`bay`·룩어헤드 1의 3 h(1 s 간격)에서 구역 단일 점유·차간·레일 순서·순회 목록 위반 0. 루프 레이아웃 테스트는 설정 조합(룩어헤드 0·1, 배차 2종, 1대·호이스트 0)마다 lot 전량 완료·기간별 차량 시간 합 = 창 × 대수.
-- [P3] 대비(2일, 기본 설정, 데이터 속도 1 m/s): T2T 72% / 60%, 베이 거리 0 적재 주행 46 s / 42.6 s, 10+ 302 s / 210 s. 먼 거리 차이는 인터베이 속도(데이터 1 m/s, [P3] Table 1 직선 5 m/s) 차이로 추정. 설정 `straight_speed`·`curve_speed`로 [P3] 속도를 쓸 수 있다.
+- 안전: 실데이터 기본 설정 6 h(20 ms·1 s 간격 검사)와 300대·`bay`·룩어헤드 1, [P3] Table 1 속도, 5 m/s의 각 3 h, 룩어헤드 0의 10 h(1 s 간격)에서 구역 단일 점유·차간·레일 순서·순회 목록 위반 0, 교착 없음. 이전 구현은 둘을 놓쳤다: 경로 앞 가장 가까운 한 대만 앞차로 삼아 앞차가 분기로 빠지는 동안 그 너머 차량을 무시했고(Table 1 속도 2 h에 정지점 위반 2,267회(50 ms 검사), 5 m/s 199 s 교착; 데이터 속도 1 m/s는 제동거리 0.17 m라 검사에 걸리지 않음), 순회 한도를 넘은 유휴 차량을 자리 있는 이웃 베이로만 보내 이웃이 모두 찬 베이에 쌓았다(룩어헤드 0에서 베이 A19 순환 레일이 50여 대로 차 8.2 h 교착). 루프 레이아웃 테스트는 설정 조합(룩어헤드 0·1, 배차 2종, 1대·호이스트 0)마다 lot 전량 완료·기간별 차량 시간 합 = 창 × 대수, 분기 노드를 일반 노드로 둔 5 m/s 차량 5대 안전(이전 차간 제어는 실패).
+- [P3] Table 4 대비(2일, 기본 배차 `nearest`·룩어헤드 포트 수, 베이 거리별 적재 주행 평균 s: 주행 / 단독 주행 / 막힘):
+
+| 베이 거리 | [P3] | 데이터(레일 1 m/s) | 직선 1.5·곡선 1.0 m/s | [P3] Table 1(직선 5·곡선 1 m/s, 2·3.5 m/s²) |
+|---|---|---|---|---|
+| 0 | 42.6 / 35.7 / 6.9 | 46.4 / 44.9 / 1.5 | 33.1 / 31.3 / 1.8 | 17.9 / 14.8 / 3.1 |
+| 1 | 76.2 / 68.1 / 8.0 | 91.3 / 89.2 / 2.1 | 65.2 / 62.7 / 2.6 | 35.3 / 31.3 / 4.0 |
+| 2 | 110.4 / 99.9 / 10.6 | 139.4 / 135.9 / 3.5 | 99.8 / 95.3 / 4.4 | 53.1 / 44.0 / 9.2 |
+| 3 | 115.8 / 104.3 / 11.6 | 140.9 / 137.5 / 3.4 | 99.6 / 95.2 / 4.5 | 53.0 / 42.4 / 10.6 |
+| 4 | 114.5 / 104.0 / 10.5 | 150.6 / 147.0 / 3.6 | 107.5 / 102.5 / 5.0 | 57.2 / 43.9 / 13.2 |
+| 5 | 141.4 / 127.9 / 13.5 | 176.5 / 172.7 / 3.9 | 124.4 / 119.3 / 5.1 | 64.4 / 51.1 / 13.2 |
+| 6 | 159.3 / 146.2 / 13.1 | 196.6 / 192.2 / 4.4 | 137.5 / 131.2 / 6.3 | 71.6 / 54.6 / 16.9 |
+| 7 | 159.3 / 145.2 / 14.1 | 216.0 / 211.4 / 4.7 | 151.8 / 145.0 / 6.7 | 78.9 / 60.4 / 18.5 |
+| 8 | 162.7 / 147.4 / 15.3 | 233.4 / 226.9 / 6.5 | 165.5 / 156.2 / 9.3 | 89.3 / 62.0 / 27.3 |
+| 9 | 169.6 / 155.0 / 14.6 | 228.7 / 222.1 / 6.7 | 163.1 / 153.0 / 10.0 | 88.8 / 59.2 / 29.6 |
+| 10+ | 209.8 / 187.0 / 22.8 | 300.9 / 291.1 / 9.8 | 212.1 / 198.1 / 14.0 | 117.6 / 73.9 / 43.7 |
+| T2T | 60% | 71.3% | 70.6% | 69.4% |
+
+  주행 시간은 직선 1.5·곡선 1.0 m/s에 가장 가깝다. [P3]의 수치를 낸 SMAT2022 시뮬레이터(Pinokio `OHT.CalculateTargetSpeed`)는 레일 최고 속도(데이터 1 m/s)를 다음 레일 진입 직전에만 적용하고 레일 안에서는 차량 최고 속도(1.5 m/s)까지 내며, [P3] Table 1 값은 데이터와 다르다. 기본값은 데이터의 의미(레일 최고 속도) 그대로 두고, 세 설정 모두 `amhs`의 `max_speed`·`straight_speed`·`curve_speed`·`acceleration`·`deceleration`으로 쓴다(웹 Setup: 데이터·[P3] Table 1·설정 JSON).
+- T2T는 툴이 공정 중인 job 밖에 미리 받는 lot 수(룩어헤드)를 따른다(2일, 데이터 속도): 0 → 40.4%, 1 → 60.2%, 포트 수(기본) → 71.3%. [P3]의 60%는 룩어헤드 1에 해당한다.
+- 2년(730 d, 워밍업 365 d, 기본 설정; 마감 41 d까지 52,823 lot 전량 완료): 2년째 T2T 71.3%, 베이 거리 0·10+ 적재 주행 46.9·300.9 s로 2일 값(71.3%, 46.4·300.9 s)과 같아 [P3]와의 차이는 초기 상태 탓이 아니다. 고치기 전 rule_LSSU 규칙으로는 지평 뒤 Implant_132의 run들이 서로 기다려 159 lot이 끝나지 않았다(위 rule_LSSU 해제 조건).
 - SMT2020 경로 불변: 레이아웃 없는 DS1–4는 AMHS 추가 전후 결과 CSV 동일(seed 1, 그리고 seed 2 + QTS + CoT 5).
 - 재생: 실행과 7,919 ms마다 대조(정방향·역방향 탐색, 10일째 창 포함), 차량 위치 차 < 1.1·10⁻³ mm(노드 통과 허용 오차 10⁻³ mm + 재생 10⁻⁴ mm), FOUP·툴 상태·활동 일치, 기록 전후 digest 동일. 잘린 바이트는 모두 오류, 한 비트 바뀐 바이트는 오류이거나 실패 없이 재생.
 
@@ -554,14 +573,14 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 | wasm: 시간·사건/s | 31.3 s · 2.25 M | 28.4 s · 2.15 M | 36.6 s · 2.17 M | 39.6 s · 1.95 M |
 | wasm / 네이티브 시간 | 1.23 | 1.19 | 1.21 | 1.20 |
 | 최대 메모리 네이티브 / wasm | 9.9 / 10 MB | 35.0 / 25 MB | 13.6 / 12 MB | 37.3 / 27 MB |
-| 결과 digest(네이티브 = wasm) | 822207a22054b640 | 89543570bb565f50 | ded1f0a167494bab | 27db95cd7bbcd187 |
+| 결과 digest(네이티브 = wasm) | 5a787be79299775a | f08298cbcc339e34 | ccd48e89ca108c4d | 828430199eb757eb |
 
 - 결정성: 네 데이터셋 모두 네이티브·wasm(브라우저·Node.js)·Python wheel 결과가 비트 단위로 같다(digest 일치). Python은 실행 중 GIL을 놓아 DS1–4를 스레드 4개로 동시에 실행하면 36 s(각각 단독 26–34 s).
 - 2년(730 d, 웹 기본값) 네이티브: 12.9·12.0·15.1·16.8 s. 병렬: DS3 2년 20회 16스레드 57 s.
 - 이전 구현 대비(같은 1,460 d): 34.5·32.7·40.7·47.5 s → 25.4·23.5·29.7·33.0 s(26–31% 단축, 결과 동일). 대기열 항목(도착 시 순위 입력 고정), 선택당 공통 입력 1회 계산, LTO·단일 코드 생성 단위. Stopping 재평가를 임계 해제 사건으로 바꿔 DS4 180 d 스테퍼 5/10 실행 77.8 → 6.3 s.
 - 구현 단계 10–11의 비용(같은 세션 대조): 순위 기준 목록은 같은 속도(키 계산 인라인, 호출이면 약 50% 느림). 구간·스텝 분해·일별 결과·기록 지점은 DS2 730 d 약 2%(기록 꺼짐; 사건 항목은 기록할 때만 만든다, lot 시각표는 lot 구조체 밖). 기록 켬(위반·TG 일별)은 추가 1–2%. 결과 구조가 늘어 최대 힙 +2–3 MB, digest는 새 값(기존 측정값은 CSV 바이트 동일).
 - 전략 코드(JS): DS2 730 d priority 1,541만 회 호출, Node에서 18.8–19.1 s(QTCR 15.8 s, 규칙 없음 17.3 s). [전략 코드](#전략-코드).
-- SMAT2022(OHT 500대, 모든 이동 모의): 네이티브 약 12 s/모의일(2년 약 2.5 h), wasm 11–15 s/일. 참고: SMAT2022 공개 시뮬레이터(Pinokio, 시간 간격 갱신) 2년 약 84 h(하드웨어 상이). 상태 조회 `amhs()` 2.3 ms, `layout()` 17.5 ms(wasm). 재생은 [재생 형식](#재생-형식).
+- SMAT2022(OHT 500대, 모든 이동 모의): 1·2일째 네이티브 12.6·12.7 s, wasm(Node) 12.1·11.2 s. 2년(730 d와 마감 41 d) 네이티브 2.5 h(8,968 s, 사건 170억, 최대 힙 48 MB, 단일 스레드). 참고: SMAT2022 공개 시뮬레이터(Pinokio, 시간 간격 갱신) 2년 약 84 h(하드웨어 상이). 상태 조회 `amhs()` 2.3 ms, `layout()` 17.5 ms(wasm). 재생은 [재생 형식](#재생-형식).
 - 참고 기준(하드웨어 상이): AutoSched AP 1,460 d 1회 — DS1 36:02(lot-step 34.69 M), DS2 31:30(30.01 M), DS3 40:48(39.04 M), DS4 39:58(38.15 M).
 
 ## 구현 구조
@@ -570,7 +589,7 @@ DS2, 2년, 10회, Period_1(2019). 본 모델 평균 / [P2] Table 5(default, None
 crates/des-core/  DES 코어 lib(모델 독립): 시각, 미래 사건 목록, 스케줄러, 사건 루프, 종료 시각, 관측 사건
 crates/smt2020/   SMT2020 도메인 lib(des-core 참조): 데이터 모델·.asd 로더·SMAT2022 레이아웃 로더·데이터셋 파일, Simulation(단계 실행·상태), 전략, AMHS·물류, 재생 기록·플레이어, 통계, 측정값·복제 요약. 바인딩 의존 없음
 crates/cli/       네이티브 CLI(패키지 smt2020-cli, 실행 파일 smt2020): convert(+ SMAT2022 xlsx 레이아웃, calamine), run, validate
-crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 fab-wasm): Dataset, Simulation, ReplayPlayer, summarize, daily, csv, compare, comparisonCsv, digest, 전략 코드 보기(Lot·Cqt·Segment·Batch, code.rs). tests/(Node API 테스트)
+crates/wasm/      JS 포장, wasm-bindgen cdylib(패키지 smt2020-wasm, 모듈 smt2020): Dataset, Simulation, ReplayPlayer, summarize, daily, csv, compare, comparisonCsv, digest, 전략 코드 보기(Lot·Cqt·Segment·Batch, code.rs). tests/(Node API 테스트)
 crates/python/    Python 포장, PyO3 cdylib(패키지 smt2020-python, maturin wheel smt2020): 같은 API + load_dataset(DS1–4·SMAT2022 동봉), 전략 코드 보기(code.rs), smt2020.pyi(타입), tests/(unittest)
 www/              index.html, style.css, favicon.svg, main.js(실행 조율·wheel 목록), views.js(보기), home.js(홈·레이스), explainer.js(큐타임 애니메이션), presets.js(레이스·데모 조건, [P2] 값), kpis.js(주요·상세 지표 타일, 판정), datasets.js(데이터셋 로딩·코어 검증), setup.js·strategy.js(시나리오·전략 편집기), code.js(전략 코드 카드·편집기·예제), strategy.d.ts(전략 코드 타입), pool.js·worker.js(워커 풀·실행·재생, 전략 코드 실행), hooks.js(전략 코드 컴파일), layout.js·recorder.js(레이아웃 보기·재생 기록 워커), progress.js(진행·큐타임 시계·전략별 위반율 선), coach.js(1회 안내), results.js(분석 개요·탭), details.js(실행 들여다보기), compare.js(비교), share.js(공유 링크), charts.js(ECharts 차트), labels.js(구간·스텝·lot 종류·기간·시각 표기), files.js(내려받기), tooltip.js(툴팁·ⓘ 버튼), tabs.js(보기 안 탭), motion.js(애니메이션), i18n.js(문구·숫자 형식), locales/(en·ko 문구), vendor/(anime.js 4.5.0 MIT, Apache ECharts 6.1.0 Apache-2.0, fonts/ IBM Plex Sans·Mono OFL-1.1, monaco/ Monaco Editor 0.57.0 MIT(JavaScript 편집에 쓰는 파일만)), data/(DS1–4·SMAT2022 데이터셋 파일), pkg/·python/(빌드 산출)
 data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, General Data/). 커밋 제외
@@ -596,12 +615,13 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 - 웹 모듈: `main.js`(실행 조율, 실행 = 묶음(시나리오 × 복제), 따라가는 보기 지정 가능), `views.js`(해시 라우터, `hashchange`만), `home.js`(레이스 = 홈이 따라가는 실행, 규칙별 복제 진행 합산·결과 KPI는 코어 `summarize`·`compare`), `kpis.js`(지표 타일·판정, 분석·비교와 공용), `datasets.js`(데이터셋 파일 1회 fetch·디코딩해 `info()`, 동시 요청은 하나로, 실행 전 `new Simulation`으로 코어 검증과 pass 수), `setup.js`(시나리오 = 데이터셋·설정·복제 수, 설정 JSON), `strategy.js`(전략 편집기, 설정 객체를 직접 고침), `code.js`(전략 코드: 원문·사용 여부·허용 상태, Monaco를 처음 열 때 AMD로 불러와 `strategy.d.ts`·checkJs로 자동완성·검사, 정의된 함수는 언어 서비스 개요로 표시, 편집기 1개를 카드마다 옮겨 붙임), `pool.js`·`worker.js`(작업 큐·워커; 워커가 코드 원문을 `new Function`으로 한 번 실행해 함수를 얻고, 오류에 원문 줄 번호를 붙임), `progress.js`(진행, 큐타임 시계 = 코어 `segments()`를 한도별로 묶어 그림, 전략별 위반율 선), `coach.js`(1회 안내, 닫힘은 localStorage), `results.js`(개요·탭), `details.js`(기록·재생·상세), `charts.js`(차트), `tabs.js`(ARIA 탭: 클릭·화살표 키, 숨은 탭의 차트는 보일 때 그림), `tooltip.js`(툴팁 1개, ⓘ 버튼, 마크업의 `data-tip`), `i18n.js`(`data-i18n` 문구, `data-i18n-attr` 속성, `data-tip` 버튼 이름), `motion.js`.
 - 웹 실행: 워커 풀(`pool.js`, 최대 `navigator.hardwareConcurrency`개)이 작업(복제 실행·재생)을 차례로 맡긴다. 워커는 디코딩한 데이터셋을 보관해 같은 데이터셋의 바이트는 처음 한 번만 받는다. SharedArrayBuffer·wasm 스레드 미사용(GitHub Pages는 COOP/COEP 헤더 설정 불가). 워커의 관찰자는 직전 보고 후 250 ms(벽시계)가 지난 첫 1일 관측에서 일시정지하고, 워커는 진행·`segments()`를 `postMessage`한 뒤 이어 실행한다(일시정지는 결과 불변, 타이머 없음). 메인 스레드는 복제별 상태를 갱신하고 프레임마다 최대 1회(`requestAnimationFrame`) 그린다. 취소는 작업 묶음 단위 `worker.terminate()`.
 - 기록·재생: 복제 0은 위반·툴그룹 일별 기록과 함께 실행한다(결과 불변). 다른 복제는 같은 설정 + 측정된 QTS 흐름 계수로 1 pass 재생해 기록하고 digest를 비교한다. 구간 사건·lot 이력은 창 끝(`until`)까지만 재생한다. 기록은 최근 복제 3개까지 보관.
+- 레이아웃 보기: 레이아웃 데이터셋의 실행은 시나리오마다 복제 0이 레이아웃 보기의 창(시작 날·길이)을 함께 기록한다(결과 불변). 레이아웃 보기는 설정·전략 코드·창이 같은 끝난 실행의 기록을 바로 재생하고, 없으면 기록 워커(`recorder.js`)가 창 끝까지 실행한다(QTS 흐름 계수는 같은 설정의 끝난 실행이 측정한 값을 넣어 1 pass, 없으면 사전 실행을 진행에 표시; 실행이 창 전에 끝나면 안내). 차량은 앞 끝–뒤 끝 사이 차체(곡선에서는 현), FOUP은 차체 가운데에 그린다.
 - 애니메이션: anime.js 4.5.0(MIT, `www/vendor/`에 동봉, 외부 CDN 미사용). 보기·결과 등장(짧은 페이드), 결과 수치 증가, 실시간 수치는 현재 표시값에서 새 값으로 이어 움직임, 탭 밑줄 이동, 큐타임 그림(timeline, 홈이 보이고 페이지가 보일 때만 재생). `prefers-reduced-motion`이면 생략(최종 화면 동일, 큐타임 그림은 정지 화면).
 - 디자인: IBM Plex Sans·Mono(라틴 woff2 동봉, SIL OFL 1.1, 한글은 시스템 글꼴), 흰 바탕·1px 선·강조색 하나, 그림자·그라데이션 없음. 라이트/다크는 `prefers-color-scheme`.
 - 차트: Apache ECharts 6.1.0(`dist/echarts.esm.min.js`, Apache-2.0, ZRender BSD-3 포함, 라이선스 `www/vendor/echarts.LICENSE.txt`). 실행 시작 때 미리 불러온다(설정·실행 보기는 쓰지 않음). 색은 CSS 토큰, 상자 폭·색 구성이 바뀌면 새 인스턴스로 다시 그리고(애니메이션 없음), 상자가 페이지에서 빠지면 dispose한다(`ResizeObserver`). 확대(dataZoom), 커서 연동(`connect`), 범례 토글, 터치 툴팁. 레이스·실행 보기의 선과 큐타임 시계는 진행마다 같은 인스턴스에 데이터만 갱신한다. 범주 색(툴 상태·대기 분해·규칙·전략 선 6색·시계 상태 3색)은 색각 검증(OKLab ΔE, 라이트·다크 표면)을 통과한 순서로 둔다.
 - 다국어: 언어별 문구 파일(`www/locales/*.js`, `en.js`와 같은 키, `{이름}` 자리 표시, 빠진 키는 영어). 정적 요소는 `data-i18n` 키, 동적 문구는 `t()`, 숫자는 `Intl.NumberFormat`. 상태 문구·결과는 언어 전환 시 다시 그린다. 언어 추가 = 문구 파일 + `www/i18n.js`의 `LANGUAGES`·`MESSAGES` 등록.
 - 빌드: release 프로필 `lto = true`, `codegen-units = 1`, `panic = "abort"`(네이티브 약 7% 단축, 결과 동일).
-- 의존성: rand_xoshiro·libm·serde·postcard(`smt2020`), clap·serde_json(`smt2020-cli`), wasm-bindgen·js-sys·serde-wasm-bindgen·serde_json(`fab-wasm`), pyo3(abi3-py39)·pythonize(`smt2020-python`).
+- 의존성: rand_xoshiro·libm·serde·postcard(`smt2020`), clap·serde_json(`smt2020-cli`), wasm-bindgen·js-sys·serde-wasm-bindgen·serde_json(`smt2020-wasm`), pyo3(abi3-py39)·pythonize(`smt2020-python`).
 
 ## 구현 단계
 
@@ -624,6 +644,7 @@ data/raw/         SMT2020 배포본 SMT_2020 - Final 폴더 내용(AutoSched/, G
 17. CQT 실시간 시각화: 코어 구간 상태(`segments()`: 구간 안 lot·여유, 누적 완료·위반), 실행 보기 큐타임 시계(한도별 행, 여유·위험·초과)와 전략별 위반율 선, 1회 안내, 레이스에서 시계로 가는 링크 — 완료
 18. 전략 코드: 코어 `Code`(priority·admit·start_batch, 기준 `code`, `queue_time: "code"`, 보류·깨우기 사건), JS·Python 어댑터, 페이지 편집기(Monaco·타입·예제·검사), 워커 실행, 공유 링크 코드 허용, Stopping 재디스패칭 순서 고정 — 완료
 19. SMAT2022: 레이아웃 변환(`convert --layout`), OHT AMHS(정확한 등가속 궤적·이동 폐색·ZCU·배차·순회), 물류(포트·배정·버퍼·배치 출입), 반송 지표·상태, 재생 기록·압축·플레이어, 웹 반송 설정·레이아웃 보기·반송 탭 — 완료
+20. SMAT2022 검수 보완: 차간 권한(경로 앞 모든 차량의 최소, 다음 권한에서 따르기 절단), 병합 노드 ZCU 검증, 차량 뒤 끝 좌표(상태·재생 형식 2)와 차체 그리기, 레이아웃 보기(실행이 창 기록·끝난 실행의 기록 재생·QTS 흐름 계수 재사용·사전 실행 표시·창 전 종료 안내), JS 모듈 이름 `smt2020` — 완료
 
 ## 로컬 빌드·테스트
 
@@ -635,8 +656,8 @@ cargo build --release -p smt2020-cli
 for n in 1 2 3 4; do target/release/smt2020 convert "$(ls -d "data/raw/AutoSched/dataset $n"/*/*.asd)" www/data/ds$n.bin; done
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129   # crates/wasm/Cargo.toml의 wasm-bindgen 버전과 같아야 함
-cargo build --release --target wasm32-unknown-unknown -p fab-wasm
-wasm-bindgen --target web --no-typescript --out-dir www/pkg target/wasm32-unknown-unknown/release/fab_wasm.wasm
+cargo build --release --target wasm32-unknown-unknown -p smt2020-wasm
+wasm-bindgen --target web --no-typescript --out-name smt2020 --out-dir www/pkg target/wasm32-unknown-unknown/release/smt2020_wasm.wasm
 node --test crates/wasm/tests/api.test.mjs   # JS API(www/pkg 필요)
 pip install maturin
 maturin build --release -m crates/python/Cargo.toml --out dist   # 현재 플랫폼 wheel

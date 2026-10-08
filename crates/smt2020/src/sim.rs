@@ -1093,6 +1093,53 @@ mod tests {
         );
     }
 
+    /// [`tiny`]'s tool group as one rule_LSSU tool (runs of 3 lots) and a route of setups S1, S2,
+    /// S1 there: after two lots with S1, its run waits for them, and they wait at S2 for the run.
+    #[test]
+    fn setup_runs_never_wait_on_each_other() {
+        use crate::data::{Dist, Rule, SetupChange, SetupGroup, SetupId, Step, StepSetup, Unit};
+        let mut data = tiny();
+        data.lots.clear();
+        data.streams[0].count = 1;
+        data.streams[0].lots = 2;
+        let group = &mut data.tool_groups[0];
+        group.tools = 1;
+        group.rule = Rule::SetupRun(0);
+        group.breakdowns.clear();
+        group.pms.clear();
+        data.setups.push("S2".into());
+        data.setup_changes.push(SetupChange {
+            from: None,
+            to: 1,
+            time: Dist::Constant(10 * MINUTE),
+        });
+        data.setup_groups.push(SetupGroup {
+            name: "Gas".into(),
+            min_run: vec![(0, 3), (1, 3)],
+        });
+        let step = |name: &str, setup: SetupId| Step {
+            name: name.into(),
+            tool_group: 0,
+            unit: Unit::Lot,
+            time: Dist::Constant(10 * MINUTE),
+            cascade_interval: None,
+            batch: None,
+            setup: Some(StepSetup {
+                setup,
+                always: false,
+                time: None,
+            }),
+            sampling: 1.0,
+            rework: None,
+            dedicate_to: None,
+            cqt: None,
+        };
+        data.routes[0].steps = vec![step("1", 0), step("2", 1), step("3", 0)];
+        let mut sim = Simulation::new(Arc::new(data), Config::new(DAY)).unwrap();
+        let progress = sim.run(None).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((progress.finished, progress.completed), (true, 2));
+    }
+
     /// [`tiny_batch`] over its day, run to the end with `recording`.
     fn recorded(recording: Recording) -> Simulation {
         let data = Arc::new(tiny_batch());

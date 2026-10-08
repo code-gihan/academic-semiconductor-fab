@@ -2,7 +2,7 @@
 // local .bin file, fetched or read once and decoded by the wasm module, with its info (tool
 // groups, routes, CQT segments, an AMHS layout's size) for the editor, the labels and the checks
 // a run would make.
-import { Dataset, Simulation } from "./pkg/fab_wasm.js";
+import { Dataset, Simulation } from "./pkg/smt2020.js";
 import { Failure, t } from "./i18n.js";
 
 export const BUNDLED = ["ds1", "ds2", "ds3", "ds4", "smat2022"];

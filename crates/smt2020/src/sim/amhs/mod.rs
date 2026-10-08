@@ -123,12 +123,15 @@ named_enum! {
 pub struct VehicleStatus {
     pub id: usize,
     pub activity: Activity,
-    /// Rail and position of its front (mm), its point and heading (rad), speed (m/s).
+    /// Rail and position of its front (mm), its point and heading (rad), the point of its rear
+    /// along the rails (mm), speed (m/s).
     pub link: usize,
     pub offset: f64,
     pub x: f64,
     pub y: f64,
     pub heading: f64,
+    pub tail_x: f64,
+    pub tail_y: f64,
     pub speed: f64,
     /// The lot it carries ([`LotStatus::id`](super::LotStatus::id)).
     pub lot: Option<u64>,
@@ -254,6 +257,9 @@ struct Vehicle {
     plan: Plan,
     /// Rails from the one the front is on, with the odometer at each one's start.
     path: VecDeque<(LinkId, f64)>,
+    /// The rail the front left last, where the rear is while the front is less than the vehicle's
+    /// length into its rail (rails are longer than vehicles).
+    behind: LinkId,
     /// Odometer of the end of the path and what is there.
     goal: f64,
     goal_kind: Goal,
@@ -401,6 +407,10 @@ impl Amhs {
             let rest = Plan::rest(0.0, spec.offset);
             let mut path = VecDeque::new();
             path.push_back((spec.link, 0.0));
+            // A body reaching back over its rail's start has the one rail into it behind (the
+            // layout refuses merges there); otherwise the rail behind is not reached yet.
+            let start = layout.links[spec.link].from;
+            let behind = layout.links.iter().position(|link| link.to == start);
             vehicles.push(Vehicle {
                 length: kind.length,
                 gap: kind.min_gap,
@@ -408,6 +418,7 @@ impl Amhs {
                 dynamics,
                 plan: rest,
                 path,
+                behind: behind.expect("a strongly connected network"),
                 goal: spec.offset,
                 goal_kind: Goal::Port,
                 mode: Mode::Free,
@@ -519,6 +530,9 @@ impl Amhs {
                 let (link, start) = vehicle.path[0];
                 let offset = (s - start).clamp(0.0, self.track.rails[link].length);
                 let (x, y, heading) = self.layout().point(link, offset);
+                let (tail_x, tail_y) =
+                    self.layout()
+                        .rear(link, offset, vehicle.behind, vehicle.length);
                 let lot = match vehicle.task {
                     Task::ToDropoff(job) | Task::Unloading(job) => {
                         Some(lot_id(self.jobs[job].as_ref().expect("job").lot))
@@ -533,6 +547,8 @@ impl Amhs {
                     x,
                     y,
                     heading,
+                    tail_x,
+                    tail_y,
                     speed,
                     lot,
                 }
@@ -678,7 +694,8 @@ impl Amhs {
             let (rail, start) = vehicle.path[0];
             log.base[id] = -start;
             let a = vehicle.plan.acceleration(from);
-            let track = TrackWriter::new(&log.kinematics, from, s - start, v, a, rail);
+            let track =
+                TrackWriter::new(&log.kinematics, from, s - start, v, a, rail, vehicle.behind);
             log.tracks.push(track);
             log.activities.push(ActivityChange {
                 time: log.from,

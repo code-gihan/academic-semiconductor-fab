@@ -689,7 +689,7 @@ export default {
 
   "layout.heading": "팹 레이아웃과 물류",
   "layout.intro":
-    "설정의 데이터셋과 전략을 구간 끝까지 시뮬레이션하면서 OHT의 모든 움직임, FOUP의 모든 이동, 툴 상태를 기록한 뒤, 그 구간을 팹 바닥 위에서 다시 재생합니다: 재생·일시정지, 속도 변경, 시간 막대 끌기. 바닥을 끌어 이동, 스크롤이나 ±로 확대, OHT나 툴을 가리키면 자세히 보입니다.",
+    "설정의 데이터셋과 전략을 구간 끝까지 시뮬레이션하면서 OHT의 모든 움직임, FOUP의 모든 이동, 툴 상태를 기록한 뒤, 그 구간을 팹 바닥 위에서 다시 재생합니다: 재생·일시정지, 속도 변경, 시간 막대 끌기. 설정을 실행(시뮬레이션 실행)하면 이 구간도 함께 기록되어, 끝난 뒤 바로 재생됩니다. 바닥을 끌어 이동, 스크롤이나 ±로 확대, OHT나 툴을 가리키면 자세히 보입니다.",
   "layout.empty": "설정에서 SMAT2022(DS4 + 물류)를 고르면 팹 레이아웃을 볼 수 있습니다.",
   "layout.day": "시작: 며칠째 0시부터",
   "layout.length": "구간",
@@ -699,10 +699,12 @@ export default {
   "layout.length.120": "2시간",
   "layout.record": "시뮬레이션 후 재생",
   "layout.stop": "중지",
+  "layout.starting": "시뮬레이션을 시작하는 중…",
+  "layout.preRun": "QTS 사전 실행으로 전 기간 흐름 계수 측정 중(이 설정을 실행한 뒤에는 생략): {day}…",
   "layout.recording": "구간 끝까지 시뮬레이션 중: {days}일 중 {day}일째…",
-  "layout.building": "재생 기록을 만드는 중…",
   "layout.ready": "{day}일째부터 {length} 재생 준비 완료 (기록 {size} MB).",
   "layout.stopped": "중지했습니다.",
+  "layout.afterEnd": "실행이 이 구간 전에 끝났습니다. 더 이른 날을 고르세요.",
   "layout.changed": "이 재생 이후 설정이 바뀌었습니다: 다시 시뮬레이션하면 반영됩니다.",
   "layout.failed": "시뮬레이션이 멈췄습니다: {message}",
   "layout.play": "재생",

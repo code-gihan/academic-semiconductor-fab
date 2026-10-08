@@ -217,8 +217,8 @@ impl ReplayPlayer {
     }
 
     /// The fab at `time` (ms, within the window) in the core's schema, its number columns as
-    /// typed arrays: `{time, vehicles: {x, y, heading, speed, activity}, foups: {lot, kind,
-    /// place, index}, tools, delivered, tool_to_tool, carried}`.
+    /// typed arrays: `{time, vehicles: {x, y, heading, tail_x, tail_y, speed, activity}, foups:
+    /// {lot, kind, place, index}, tools, delivered, tool_to_tool, carried}`.
     pub fn frame(&mut self, time: f64) -> Result<JsValue, JsValue> {
         self.player.frame_into(time, &mut self.frame);
         let frame = &self.frame;
@@ -235,6 +235,8 @@ impl ReplayPlayer {
                     ("x", floats(&vehicles.x)),
                     ("y", floats(&vehicles.y)),
                     ("heading", floats(&vehicles.heading)),
+                    ("tail_x", floats(&vehicles.tail_x)),
+                    ("tail_y", floats(&vehicles.tail_y)),
                     ("speed", floats(&vehicles.speed)),
                     (
                         "activity",

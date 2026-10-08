@@ -1397,6 +1397,49 @@ mod tests {
         }
     }
 
+    /// Five vehicles at 5 m/s on the loop with its diverging node n1 a plain node, as most of
+    /// SMAT2022's are: a vehicle whose leader turns off there keeps its distance to the vehicles
+    /// beyond the turn.
+    #[test]
+    fn fast_vehicles_keep_apart_past_turns() {
+        let mut data = Arc::try_unwrap(dataset(40, 6 * MINUTE, false)).expect("one owner");
+        let layout = data.layout.as_mut().expect("a layout");
+        for node in &mut layout.nodes {
+            if ["n1", "n8", "n9"].contains(&node.name.as_str()) {
+                node.zone = None;
+            }
+        }
+        for link in &mut layout.links {
+            if ["r1", "s1"].contains(&link.name.as_str()) {
+                link.zone = None;
+            }
+        }
+        for (name, rail, offset) in [
+            ("v2", "r5", 3_000.0),
+            ("v3", "r0", 1_500.0),
+            ("v4", "r2", 800.0),
+        ] {
+            let link = layout.links.iter().position(|link| link.name == rail);
+            layout.vehicles.push(crate::layout::Vehicle {
+                name: name.into(),
+                kind: 0,
+                link: link.expect("a rail"),
+                offset,
+            });
+        }
+        let fast = AmhsConfig {
+            max_speed: Some(5_000.0),
+            straight_speed: Some(5_000.0),
+            curve_speed: Some(5_000.0),
+            ..AmhsConfig::default()
+        };
+        let config = Config {
+            amhs: Some(fast),
+            ..Config::new(DAY)
+        };
+        reports(&run_checked(Arc::new(data), config, 500));
+    }
+
     /// The page's SMAT2022 dataset.
     fn smat2022() -> Arc<Dataset> {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../www/data/smat2022.bin");
@@ -1404,6 +1447,9 @@ mod tests {
         Arc::new(Dataset::from_bytes(&bytes).unwrap())
     }
 
+    /// The data's speeds (every rail 1 m/s), the paper's Table 1 (straight 5, curves 1 m/s), and
+    /// 5 m/s everywhere, where vehicles brake over metres; and no look-ahead, whose idle vehicles
+    /// piled up in a bay with full neighbors until its loop locked (8.2 h).
     #[test]
     #[ignore = "slow: run with --release"]
     fn smat2022_runs_safely() {
@@ -1413,7 +1459,31 @@ mod tests {
             look_ahead: Some(1),
             ..AmhsConfig::default()
         };
-        for (amhs, hours) in [(AmhsConfig::default(), 6), (other, 3)] {
+        let no_look_ahead = AmhsConfig {
+            look_ahead: Some(0),
+            ..AmhsConfig::default()
+        };
+        let paper = AmhsConfig {
+            max_speed: Some(5_000.0),
+            acceleration: Some(2_000.0),
+            deceleration: Some(3_500.0),
+            straight_speed: Some(5_000.0),
+            curve_speed: Some(1_000.0),
+            ..AmhsConfig::default()
+        };
+        let fast = AmhsConfig {
+            max_speed: Some(5_000.0),
+            straight_speed: Some(5_000.0),
+            curve_speed: Some(5_000.0),
+            ..AmhsConfig::default()
+        };
+        for (amhs, hours) in [
+            (AmhsConfig::default(), 6),
+            (other, 3),
+            (paper, 3),
+            (fast, 3),
+            (no_look_ahead, 10),
+        ] {
             let config = Config {
                 amhs: Some(amhs),
                 ..Config::new(730 * DAY)
@@ -1491,21 +1561,25 @@ mod tests {
         }
     }
 
-    /// The fab as a replay's frame has it: each vehicle's point and activity, the FOUPs at ports
-    /// and on vehicles (lot, place, index), the FOUPs in commit stations and in tools by port and
-    /// tool, and each tool's state.
+    /// The fab as a replay's frame has it: each vehicle's front and rear points and activity, the
+    /// FOUPs at ports and on vehicles (lot, place, index), the FOUPs in commit stations and in
+    /// tools by port and tool, and each tool's state.
     #[allow(clippy::type_complexity)]
     fn replayed(
         frame: &Frame,
     ) -> (
-        Vec<(f64, f64, Activity)>,
+        Vec<(f64, f64, f64, f64, Activity)>,
         Vec<(u64, FoupPlace, u32)>,
         Vec<(FoupPlace, u32, u32)>,
         Vec<ToolState>,
     ) {
         let vehicles = &frame.vehicles;
         let points = (0..vehicles.x.len())
-            .map(|id| (vehicles.x[id], vehicles.y[id], vehicles.activity[id]))
+            .map(|id| {
+                let (x, y) = (vehicles.x[id], vehicles.y[id]);
+                let (tail_x, tail_y) = (vehicles.tail_x[id], vehicles.tail_y[id]);
+                (x, y, tail_x, tail_y, vehicles.activity[id])
+            })
             .collect();
         let foups = &frame.foups;
         let mut held = Vec::new();
@@ -1531,7 +1605,7 @@ mod tests {
     fn live(
         amhs: &AmhsStatus,
     ) -> (
-        Vec<(f64, f64, Activity)>,
+        Vec<(f64, f64, f64, f64, Activity)>,
         Vec<(u64, FoupPlace, u32)>,
         Vec<(FoupPlace, u32, u32)>,
         Vec<ToolState>,
@@ -1539,7 +1613,10 @@ mod tests {
         let points = amhs
             .vehicles
             .iter()
-            .map(|vehicle| (vehicle.x, vehicle.y, vehicle.activity))
+            .map(|vehicle| {
+                let (x, y) = (vehicle.x, vehicle.y);
+                (x, y, vehicle.tail_x, vehicle.tail_y, vehicle.activity)
+            })
             .collect();
         let mut held: Vec<(u64, FoupPlace, u32)> = amhs
             .foups
@@ -1602,7 +1679,9 @@ mod tests {
             seen.push((at, live(&plain.amhs().unwrap())));
             at += 7_919;
         }
-        // Forward as played, then backward as sought.
+        // Forward as played, then backward as sought. Bodies keep their length along the rails:
+        // a chord across the loop's right-angled corners is at least its 1/√2.
+        let length = data.layout.as_ref().expect("a layout").vehicle_types[0].length;
         let order = seen.iter().chain(seen.iter().rev());
         for (at, (points, held, counts, tools)) in order {
             let frame = player.frame(*at as f64);
@@ -1611,11 +1690,20 @@ mod tests {
             for (vehicle, (live, replayed)) in points.iter().zip(&replayed_points).enumerate() {
                 // Within the AMHS's node tolerance (a vehicle passes a node 10⁻³ mm early or
                 // late) and the player's drift (10⁻⁴ mm).
+                let near = |a: f64, b: f64| (a - b).abs() < 1.1e-3;
                 assert!(
-                    (live.0 - replayed.0).abs() < 1.1e-3 && (live.1 - replayed.1).abs() < 1.1e-3,
+                    near(live.0, replayed.0)
+                        && near(live.1, replayed.1)
+                        && near(live.2, replayed.2)
+                        && near(live.3, replayed.3),
                     "vehicle {vehicle} at {at}: {live:?} ≠ {replayed:?}"
                 );
-                assert_eq!(live.2, replayed.2, "vehicle {vehicle} at {at}");
+                assert_eq!(live.4, replayed.4, "vehicle {vehicle} at {at}");
+                let chord = (live.0 - live.2).hypot(live.1 - live.3);
+                assert!(
+                    (length / 2f64.sqrt() - 1e-6..=length + 1e-6).contains(&chord),
+                    "vehicle {vehicle} at {at}: {chord} mm from front to rear"
+                );
             }
             assert_eq!(points.len(), replayed_points.len());
             assert_eq!(held, &replayed_held, "FOUPs at {at}");

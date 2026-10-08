@@ -133,17 +133,20 @@ function laneText(lane) {
   return lane.progress ? phase(lane.progress) : t("lane.starting");
 }
 
+/** A run's simulated day of the horizon's, or the drain after it. */
+export function dayText(progress) {
+  return progress.now > progress.horizon
+    ? t("progress.drain", { wip: formatNumber(progress.wip, 0) })
+    : t("progress.day", {
+        day: formatNumber(Math.floor(progress.now / DAY), 0),
+        days: formatNumber(progress.horizon / DAY, 0),
+      });
+}
+
 /** Where a replication is: its simulated day or the drain, the QTS pass and its CQT violations
  * so far. */
 function phase(progress) {
-  const parts = [
-    progress.now > progress.horizon
-      ? t("progress.drain", { wip: formatNumber(progress.wip, 0) })
-      : t("progress.day", {
-          day: formatNumber(Math.floor(progress.now / DAY), 0),
-          days: formatNumber(progress.horizon / DAY, 0),
-        }),
-  ];
+  const parts = [dayText(progress)];
   if (progress.passes > 1) {
     parts.push(t(progress.pass === 0 ? "progress.preRun" : "progress.mainRun"));
   }

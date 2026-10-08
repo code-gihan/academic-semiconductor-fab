@@ -1,8 +1,9 @@
 //! Safety of the AMHS at an instant, for tests: every front lies on the rail it is listed on, a
 //! front inside a zone holds it, zone grants and requests agree, roaming vehicles are listed once
 //! in their bay, and every vehicle can stop behind each one ahead on its path, or whose tail still
-//! covers a diverging node of it or its end, by that one's length and its own gap (moving block;
-//! at rest, the distance itself).
+//! covers a diverging node of it or its end, by that one's length and its own gap (moving block).
+//! Closer than that a vehicle only stands, planning no move: one stopped at a diverging node by a
+//! vehicle just gone down the other branch, then routed down that branch, waits there.
 
 use des_core::Time;
 
@@ -110,7 +111,7 @@ impl Amhs {
                         continue;
                     }
                     let limit = other_stop + delta - leader.length - vehicle.gap;
-                    if stop > limit + SLACK {
+                    if stop > limit + SLACK && vehicle.plan.end() > s + SLACK {
                         let describe = |id: usize| {
                             let vehicle = &self.vehicles[id];
                             format!(

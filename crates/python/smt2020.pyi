@@ -321,6 +321,9 @@ class VehicleStatus(TypedDict):
     y: float
     heading: float
     """Rail, position of its front on it (mm), its point and heading (rad)."""
+    tail_x: float
+    tail_y: float
+    """Point of its rear along the rails (mm)."""
     speed: float
     """m/s."""
     lot: Optional[int]
@@ -400,12 +403,14 @@ class AmhsStatus(TypedDict):
     """The AMHS measures of the reporting window so far."""
 
 class VehicleFrames(TypedDict):
-    """Every vehicle, by id: its front's point (mm) and heading (rad), its speed (m/s) and what
-    it does."""
+    """Every vehicle, by id: its front's point (mm) and heading (rad), its rear's point along the
+    rails (mm), its speed (m/s) and what it does."""
 
     x: list[float]
     y: list[float]
     heading: list[float]
+    tail_x: list[float]
+    tail_y: list[float]
     speed: list[float]
     activity: list[Literal["idle", "to_pickup", "loading", "to_dropoff", "unloading"]]
 
